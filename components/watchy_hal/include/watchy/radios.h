@@ -12,9 +12,11 @@ extern "C" {
 
 typedef enum {
     WATCHY_WIFI_STOPPED = 0,
+    WATCHY_WIFI_INITIALIZED,
     WATCHY_WIFI_STA_STARTING,
     WATCHY_WIFI_STA_CONNECTED,
     WATCHY_WIFI_AP_RUNNING,
+    WATCHY_WIFI_STOPPING,
 } watchy_wifi_state_t;
 
 typedef struct {
@@ -30,8 +32,10 @@ typedef struct {
 
 typedef enum {
     WATCHY_BLE_STOPPED = 0,
+    WATCHY_BLE_INITIALIZED,
     WATCHY_BLE_HOST_RUNNING,
     WATCHY_BLE_DIAGNOSTICS_ADVERTISING,
+    WATCHY_BLE_STOPPING,
 } watchy_ble_state_t;
 
 watchy_status_t watchy_wifi_start_sta(const watchy_wifi_sta_config_t *config, bool persist);
@@ -44,7 +48,8 @@ watchy_status_t watchy_ble_start(void);
 watchy_status_t watchy_ble_start_diagnostics_advertising(void);
 watchy_ble_state_t watchy_ble_state(void);
 watchy_status_t watchy_ble_stop(void);
-void watchy_radios_stop_all(void);
+bool watchy_wifi_should_reconnect(watchy_wifi_state_t state);
+watchy_status_t watchy_radios_stop_all(void);
 
 #ifdef __cplusplus
 }

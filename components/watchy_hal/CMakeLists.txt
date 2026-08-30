@@ -7,14 +7,18 @@ idf_component_register(
         "src/buttons_policy.c"
         "src/diagnostics.c"
         "src/display.c"
+        "src/display_policy.c"
         "src/framebuffer.c"
         "src/haptics.c"
         "src/motion.cpp"
         "src/power.c"
         "src/power_policy.c"
         "src/radios.c"
+        "src/radios_policy.c"
         "src/rtc.c"
+        "src/rtc_calendar.c"
         "src/storage.c"
+        "src/storage_policy.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS

@@ -53,8 +53,11 @@ bool watchy_battery_charging_supported(void) {
 watchy_status_t watchy_battery_read(watchy_battery_state_t *out_state) {
     uint32_t raw_total = 0;
     int calibrated_mv;
-    if (!watchy_battery_ready() || out_state == NULL) {
+    if (out_state == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (!watchy_battery_ready()) {
+        return WATCHY_STATUS_INVALID_STATE;
     }
     for (uint32_t sample = 0; sample < WATCHY_BATTERY_SAMPLE_COUNT; ++sample) {
         int raw;

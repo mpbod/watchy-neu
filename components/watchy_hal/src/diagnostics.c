@@ -61,14 +61,38 @@ void watchy_diagnostics_collect(watchy_diagnostic_report_t *out_report) {
 
     status = watchy_storage_space(&total, &free);
     add_entry(out_report, "storage", status == WATCHY_STATUS_OK ? WATCHY_DIAGNOSTIC_PASS : WATCHY_DIAGNOSTIC_FAIL,
-              status, status == WATCHY_STATUS_OK ? "LittleFS mounted" : "LittleFS unavailable");
+              status, status == WATCHY_STATUS_OK
+                          ? "LittleFS mounted"
+                          : (watchy_storage_state() == WATCHY_STORAGE_CORRUPT
+                                 ? "LittleFS mount failed; nonblank media preserved for recovery"
+                                 : "LittleFS unavailable"));
 
-    add_entry(out_report, "wifi", watchy_wifi_state() == WATCHY_WIFI_STOPPED ? WATCHY_DIAGNOSTIC_STOPPED
-                                                                              : WATCHY_DIAGNOSTIC_PASS,
-              WATCHY_STATUS_OK, "explicitly lifecycle-managed");
-    add_entry(out_report, "ble", watchy_ble_state() == WATCHY_BLE_STOPPED ? WATCHY_DIAGNOSTIC_STOPPED
-                                                                           : WATCHY_DIAGNOSTIC_PASS,
-              WATCHY_STATUS_OK, "explicitly lifecycle-managed");
-    add_entry(out_report, "power", WATCHY_DIAGNOSTIC_PASS, WATCHY_STATUS_OK,
-              "wake cause captured; sleep not entered by diagnostics");
+    const watchy_wifi_state_t wifi_state = watchy_wifi_state();
+    add_entry(out_report, "wifi",
+              wifi_state == WATCHY_WIFI_STOPPED
+                  ? WATCHY_DIAGNOSTIC_STOPPED
+                  : (wifi_state == WATCHY_WIFI_STOPPING ? WATCHY_DIAGNOSTIC_UNAVAILABLE
+                                                        : WATCHY_DIAGNOSTIC_PASS),
+              wifi_state == WATCHY_WIFI_STOPPING ? WATCHY_STATUS_INVALID_STATE : WATCHY_STATUS_OK,
+              wifi_state == WATCHY_WIFI_STOPPED ? "radio not initialized by normal boot"
+                                                : "radio lifecycle active");
+    const watchy_ble_state_t ble_state = watchy_ble_state();
+    add_entry(out_report, "ble",
+              ble_state == WATCHY_BLE_STOPPED
+                  ? WATCHY_DIAGNOSTIC_STOPPED
+                  : (ble_state == WATCHY_BLE_STOPPING ? WATCHY_DIAGNOSTIC_UNAVAILABLE
+                                                      : WATCHY_DIAGNOSTIC_PASS),
+              ble_state == WATCHY_BLE_STOPPING ? WATCHY_STATUS_INVALID_STATE : WATCHY_STATUS_OK,
+              ble_state == WATCHY_BLE_STOPPED ? "radio not initialized by normal boot"
+                                              : "radio lifecycle active");
+    status = watchy_power_last_prepare_status();
+    add_entry(out_report, "power",
+              status == WATCHY_STATUS_OK ? WATCHY_DIAGNOSTIC_PASS
+                                         : (watchy_power_prepare_attempted()
+                                                ? WATCHY_DIAGNOSTIC_FAIL
+                                                : WATCHY_DIAGNOSTIC_UNAVAILABLE),
+              status, status == WATCHY_STATUS_OK ? "last sleep preparation succeeded"
+                                                 : (watchy_power_prepare_attempted()
+                                                        ? "last sleep preparation failed"
+                                                        : "sleep preparation not yet verified"));
 }

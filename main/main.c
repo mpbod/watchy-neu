@@ -14,6 +14,8 @@
 #include <inttypes.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "watchy";
 
@@ -98,6 +100,7 @@ void app_main(void) {
     bool safe_mode;
     bool time_valid;
     bool battery_valid;
+    bool timer_configured = false;
 
     ESP_LOGI(TAG, "boot wake_cause=%d", wake_cause);
     if (watchy_storage_init() != WATCHY_STATUS_OK) {
@@ -126,14 +129,20 @@ void app_main(void) {
     log_diagnostics();
     render_status(&time, time_valid, &battery, battery_valid, safe_mode, wake_cause);
     if (watchy_display_ready()) {
-        watchy_display_refresh(wake_cause == WATCHY_WAKE_COLD ? WATCHY_REFRESH_FULL
-                                                              : WATCHY_REFRESH_PARTIAL);
+        if (watchy_display_refresh(wake_cause == WATCHY_WAKE_COLD ? WATCHY_REFRESH_FULL
+                                                                  : WATCHY_REFRESH_PARTIAL) !=
+            WATCHY_STATUS_OK) {
+            ESP_LOGE(TAG, "display refresh failed");
+        }
     }
     if (watchy_rtc_ready()) {
-        watchy_rtc_set_minute_timer(1);
+        timer_configured = watchy_rtc_set_minute_timer(1) == WATCHY_STATUS_OK;
     }
-    if (watchy_power_prepare_deep_sleep() != WATCHY_STATUS_OK) {
-        ESP_LOGE(TAG, "sleep preparation reported a hardware error");
+    if (watchy_power_prepare_deep_sleep(timer_configured) != WATCHY_STATUS_OK) {
+        ESP_LOGE(TAG, "sleep preparation failed; remaining awake to avoid an unwakeable sleep");
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
     watchy_power_enter_deep_sleep();
 }

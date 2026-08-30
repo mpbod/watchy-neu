@@ -38,6 +38,10 @@ add_executable(watchy_hal_tests
   ../../components/watchy_hal/src/buttons_policy.c
   ../../components/watchy_hal/src/battery_policy.c
   ../../components/watchy_hal/src/power_policy.c
+  ../../components/watchy_hal/src/display_policy.c
+  ../../components/watchy_hal/src/rtc_calendar.c
+  ../../components/watchy_hal/src/radios_policy.c
+  ../../components/watchy_hal/src/storage_policy.c
 )
 target_include_directories(watchy_hal_tests PRIVATE
   ../../components/watchy_hal/include

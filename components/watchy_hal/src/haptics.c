@@ -35,18 +35,21 @@ watchy_status_t watchy_haptics_pulse(uint16_t duration_ms, uint8_t strength) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     if (duration_ms == 0 || strength == 0) {
-        gpio_set_level(WATCHY_PIN_MOTOR, 0);
-        return WATCHY_STATUS_OK;
+        return gpio_set_level(WATCHY_PIN_MOTOR, 0) == ESP_OK ? WATCHY_STATUS_OK
+                                                             : WATCHY_STATUS_INVALID_STATE;
     }
     if (gpio_set_level(WATCHY_PIN_MOTOR, 1) != ESP_OK) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
-    gpio_set_level(WATCHY_PIN_MOTOR, 0);
-    return WATCHY_STATUS_OK;
+    return gpio_set_level(WATCHY_PIN_MOTOR, 0) == ESP_OK ? WATCHY_STATUS_OK
+                                                         : WATCHY_STATUS_INVALID_STATE;
 }
 
-void watchy_haptics_deinit(void) {
-    gpio_set_level(WATCHY_PIN_MOTOR, 0);
+watchy_status_t watchy_haptics_deinit(void) {
+    const watchy_status_t status = gpio_set_level(WATCHY_PIN_MOTOR, 0) == ESP_OK
+                                       ? WATCHY_STATUS_OK
+                                       : WATCHY_STATUS_INVALID_STATE;
     s_ready = false;
+    return status;
 }

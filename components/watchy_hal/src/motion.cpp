@@ -67,8 +67,11 @@ extern "C" bool watchy_motion_ready(void) {
 
 extern "C" watchy_status_t watchy_motion_read(watchy_motion_data_t *out_data) {
     AccelerometerData data;
-    if (!sensor || out_data == nullptr) {
+    if (out_data == nullptr) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (!sensor) {
+        return WATCHY_STATUS_INVALID_STATE;
     }
     if (!sensor->readData(data)) {
         return WATCHY_STATUS_INVALID_STATE;

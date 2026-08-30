@@ -12,6 +12,16 @@
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define WATCHY_WAKE_SOURCE_TIMEOUT_MS 500
+#define WATCHY_WAKE_SOURCE_SAMPLE_MS 10
+
+static watchy_status_t s_last_prepare_status = WATCHY_STATUS_INVALID_STATE;
+static bool s_prepare_attempted;
 
 static watchy_raw_wake_cause_t raw_wake_cause(esp_sleep_wakeup_cause_t cause) {
     switch (cause) {
@@ -35,6 +45,9 @@ static watchy_raw_wake_cause_t raw_wake_cause(esp_sleep_wakeup_cause_t cause) {
 watchy_wake_cause_t watchy_power_capture_wake_cause(void) {
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     const uint64_t gpio_mask = cause == ESP_SLEEP_WAKEUP_EXT1 ? esp_sleep_get_ext1_wakeup_status() : 0;
+    if (cause == ESP_SLEEP_WAKEUP_UNDEFINED && esp_reset_reason() != ESP_RST_POWERON) {
+        return WATCHY_WAKE_OTHER;
+    }
     return watchy_power_map_wake(raw_wake_cause(cause), gpio_mask);
 }
 
@@ -56,28 +69,64 @@ static void release_unused_pins(void) {
     }
 }
 
-watchy_status_t watchy_power_prepare_deep_sleep(void) {
+static bool wait_for_wake_sources_inactive(void) {
+    watchy_wake_source_filter_t filter = {0};
+    const int64_t deadline = esp_timer_get_time() + WATCHY_WAKE_SOURCE_TIMEOUT_MS * INT64_C(1000);
+    for (;;) {
+        uint64_t active = 0;
+        static const gpio_num_t active_high_sources[] = {
+            WATCHY_PIN_BUTTON_MENU,
+            WATCHY_PIN_BUTTON_BACK,
+            WATCHY_PIN_BUTTON_DOWN,
+            WATCHY_PIN_BUTTON_UP,
+            WATCHY_PIN_BMA423_INTERRUPT_1,
+        };
+        for (size_t index = 0;
+             index < sizeof(active_high_sources) / sizeof(active_high_sources[0]); ++index) {
+            if (gpio_get_level(active_high_sources[index]) != 0) {
+                active |= UINT64_C(1) << active_high_sources[index];
+            }
+        }
+        if (gpio_get_level(WATCHY_PIN_RTC_INTERRUPT) == WATCHY_RTC_INTERRUPT_ACTIVE_LEVEL) {
+            active |= UINT64_C(1) << WATCHY_PIN_RTC_INTERRUPT;
+        }
+        if (watchy_power_wake_sources_observe(&filter, active)) {
+            return true;
+        }
+        if (esp_timer_get_time() >= deadline) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(WATCHY_WAKE_SOURCE_SAMPLE_MS));
+    }
+}
+
+watchy_status_t watchy_power_prepare_deep_sleep(bool timer_configured) {
     const uint64_t ext1_mask = (UINT64_C(1) << WATCHY_PIN_BUTTON_MENU) |
                                (UINT64_C(1) << WATCHY_PIN_BUTTON_BACK) |
                                (UINT64_C(1) << WATCHY_PIN_BUTTON_DOWN) |
                                (UINT64_C(1) << WATCHY_PIN_BUTTON_UP) |
-                               (UINT64_C(1) << WATCHY_PIN_BMA423_INTERRUPT_1) |
-                               (UINT64_C(1) << WATCHY_PIN_BMA423_INTERRUPT_2);
-    watchy_status_t result = WATCHY_STATUS_OK;
+                               (UINT64_C(1) << WATCHY_PIN_BMA423_INTERRUPT_1);
+    watchy_sleep_requirements_t requirements = {
+        .timer_configured = timer_configured,
+        .radios_stopped = watchy_radios_stop_all() == WATCHY_STATUS_OK,
+        .motor_off = watchy_haptics_deinit() == WATCHY_STATUS_OK,
+        .display_hibernated = watchy_display_ready() &&
+                              watchy_display_power_off() == WATCHY_STATUS_OK &&
+                              watchy_display_deep_sleep() == WATCHY_STATUS_OK,
+        .rtc_source_cleared = watchy_rtc_ready() &&
+                              watchy_rtc_clear_interrupt_flags() == WATCHY_STATUS_OK,
+        .motion_source_configured = watchy_motion_ready() &&
+                                    watchy_motion_configure_wake(true) == WATCHY_STATUS_OK,
+    };
+    s_prepare_attempted = true;
 
-    watchy_radios_stop_all();
-    watchy_haptics_deinit();
-    if (watchy_display_ready()) {
-        if (watchy_display_power_off() != WATCHY_STATUS_OK ||
-            watchy_display_deep_sleep() != WATCHY_STATUS_OK) {
-            result = WATCHY_STATUS_INVALID_STATE;
-        }
-    }
-    if (watchy_rtc_ready() && watchy_rtc_clear_interrupt_flags() != WATCHY_STATUS_OK) {
-        result = WATCHY_STATUS_INVALID_STATE;
-    }
-    if (watchy_motion_ready() && watchy_motion_configure_wake(true) != WATCHY_STATUS_OK) {
-        result = WATCHY_STATUS_INVALID_STATE;
+    requirements.sources_inactive = wait_for_wake_sources_inactive();
+    /* Wake APIs are applied after pin release; mark them provisionally for prerequisite gating. */
+    requirements.ext0_configured = true;
+    requirements.ext1_configured = true;
+    if (!watchy_power_sleep_allowed(&requirements)) {
+        s_last_prepare_status = WATCHY_STATUS_INVALID_STATE;
+        return s_last_prepare_status;
     }
 
     watchy_battery_deinit();
@@ -91,12 +140,23 @@ watchy_status_t watchy_power_prepare_deep_sleep(void) {
     rtc_gpio_set_direction(WATCHY_PIN_RTC_INTERRUPT, RTC_GPIO_MODE_INPUT_ONLY);
     rtc_gpio_pullup_en(WATCHY_PIN_RTC_INTERRUPT);
     rtc_gpio_pulldown_dis(WATCHY_PIN_RTC_INTERRUPT);
-    if (esp_sleep_enable_ext0_wakeup(WATCHY_PIN_RTC_INTERRUPT,
-                                     WATCHY_RTC_INTERRUPT_ACTIVE_LEVEL) != ESP_OK ||
-        esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_HIGH) != ESP_OK) {
-        return WATCHY_STATUS_INVALID_STATE;
-    }
-    return result;
+    requirements.ext0_configured =
+        esp_sleep_enable_ext0_wakeup(WATCHY_PIN_RTC_INTERRUPT,
+                                     WATCHY_RTC_INTERRUPT_ACTIVE_LEVEL) == ESP_OK;
+    requirements.ext1_configured =
+        esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_HIGH) == ESP_OK;
+    requirements.sources_inactive = wait_for_wake_sources_inactive();
+    s_last_prepare_status = watchy_power_sleep_allowed(&requirements) ? WATCHY_STATUS_OK
+                                                                      : WATCHY_STATUS_INVALID_STATE;
+    return s_last_prepare_status;
+}
+
+watchy_status_t watchy_power_last_prepare_status(void) {
+    return s_last_prepare_status;
+}
+
+bool watchy_power_prepare_attempted(void) {
+    return s_prepare_attempted;
 }
 
 void watchy_power_enter_deep_sleep(void) {

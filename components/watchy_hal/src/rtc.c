@@ -3,9 +3,11 @@
 #include "bus_internal.h"
 #include "watchy/board.h"
 #include "watchy/buses.h"
+#include "watchy/rtc_calendar.h"
 
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "nvs.h"
 
 #define PCF8563_REG_STATUS_2 0x01u
 #define PCF8563_REG_SECONDS 0x02u
@@ -17,6 +19,8 @@
 #define PCF8563_STATUS_2_AIE (1u << 1)
 #define PCF8563_STATUS_2_TF (1u << 2)
 #define PCF8563_STATUS_2_AF (1u << 3)
+#define WATCHY_TIME_NVS_NAMESPACE "watchy_time"
+#define WATCHY_TIME_NVS_UTC_OFFSET "utc_offset"
 
 static bool s_ready;
 static int16_t s_utc_offset_minutes;
@@ -25,18 +29,48 @@ static uint8_t to_bcd(uint8_t value) {
     return (uint8_t)(((value / 10u) << 4u) | (value % 10u));
 }
 
-static uint8_t from_bcd(uint8_t value) {
-    return (uint8_t)(((value >> 4u) * 10u) + (value & 0x0fu));
+static watchy_status_t restore_utc_offset(void) {
+    nvs_handle_t handle = 0;
+    int16_t offset = 0;
+    esp_err_t error = nvs_open(WATCHY_TIME_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        s_utc_offset_minutes = 0;
+        return WATCHY_STATUS_OK;
+    }
+    if (error != ESP_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    error = nvs_get_i16(handle, WATCHY_TIME_NVS_UTC_OFFSET, &offset);
+    nvs_close(handle);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        s_utc_offset_minutes = 0;
+        return WATCHY_STATUS_OK;
+    }
+    if (error != ESP_OK || offset < -1439 || offset > 1439) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    s_utc_offset_minutes = offset;
+    return WATCHY_STATUS_OK;
 }
 
-static bool valid_time(const watchy_time_t *time) {
-    return time != NULL && time->year >= 2000 && time->year <= 2099 && time->month >= 1 &&
-           time->month <= 12 && time->day >= 1 && time->day <= 31 && time->hour <= 23 &&
-           time->minute <= 59 && time->second <= 59 && time->weekday <= 6;
+static watchy_status_t persist_utc_offset(int16_t offset) {
+    nvs_handle_t handle = 0;
+    esp_err_t error = nvs_open(WATCHY_TIME_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (error == ESP_OK) {
+        error = nvs_set_i16(handle, WATCHY_TIME_NVS_UTC_OFFSET, offset);
+    }
+    if (error == ESP_OK) {
+        error = nvs_commit(handle);
+    }
+    if (error == ESP_OK || handle != 0) {
+        nvs_close(handle);
+    }
+    return error == ESP_OK ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
 }
 
 watchy_status_t watchy_rtc_init(void) {
-    uint8_t seconds;
+    uint8_t registers[7];
+    watchy_time_t utc;
     gpio_config_t interrupt_config = {
         .pin_bit_mask = UINT64_C(1) << WATCHY_PIN_RTC_INTERRUPT,
         .mode = GPIO_MODE_INPUT,
@@ -45,11 +79,12 @@ watchy_status_t watchy_rtc_init(void) {
         .intr_type = GPIO_INTR_DISABLE,
     };
     if (!watchy_buses_ready() || gpio_config(&interrupt_config) != ESP_OK ||
-        watchy_bus_rtc_read(PCF8563_REG_SECONDS, &seconds, 1) != ESP_OK) {
+        watchy_bus_rtc_read(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK ||
+        restore_utc_offset() != WATCHY_STATUS_OK) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_ready = true;
-    return (seconds & 0x80u) == 0u ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
+    return watchy_pcf8563_decode(registers, &utc);
 }
 
 bool watchy_rtc_ready(void) {
@@ -58,63 +93,54 @@ bool watchy_rtc_ready(void) {
 
 watchy_status_t watchy_rtc_read_local(watchy_time_t *out_time) {
     uint8_t registers[7];
-    if (!s_ready || out_time == NULL) {
+    watchy_time_t utc;
+    int64_t unix_seconds;
+    if (out_time == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    if (watchy_bus_rtc_read(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK ||
-        (registers[0] & 0x80u) != 0u) {
+    if (!s_ready) {
         return WATCHY_STATUS_INVALID_STATE;
     }
-    out_time->second = from_bcd(registers[0] & 0x7fu);
-    out_time->minute = from_bcd(registers[1] & 0x7fu);
-    out_time->hour = from_bcd(registers[2] & 0x3fu);
-    out_time->day = from_bcd(registers[3] & 0x3fu);
-    out_time->weekday = from_bcd(registers[4] & 0x07u);
-    out_time->month = from_bcd(registers[5] & 0x1fu);
-    out_time->year = (int16_t)(2000 + from_bcd(registers[6]));
-    out_time->utc_offset_minutes = s_utc_offset_minutes;
-    return valid_time(out_time) ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
-}
-
-static int64_t days_from_civil(int32_t year, uint32_t month, uint32_t day) {
-    const int32_t adjusted_year = year - (month <= 2u ? 1 : 0);
-    const int32_t era = (adjusted_year >= 0 ? adjusted_year : adjusted_year - 399) / 400;
-    const uint32_t year_of_era = (uint32_t)(adjusted_year - era * 400);
-    const uint32_t shifted_month = month > 2u ? month - 3u : month + 9u;
-    const uint32_t day_of_year = (153u * shifted_month + 2u) / 5u + day - 1u;
-    const uint32_t day_of_era = year_of_era * 365u + year_of_era / 4u - year_of_era / 100u + day_of_year;
-    return (int64_t)era * 146097 + (int64_t)day_of_era - 719468;
+    if (watchy_bus_rtc_read(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK ||
+        watchy_pcf8563_decode(registers, &utc) != WATCHY_STATUS_OK ||
+        watchy_calendar_to_unix(&utc, &unix_seconds) != WATCHY_STATUS_OK ||
+        watchy_calendar_from_unix(unix_seconds, s_utc_offset_minutes, out_time) != WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    return WATCHY_STATUS_OK;
 }
 
 watchy_status_t watchy_rtc_read_unix(int64_t *out_unix_seconds) {
-    watchy_time_t local;
-    watchy_status_t status;
+    uint8_t registers[7];
+    watchy_time_t utc;
     if (out_unix_seconds == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    status = watchy_rtc_read_local(&local);
-    if (status != WATCHY_STATUS_OK) {
-        return status;
+    if (!s_ready) {
+        return WATCHY_STATUS_INVALID_STATE;
     }
-    *out_unix_seconds = days_from_civil(local.year, local.month, local.day) * INT64_C(86400) +
-                        (int64_t)local.hour * 3600 + (int64_t)local.minute * 60 + local.second -
-                        (int64_t)local.utc_offset_minutes * 60;
-    return WATCHY_STATUS_OK;
+    if (watchy_bus_rtc_read(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK ||
+        watchy_pcf8563_decode(registers, &utc) != WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    return watchy_calendar_to_unix(&utc, out_unix_seconds);
 }
 
 watchy_status_t watchy_rtc_set_local(const watchy_time_t *time) {
     uint8_t registers[7];
-    if (!s_ready || !valid_time(time)) {
+    int64_t unix_seconds;
+    watchy_time_t utc;
+    if (time == NULL || !watchy_calendar_valid(time)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    registers[0] = to_bcd(time->second);
-    registers[1] = to_bcd(time->minute);
-    registers[2] = to_bcd(time->hour);
-    registers[3] = to_bcd(time->day);
-    registers[4] = to_bcd(time->weekday);
-    registers[5] = to_bcd(time->month);
-    registers[6] = to_bcd((uint8_t)(time->year - 2000));
-    if (watchy_bus_rtc_write(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK) {
+    if (!s_ready) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (watchy_calendar_to_unix(time, &unix_seconds) != WATCHY_STATUS_OK ||
+        watchy_calendar_from_unix(unix_seconds, 0, &utc) != WATCHY_STATUS_OK ||
+        watchy_pcf8563_encode(&utc, registers) != WATCHY_STATUS_OK ||
+        persist_utc_offset(time->utc_offset_minutes) != WATCHY_STATUS_OK ||
+        watchy_bus_rtc_write(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_utc_offset_minutes = time->utc_offset_minutes;
@@ -124,8 +150,11 @@ watchy_status_t watchy_rtc_set_local(const watchy_time_t *time) {
 watchy_status_t watchy_rtc_set_minute_alarm(uint8_t minute) {
     uint8_t alarm[4];
     uint8_t status;
-    if (!s_ready || minute > 59u) {
+    if (minute > 59u) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (!s_ready) {
+        return WATCHY_STATUS_INVALID_STATE;
     }
     alarm[0] = to_bcd(minute);
     alarm[1] = 0x80;
@@ -144,8 +173,11 @@ watchy_status_t watchy_rtc_set_minute_alarm(uint8_t minute) {
 watchy_status_t watchy_rtc_set_minute_timer(uint8_t minutes) {
     uint8_t status;
     const uint8_t timer_control = 0x83;
-    if (!s_ready || minutes == 0u) {
+    if (minutes == 0u) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (!s_ready) {
+        return WATCHY_STATUS_INVALID_STATE;
     }
     if (watchy_bus_rtc_read(PCF8563_REG_STATUS_2, &status, 1) != ESP_OK) {
         return WATCHY_STATUS_INVALID_STATE;

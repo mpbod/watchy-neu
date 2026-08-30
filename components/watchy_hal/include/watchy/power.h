@@ -27,10 +27,31 @@ typedef enum {
     WATCHY_WAKE_OTHER,
 } watchy_wake_cause_t;
 
+typedef struct {
+    bool timer_configured;
+    bool radios_stopped;
+    bool motor_off;
+    bool display_hibernated;
+    bool rtc_source_cleared;
+    bool motion_source_configured;
+    bool ext0_configured;
+    bool ext1_configured;
+    bool sources_inactive;
+} watchy_sleep_requirements_t;
+
+typedef struct {
+    uint8_t consecutive_inactive_samples;
+} watchy_wake_source_filter_t;
+
 watchy_wake_cause_t watchy_power_map_wake(watchy_raw_wake_cause_t raw_cause,
                                           uint64_t wake_gpio_mask);
 watchy_wake_cause_t watchy_power_capture_wake_cause(void);
-watchy_status_t watchy_power_prepare_deep_sleep(void);
+bool watchy_power_sleep_allowed(const watchy_sleep_requirements_t *requirements);
+bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,
+                                       uint64_t active_sources);
+watchy_status_t watchy_power_prepare_deep_sleep(bool timer_configured);
+bool watchy_power_prepare_attempted(void);
+watchy_status_t watchy_power_last_prepare_status(void);
 void watchy_power_enter_deep_sleep(void) __attribute__((noreturn));
 
 #ifdef __cplusplus
