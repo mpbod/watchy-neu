@@ -154,12 +154,6 @@ watchy_package_status_t watchy_package_install(watchy_package_index_manager_t *m
         (size_t)written >= sizeof(package_ref) || strcmp(package_ref, preflight_ref) != 0 ||
         !format_path(package_parent, sizeof(package_parent), "/data/packages/%s%s",
                      workspace->package.manifest.id, "") ||
-        (written = snprintf(temporary_path, sizeof(temporary_path),
-                            "/data/packages/%s/%s.%08lx.new",
-                            workspace->package.manifest.id,
-                            workspace->package.manifest.version,
-                            (unsigned long)unique)) < 0 ||
-        (size_t)written >= sizeof(temporary_path) ||
         !format_path(final_path, sizeof(final_path), "/data/packages/%s/%s",
                      workspace->package.manifest.id, workspace->package.manifest.version)) {
         return cleanup(filesystem, workspace, stage_path, temporary_path, final_path,
@@ -170,12 +164,32 @@ watchy_package_status_t watchy_package_install(watchy_package_index_manager_t *m
         return cleanup(filesystem, workspace, stage_path, temporary_path, final_path,
                        true, false, false, WATCHY_PACKAGE_ERR_STATE);
     }
-    if (!filesystem->mkdirs(filesystem->context, package_parent) ||
-        !filesystem->mkdir_exclusive(filesystem->context, temporary_path)) {
+    if (!filesystem->mkdirs(filesystem->context, package_parent)) {
         return cleanup(filesystem, workspace, stage_path, temporary_path, final_path,
                        true, false, false, WATCHY_PACKAGE_ERR_FILESYSTEM);
     }
-    temporary_created = true;
+    for (unsigned attempt = 0u; attempt < 8u && !temporary_created; ++attempt) {
+        unique = filesystem->unique_id(filesystem->context);
+        written = snprintf(temporary_path, sizeof(temporary_path),
+                           "/data/packages/%s/%s%08lx",
+                           workspace->package.manifest.id,
+                           WATCHY_PACKAGE_TRANSACTION_PREFIX,
+                           (unsigned long)unique);
+        if (written < 0 || (size_t)written >= sizeof(temporary_path)) {
+            return cleanup(filesystem, workspace, stage_path, temporary_path, final_path,
+                           true, false, false, WATCHY_PACKAGE_ERR_LIMIT);
+        }
+        if (filesystem->mkdir_exclusive(filesystem->context, temporary_path)) {
+            temporary_created = true;
+        } else if (!filesystem->path_exists(filesystem->context, temporary_path)) {
+            return cleanup(filesystem, workspace, stage_path, temporary_path, final_path,
+                           true, false, false, WATCHY_PACKAGE_ERR_FILESYSTEM);
+        }
+    }
+    if (!temporary_created) {
+        return cleanup(filesystem, workspace, stage_path, temporary_path, final_path,
+                       true, false, false, WATCHY_PACKAGE_ERR_FILESYSTEM);
+    }
     if (!format_path(file_path, sizeof(file_path), "%s/%s", temporary_path, "manifest.json") ||
         !filesystem->write_file(filesystem->context, file_path, staged_view.manifest,
                                 staged_view.manifest_size, true) ||

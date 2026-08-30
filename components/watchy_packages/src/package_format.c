@@ -163,10 +163,10 @@ static bool asset_path_reserved(const char *path) {
     return first_length >= 7u && memcmp(path, "watchy-", 7u) == 0;
 }
 
-static bool package_version_valid(const char *version) {
-    const size_t length = strlen(version);
-    if (length == 0u || length > WATCHY_PACKAGE_VERSION_MAX || strcmp(version, ".") == 0 ||
-        strcmp(version, "..") == 0) {
+bool watchy_package_version_valid(const char *version) {
+    const size_t length = version == NULL ? 0u : strnlen(version, WATCHY_PACKAGE_VERSION_MAX + 1u);
+    if (length == 0u || length > WATCHY_PACKAGE_VERSION_MAX || version[0] == '.' ||
+        strncmp(version, "watchy-", 7u) == 0) {
         return false;
     }
     for (size_t index = 0u; index < length; ++index) {
@@ -224,7 +224,8 @@ bool watchy_package_relative_path_valid(const char *path) {
             const size_t segment_length = (size_t)(cursor - segment);
             if (segment_length == 0u ||
                 (segment_length == 1u && segment[0] == '.') ||
-                (segment_length == 2u && segment[0] == '.' && segment[1] == '.')) {
+                (segment_length == 2u && segment[0] == '.' && segment[1] == '.') ||
+                (segment_length >= 8u && memcmp(segment, ".watchy-", 8u) == 0)) {
                 return false;
             }
             if (byte == '\0') {
@@ -355,7 +356,7 @@ watchy_package_status_t watchy_package_manifest_parse(const uint8_t *json,
         cursor.offset != cursor.size) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    if (!package_version_valid(out_manifest->version)) {
+    if (!watchy_package_version_valid(out_manifest->version)) {
         return WATCHY_PACKAGE_ERR_PATH;
     }
 

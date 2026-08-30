@@ -63,6 +63,7 @@ add_executable(watchy_packages_tests
   ../../components/watchy_packages/src/package_state.c
   ../../components/watchy_packages/src/package_runtime.c
   ../../components/watchy_packages/src/package_install.c
+  ../../components/watchy_packages/src/package_policy.c
   ../../components/watchy_packages/src/sha256.c
   ../../components/watchy_core/src/wpk.c
   ../../components/watchy_core/src/runtime.c

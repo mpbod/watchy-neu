@@ -18,6 +18,9 @@ watchy_package_status_t watchy_package_validate(const uint8_t *wpk,
         return WATCHY_PACKAGE_ERR_ARGUMENT;
     }
     memset(out_package, 0, sizeof(*out_package));
+    if (wpk_size > WATCHY_PACKAGE_WPK_BYTES_MAX) {
+        return WATCHY_PACKAGE_ERR_LIMIT;
+    }
     if (wpk_parse(wpk, wpk_size, &view) != WPK_OK) {
         return WATCHY_PACKAGE_ERR_WPK;
     }

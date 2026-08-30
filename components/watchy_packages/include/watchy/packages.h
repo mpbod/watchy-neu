@@ -44,19 +44,18 @@ typedef enum {
 #define WATCHY_PACKAGE_VERSION_MAX 32u
 #define WATCHY_PACKAGE_ASSET_PATH_MAX 96u
 #define WATCHY_PACKAGE_ASSET_COUNT_MAX 64u
-#define WATCHY_PACKAGE_ASSETS_BYTES_MAX (512u * 1024u)
-#define WATCHY_PACKAGE_RUNTIME_BYTES_MAX (160u * 1024u)
-#define WATCHY_PACKAGE_ELF_BYTES_MAX (384u * 1024u)
+#define WATCHY_PACKAGE_ASSETS_BYTES_MAX (32u * 1024u)
+#define WATCHY_PACKAGE_RUNTIME_BYTES_MAX (80u * 1024u)
+#define WATCHY_PACKAGE_ELF_BYTES_MAX (64u * 1024u)
 #define WATCHY_PACKAGE_MANIFEST_BYTES_MAX (16u * 1024u)
-#define WATCHY_PACKAGE_WPK_BYTES_MAX                                                   \
-    (68u + WATCHY_PACKAGE_MANIFEST_BYTES_MAX + WATCHY_PACKAGE_ELF_BYTES_MAX +          \
-     WATCHY_PACKAGE_ASSETS_BYTES_MAX)
+#define WATCHY_PACKAGE_WPK_BYTES_MAX (80u * 1024u)
 #define WATCHY_PACKAGE_REF_MAX (WATCHY_PACKAGE_ID_MAX + 1u + WATCHY_PACKAGE_VERSION_MAX)
 #define WATCHY_PACKAGE_HEALTH_RECORD_MAX 16u
 #define WATCHY_PACKAGE_INSTALLED_MAX 16u
 #define WATCHY_PACKAGE_INDEX_MAGIC UINT32_C(0x57504b49)
 #define WATCHY_PACKAGE_INDEX_VERSION 1u
 #define WATCHY_PACKAGE_INDEX_WIRE_MAX 4096u
+#define WATCHY_PACKAGE_TRANSACTION_PREFIX ".watchy-txn-"
 
 typedef enum {
     WATCHY_PACKAGE_TYPE_WATCHFACE = 0,
@@ -158,8 +157,16 @@ typedef struct {
 typedef struct {
     void (*before_callback)(void *context);
     void (*after_callback)(void *context);
+    bool (*ensure_current)(void *context);
     void *context;
 } watchy_package_watchdog_api_t;
+
+typedef enum {
+    WATCHY_PACKAGE_RECONCILE_KEEP = 0,
+    WATCHY_PACKAGE_RECONCILE_REMOVE_TRANSACTION = 1,
+    WATCHY_PACKAGE_RECONCILE_REMOVE_UNINDEXED = 2,
+    WATCHY_PACKAGE_RECONCILE_REMOVE_INVALID = 3,
+} watchy_package_reconcile_action_t;
 
 typedef struct {
     watchy_package_loader_api_t loader;
@@ -226,7 +233,14 @@ typedef struct {
 } watchy_crypto_api_t;
 
 bool watchy_package_id_valid(const char *identifier);
+bool watchy_package_version_valid(const char *version);
 bool watchy_package_relative_path_valid(const char *path);
+bool watchy_package_transaction_name_valid(const char *name);
+watchy_package_reconcile_action_t watchy_package_reconcile_version(
+    const char *name,
+    bool indexed);
+watchy_package_status_t watchy_package_watchdog_ensure_current(
+    const watchy_package_watchdog_api_t *watchdog);
 watchy_package_status_t watchy_package_manifest_parse(const uint8_t *json,
                                                       size_t json_size,
                                                       watchy_package_manifest_t *out_manifest);

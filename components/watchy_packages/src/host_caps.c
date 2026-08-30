@@ -26,7 +26,6 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#define WATCHY_PACKAGE_STATE_QUOTA (16u * 1024u)
 #define WATCHY_PACKAGE_IO_LIMIT WATCHY_PACKAGE_ASSETS_BYTES_MAX
 #define WATCHY_PACKAGE_LOG_MAX 256u
 
@@ -225,12 +224,8 @@ static void host_canvas_release(void *opaque, const watchy_canvas_t *canvas) {
     watchy_package_host_context_t *context = (watchy_package_host_context_t *)opaque;
     if (!permitted(context, WATCHY_CAP_CANVAS) || !context->canvas_acquired ||
         !target_range(canvas, sizeof(*canvas), false) ||
-        canvas->pixels != context->bound_canvas.pixels ||
-        canvas->width != context->bound_canvas.width ||
-        canvas->height != context->bound_canvas.height ||
-        canvas->stride != context->bound_canvas.stride ||
-        canvas->rotation != context->bound_canvas.rotation ||
-        canvas->format != context->bound_canvas.format) {
+        !watchy_package_canvas_binding_valid(&context->bound_canvas, canvas,
+                                             context->bound_canvas_bytes)) {
         return;
     }
     context->canvas_acquired = false;
@@ -400,7 +395,7 @@ static watchy_status_t host_storage_write(void *opaque,
     char resolved[WATCHY_PACKAGE_HOST_PATH_MAX];
     char temporary[WATCHY_PACKAGE_HOST_PATH_MAX];
     size_t current_size;
-    int descriptor;
+    int descriptor = -1;
     size_t written_total = 0u;
     struct stat info;
     int stat_result;
@@ -417,16 +412,33 @@ static watchy_status_t host_storage_write(void *opaque,
         return WATCHY_STATUS_INVALID_STATE;
     }
     stat_result = stat(resolved, &info);
-    if ((stat_result == 0 && (!S_ISREG(info.st_mode) || S_ISLNK(info.st_mode))) ||
+    if ((stat_result == 0 &&
+         !watchy_package_storage_node_allowed(S_ISREG(info.st_mode)
+                                                  ? WATCHY_PACKAGE_STORAGE_REGULAR
+                                                  : S_ISDIR(info.st_mode)
+                                                        ? WATCHY_PACKAGE_STORAGE_DIRECTORY
+                                                        : S_ISLNK(info.st_mode)
+                                                              ? WATCHY_PACKAGE_STORAGE_LINK
+                                                              : WATCHY_PACKAGE_STORAGE_OTHER,
+                                              false)) ||
         (stat_result != 0 && errno != ENOENT) ||
         !tree_size(context, context->state_root, resolved, &current_size) ||
-        current_size > WATCHY_PACKAGE_STATE_QUOTA - data_size || !parent_mkdirs(resolved) ||
-        snprintf(temporary, sizeof(temporary), "%s/.watchy-state-%08lx.new",
-                 context->state_root, (unsigned long)esp_random()) >= (int)sizeof(temporary)) {
+        !watchy_package_state_quota_allows(current_size, data_size) ||
+        !parent_mkdirs(resolved)) {
         (void)xSemaphoreGive((SemaphoreHandle_t)context->state_mutex);
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    for (unsigned attempt = 0u; attempt < 8u && descriptor < 0; ++attempt) {
+        if (snprintf(temporary, sizeof(temporary), "%s/.watchy-state-%08lx",
+                     context->state_root, (unsigned long)esp_random()) >=
+            (int)sizeof(temporary)) {
+            break;
+        }
+        descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (descriptor < 0 && errno != EEXIST) {
+            break;
+        }
+    }
     if (descriptor < 0) {
         (void)xSemaphoreGive((SemaphoreHandle_t)context->state_mutex);
         return WATCHY_STATUS_INVALID_STATE;
@@ -472,21 +484,11 @@ static watchy_status_t async_request(watchy_package_host_context_t *context,
     if (!permitted(context, capability)) {
         return WATCHY_STATUS_UNSUPPORTED;
     }
-    if (!target_range(out_request_id, sizeof(*out_request_id), true) || operation > maximum ||
-        (slot->occupied && slot->status.state == WATCHY_ASYNC_PENDING)) {
+    if (!target_range(out_request_id, sizeof(*out_request_id), true)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    if (++context->next_request_id == 0u) {
-        ++context->next_request_id;
-    }
-    *slot = (watchy_package_async_slot_t){
-        .id = context->next_request_id,
-        .operation = operation,
-        .status = {.state = WATCHY_ASYNC_PENDING, .result = WATCHY_STATUS_INVALID_STATE},
-        .occupied = true,
-    };
-    *out_request_id = slot->id;
-    return WATCHY_STATUS_OK;
+    return watchy_package_async_begin(slot, &context->next_request_id,
+                                      operation, maximum, out_request_id);
 }
 
 static watchy_status_t async_cancel(watchy_package_host_context_t *context,
@@ -496,13 +498,7 @@ static watchy_status_t async_cancel(watchy_package_host_context_t *context,
     if (!permitted(context, capability)) {
         return WATCHY_STATUS_UNSUPPORTED;
     }
-    if (!slot->occupied || slot->id != request_id ||
-        slot->status.state != WATCHY_ASYNC_PENDING) {
-        return WATCHY_STATUS_INVALID_ARGUMENT;
-    }
-    slot->status.state = WATCHY_ASYNC_CANCELLED;
-    slot->status.result = WATCHY_STATUS_OK;
-    return WATCHY_STATUS_OK;
+    return watchy_package_async_cancel_slot(slot, request_id);
 }
 
 static watchy_status_t async_status(watchy_package_host_context_t *context,
@@ -513,12 +509,10 @@ static watchy_status_t async_status(watchy_package_host_context_t *context,
     if (!permitted(context, capability)) {
         return WATCHY_STATUS_UNSUPPORTED;
     }
-    if (!target_range(out_status, sizeof(*out_status), true) ||
-        !slot->occupied || slot->id != request_id) {
+    if (!target_range(out_status, sizeof(*out_status), true)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    *out_status = slot->status;
-    return WATCHY_STATUS_OK;
+    return watchy_package_async_status_slot(slot, request_id, out_status);
 }
 
 static watchy_status_t host_network_request(void *opaque,
@@ -594,14 +588,24 @@ static uint32_t host_system_millis(void *opaque) {
 }
 
 static void host_system_sleep(void *opaque, uint32_t duration_ms) {
-    if (!permitted((watchy_package_host_context_t *)opaque, WATCHY_CAP_SYSTEM) ||
-        duration_ms > WATCHY_PACKAGE_CALLBACK_BUDGET_MS) {
+    watchy_package_host_context_t *context = (watchy_package_host_context_t *)opaque;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (!permitted(context, WATCHY_CAP_SYSTEM) ||
+        !watchy_package_callback_budget_reserve_sleep(&context->callback_budget,
+                                                      now_ms, duration_ms)) {
         return;
     }
     while (duration_ms != 0u) {
         const uint32_t slice = duration_ms > 100u ? 100u : duration_ms;
+        if (!watchy_package_callback_budget_may_feed(&context->callback_budget,
+                                                     (uint32_t)(esp_timer_get_time() / 1000))) {
+            return;
+        }
         vTaskDelay(pdMS_TO_TICKS(slice));
-        (void)esp_task_wdt_reset();
+        if (watchy_package_callback_budget_may_feed(&context->callback_budget,
+                                                    (uint32_t)(esp_timer_get_time() / 1000))) {
+            (void)esp_task_wdt_reset();
+        }
         duration_ms -= slice;
     }
 }
@@ -719,30 +723,29 @@ void watchy_package_host_deinit(watchy_package_host_context_t *context) {
     memset(context, 0, sizeof(*context));
 }
 
+static watchy_status_t host_execute_network(void *context, uint32_t operation) {
+    (void)context;
+    return operation == WATCHY_NETWORK_CONNECT ? watchy_wifi_start_stored_sta()
+                                                : watchy_wifi_stop();
+}
+
+static watchy_status_t host_execute_bluetooth(void *context, uint32_t operation) {
+    (void)context;
+    return operation == WATCHY_BLUETOOTH_START ? watchy_ble_start()
+                                                : watchy_ble_stop();
+}
+
 watchy_package_status_t watchy_package_host_pump(watchy_package_host_context_t *context) {
-    watchy_status_t status;
+    watchy_package_status_t status;
     if (context == NULL) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
     }
-    if (context->network_request.occupied &&
-        context->network_request.status.state == WATCHY_ASYNC_PENDING) {
-        status = context->network_request.operation == WATCHY_NETWORK_CONNECT
-                     ? watchy_wifi_start_stored_sta() : watchy_wifi_stop();
-        context->network_request.status.result = status;
-        context->network_request.status.state = status == WATCHY_STATUS_OK
-                                                    ? WATCHY_ASYNC_SUCCEEDED
-                                                    : WATCHY_ASYNC_FAILED;
-    }
-    if (context->bluetooth_request.occupied &&
-        context->bluetooth_request.status.state == WATCHY_ASYNC_PENDING) {
-        status = context->bluetooth_request.operation == WATCHY_BLUETOOTH_START
-                     ? watchy_ble_start() : watchy_ble_stop();
-        context->bluetooth_request.status.result = status;
-        context->bluetooth_request.status.state = status == WATCHY_STATUS_OK
-                                                      ? WATCHY_ASYNC_SUCCEEDED
-                                                      : WATCHY_ASYNC_FAILED;
-    }
-    return WATCHY_PACKAGE_OK;
+    status = watchy_package_async_pump_slot(&context->network_request,
+                                            host_execute_network, NULL);
+    return status == WATCHY_PACKAGE_OK
+               ? watchy_package_async_pump_slot(&context->bluetooth_request,
+                                                 host_execute_bluetooth, NULL)
+               : status;
 }
 
 bool watchy_package_host_take_exit(watchy_package_host_context_t *context) {

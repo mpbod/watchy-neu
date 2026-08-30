@@ -1,4 +1,5 @@
 #include "watchy/packages.h"
+#include "watchy/package_host.h"
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -355,9 +356,7 @@ watchy_package_status_t watchy_package_session_render(watchy_package_session_t *
     callback_before(session);
     status = session->descriptor.callbacks.on_render(session->user_data, canvas, mode);
     callback_after(session);
-    if (canvas->pixels != bound_canvas.pixels || canvas->width != bound_canvas.width ||
-        canvas->height != bound_canvas.height || canvas->stride != bound_canvas.stride ||
-        canvas->rotation != bound_canvas.rotation || canvas->format != bound_canvas.format) {
+    if (!watchy_package_canvas_binding_valid(&bound_canvas, canvas, canvas_bytes)) {
         *canvas = bound_canvas;
         status = WATCHY_STATUS_INVALID_ARGUMENT;
     }

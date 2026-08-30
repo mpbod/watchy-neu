@@ -10,6 +10,7 @@ extern "C" {
 #define WATCHY_PACKAGE_HOST_PATH_MAX 192u
 #define WATCHY_PACKAGE_STATE_NODE_MAX 32u
 #define WATCHY_PACKAGE_CALLBACK_BUDGET_MS 4000u
+#define WATCHY_PACKAGE_STATE_QUOTA (16u * 1024u)
 
 typedef struct {
     watchy_request_id_t id;
@@ -17,6 +18,28 @@ typedef struct {
     watchy_async_status_t status;
     bool occupied;
 } watchy_package_async_slot_t;
+
+typedef struct {
+    uint32_t started_ms;
+    uint32_t reserved_sleep_ms;
+    bool active;
+} watchy_package_callback_budget_t;
+
+typedef enum {
+    WATCHY_PACKAGE_POST_CONTINUE = 0,
+    WATCHY_PACKAGE_POST_CLEAN_EXIT = 1,
+    WATCHY_PACKAGE_POST_FAIL_CLEANUP = 2,
+} watchy_package_post_action_t;
+
+typedef enum {
+    WATCHY_PACKAGE_STORAGE_REGULAR = 0,
+    WATCHY_PACKAGE_STORAGE_DIRECTORY = 1,
+    WATCHY_PACKAGE_STORAGE_LINK = 2,
+    WATCHY_PACKAGE_STORAGE_OTHER = 3,
+} watchy_package_storage_node_t;
+
+typedef watchy_status_t (*watchy_package_async_execute_fn_t)(void *context,
+                                                             uint32_t operation);
 
 typedef struct {
     uint32_t capabilities;
@@ -27,6 +50,7 @@ typedef struct {
     watchy_canvas_t bound_canvas;
     size_t bound_canvas_bytes;
     bool canvas_acquired;
+    watchy_package_callback_budget_t callback_budget;
     watchy_request_id_t next_request_id;
     watchy_package_async_slot_t network_request;
     watchy_package_async_slot_t bluetooth_request;
@@ -45,6 +69,43 @@ typedef struct {
     watchy_system_api_v1_t system;
     watchy_host_caps_v1_t host;
 } watchy_package_host_context_t;
+
+watchy_status_t watchy_package_async_begin(watchy_package_async_slot_t *slot,
+                                           watchy_request_id_t *next_request_id,
+                                           uint32_t operation,
+                                           uint32_t maximum,
+                                           watchy_request_id_t *out_request_id);
+watchy_status_t watchy_package_async_cancel_slot(watchy_package_async_slot_t *slot,
+                                                 watchy_request_id_t request_id);
+watchy_status_t watchy_package_async_status_slot(const watchy_package_async_slot_t *slot,
+                                                 watchy_request_id_t request_id,
+                                                 watchy_async_status_t *out_status);
+watchy_package_status_t watchy_package_async_pump_slot(
+    watchy_package_async_slot_t *slot,
+    watchy_package_async_execute_fn_t execute,
+    void *execute_context);
+void watchy_package_callback_budget_begin(watchy_package_callback_budget_t *budget,
+                                          uint32_t now_ms);
+bool watchy_package_callback_budget_reserve_sleep(watchy_package_callback_budget_t *budget,
+                                                  uint32_t now_ms,
+                                                  uint32_t duration_ms);
+bool watchy_package_callback_budget_may_feed(const watchy_package_callback_budget_t *budget,
+                                             uint32_t now_ms);
+void watchy_package_callback_budget_end(watchy_package_callback_budget_t *budget);
+watchy_package_post_action_t watchy_package_post_action(bool pump_ok,
+                                                        bool refresh_requested,
+                                                        bool refresh_ok,
+                                                        bool exit_requested);
+bool watchy_package_state_quota_allows(size_t current_bytes, size_t incoming_bytes);
+bool watchy_package_storage_node_allowed(watchy_package_storage_node_t node,
+                                         bool allow_directory);
+bool watchy_package_range_within(uintptr_t allocation_start,
+                                 size_t allocation_size,
+                                 const void *address,
+                                 size_t size);
+bool watchy_package_canvas_binding_valid(const watchy_canvas_t *bound,
+                                         const watchy_canvas_t *candidate,
+                                         size_t bound_capacity);
 
 watchy_package_status_t watchy_package_host_init(watchy_package_host_context_t *context,
                                                  const watchy_package_manifest_t *manifest);

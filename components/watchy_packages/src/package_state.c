@@ -38,6 +38,7 @@ static void put_u32(uint8_t *bytes, uint32_t value) {
 
 static bool package_ref_valid(const char *package_ref) {
     char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
     const char *separator;
     size_t identifier_length;
     size_t version_length;
@@ -55,21 +56,23 @@ static bool package_ref_valid(const char *package_ref) {
     }
     memcpy(identifier, package_ref, identifier_length);
     identifier[identifier_length] = '\0';
-    if (!watchy_package_id_valid(identifier)) {
+    memcpy(version, separator + 1u, version_length + 1u);
+    return watchy_package_id_valid(identifier) && watchy_package_version_valid(version);
+}
+
+static bool stored_ref_valid(const char *package_ref, bool allow_empty) {
+    const char *terminator = memchr(package_ref, '\0', WATCHY_PACKAGE_REF_MAX + 1u);
+    if (terminator == NULL ||
+        ((package_ref[0] != '\0' || !allow_empty) && !package_ref_valid(package_ref))) {
         return false;
     }
-    for (size_t index = 0u; index < version_length; ++index) {
-        const unsigned char byte = (unsigned char)separator[1u + index];
-        if (byte < 0x21u || byte == 0x7fu || byte == '/' || byte == '\\') {
+    for (const char *padding = terminator + 1u;
+         padding < package_ref + WATCHY_PACKAGE_REF_MAX + 1u; ++padding) {
+        if (*padding != '\0') {
             return false;
         }
     }
     return true;
-}
-
-static bool stored_ref_valid(const char *package_ref, bool allow_empty) {
-    return memchr(package_ref, '\0', WATCHY_PACKAGE_REF_MAX + 1u) != NULL &&
-           ((allow_empty && package_ref[0] == '\0') || package_ref_valid(package_ref));
 }
 
 static ptrdiff_t find_installed(const watchy_package_index_t *index, const char *package_ref) {

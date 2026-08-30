@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "watchy/packages.h"
+#include "watchy/package_host.h"
 #include "watchy/package_crypto.h"
 #include "watchy/wpk.h"
 
@@ -158,7 +159,19 @@ static int test_manifest_rejects_noncanonical_duplicate_or_unsafe_content(void) 
         "\"max_runtime_bytes\":1,\"name\":\"A\",\"type\":\"app\",\"version\":\"1\"}";
     static const char excessive_runtime[] =
         "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,\"id\":\"a\","
-        "\"max_runtime_bytes\":163841,\"name\":\"A\",\"type\":\"app\",\"version\":\"1\"}";
+        "\"max_runtime_bytes\":81921,\"name\":\"A\",\"type\":\"app\",\"version\":\"1\"}";
+    static const char excessive_assets[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[{\"path\":\"large.bin\",\"size\":32769}],"
+        "\"capabilities\":0,\"id\":\"a\",\"max_runtime_bytes\":1,\"name\":\"A\","
+        "\"type\":\"app\",\"version\":\"1\"}";
+    static const char excessive_asset_aggregate[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[{\"path\":\"a\",\"size\":20000},"
+        "{\"path\":\"b\",\"size\":12769}],\"capabilities\":0,\"id\":\"a\","
+        "\"max_runtime_bytes\":1,\"name\":\"A\",\"type\":\"app\",\"version\":\"1\"}";
+    static const char exact_limits[] =
+        "{\"abi_major\":1,\"abi_minor\":1,\"assets\":[{\"path\":\"large.bin\",\"size\":32768}],"
+        "\"capabilities\":0,\"id\":\"a\",\"max_runtime_bytes\":81920,\"name\":\"A\","
+        "\"type\":\"app\",\"version\":\"1\"}";
     static const char traversal_version[] =
         "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,\"id\":\"a\","
         "\"max_runtime_bytes\":1,\"name\":\"A\",\"type\":\"app\",\"version\":\"../1\"}";
@@ -176,6 +189,10 @@ static int test_manifest_rejects_noncanonical_duplicate_or_unsafe_content(void) 
     static const char non_profile_escape[] =
         "{\"abi_major\":1,\"abi_minor\":1,\"assets\":[],\"capabilities\":0,\"id\":\"a\","
         "\"max_runtime_bytes\":1,\"name\":\"line\\nfeed\",\"type\":\"app\",\"version\":\"1\"}";
+    static const char reserved_version[] =
+        "{\"abi_major\":1,\"abi_minor\":1,\"assets\":[],\"capabilities\":0,\"id\":\"a\","
+        "\"max_runtime_bytes\":1,\"name\":\"A\",\"type\":\"app\","
+        "\"version\":\".watchy-txn-1234abcd\"}";
     watchy_package_manifest_t manifest;
 
     CHECK(parse_manifest_text(noncanonical_space, &manifest) == WATCHY_PACKAGE_ERR_MANIFEST);
@@ -184,12 +201,19 @@ static int test_manifest_rejects_noncanonical_duplicate_or_unsafe_content(void) 
     CHECK(parse_manifest_text(traversal, &manifest) == WATCHY_PACKAGE_ERR_PATH);
     CHECK(parse_manifest_text(collision, &manifest) == WATCHY_PACKAGE_ERR_COLLISION);
     CHECK(parse_manifest_text(excessive_runtime, &manifest) == WATCHY_PACKAGE_ERR_LIMIT);
+    CHECK(parse_manifest_text(excessive_assets, &manifest) == WATCHY_PACKAGE_ERR_LIMIT);
+    CHECK(parse_manifest_text(excessive_asset_aggregate, &manifest) == WATCHY_PACKAGE_ERR_LIMIT);
+    CHECK(parse_manifest_text(exact_limits, &manifest) == WATCHY_PACKAGE_OK);
     CHECK(parse_manifest_text(traversal_version, &manifest) == WATCHY_PACKAGE_ERR_PATH);
     CHECK(watchy_package_manifest_parse(invalid_utf8, sizeof(invalid_utf8) - 1u, &manifest) ==
           WATCHY_PACKAGE_ERR_UTF8);
     CHECK(parse_manifest_text(reserved_asset, &manifest) == WATCHY_PACKAGE_ERR_PATH);
     CHECK(parse_manifest_text(reserved_prefix, &manifest) == WATCHY_PACKAGE_ERR_PATH);
     CHECK(parse_manifest_text(non_profile_escape, &manifest) == WATCHY_PACKAGE_ERR_MANIFEST);
+    CHECK(parse_manifest_text(reserved_version, &manifest) == WATCHY_PACKAGE_ERR_PATH);
+    CHECK(!watchy_package_relative_path_valid(".watchy-state-1234abcd.new"));
+    CHECK(!watchy_package_relative_path_valid("dir/.watchy-state-1234abcd.new"));
+    CHECK(watchy_package_relative_path_valid("1.new.0/data"));
     return 0;
 }
 
@@ -295,7 +319,9 @@ static int test_elf_validator_accepts_only_sane_xtensa_shared_objects(void) {
 
     make_valid_xtensa_elf(elf);
     CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, &runtime_bytes) == WATCHY_PACKAGE_OK);
-    CHECK(runtime_bytes == 4u);
+    /* 4 text + one 8-byte ESP32 esp_symtab entry + the 21-byte exported
+     * name rounded to the target's 4-byte allocation alignment. */
+    CHECK(runtime_bytes == 36u);
 
     elf[4] = 2u;
     CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) == WATCHY_PACKAGE_ERR_ELF);
@@ -326,8 +352,8 @@ static int test_elf_validator_accepts_only_sane_xtensa_shared_objects(void) {
     return 0;
 }
 
-static int test_elf_validator_rejects_files_larger_than_384_kib(void) {
-    static uint8_t oversized[WATCHY_PACKAGE_ELF_BYTES_MAX + 1u];
+static int test_elf_validator_rejects_files_larger_than_64_kib(void) {
+    static uint8_t oversized[(64u * 1024u) + 1u];
     CHECK(watchy_package_elf_validate(oversized, sizeof(oversized), 1u, NULL) ==
           WATCHY_PACKAGE_ERR_LIMIT);
     return 0;
@@ -384,6 +410,237 @@ static int test_elf_validator_rejects_loader_consumed_hostile_structures(void) {
     make_valid_xtensa_elf(elf);
     put_u32le(elf, 136u, UINT32_MAX - 1u);
     CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) == WATCHY_PACKAGE_ERR_ELF);
+    /* Reuse the relocation bytes as a second, non-overlapping .dynsym. The
+     * loader would allocate and overwrite its persistent table twice. */
+    make_valid_xtensa_elf(elf);
+    put_u32le(elf, 284u, 25u);
+    put_u32le(elf, 288u, 11u);
+    put_u32le(elf, 300u, 428u);
+    put_u32le(elf, 304u, 16u);
+    put_u32le(elf, 308u, 3u);
+    put_u32le(elf, 312u, 1u);
+    put_u32le(elf, 316u, 4u);
+    put_u32le(elf, 320u, 16u);
+    memset(elf + 428u, 0, 16u);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) == WATCHY_PACKAGE_ERR_ELF);
+    make_valid_xtensa_elf(elf);
+    put_u32le(elf, 284u, 17u);
+    put_u32le(elf, 288u, 3u);
+    put_u32le(elf, 300u, 428u);
+    put_u32le(elf, 304u, 16u);
+    put_u32le(elf, 316u, 1u);
+    memset(elf + 428u, 0, 16u);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) == WATCHY_PACKAGE_ERR_ELF);
+    return 0;
+}
+
+#define MANY_EXPORTS 64u
+#define MANY_ELF_SIZE 1368u
+
+static void make_many_symbol_xtensa_elf(uint8_t bytes[MANY_ELF_SIZE]) {
+    static const char names[] = "\0.text\0.shstrtab\0.dynstr\0.dynsym\0";
+    static const char symbols[] = "\0f\0";
+    const uint32_t dynsym_offset = 324u;
+    const uint32_t text_offset = 1364u;
+    memset(bytes, 0, MANY_ELF_SIZE);
+    memcpy(bytes, "\177ELF", 4u);
+    bytes[4] = 1u;
+    bytes[5] = 1u;
+    bytes[6] = 1u;
+    put_u16le(bytes, 16u, 3u);
+    put_u16le(bytes, 18u, 94u);
+    put_u32le(bytes, 20u, 1u);
+    put_u32le(bytes, 24u, 0x1000u);
+    put_u32le(bytes, 28u, 52u);
+    put_u32le(bytes, 32u, 84u);
+    put_u16le(bytes, 40u, 52u);
+    put_u16le(bytes, 42u, 32u);
+    put_u16le(bytes, 44u, 1u);
+    put_u16le(bytes, 46u, 40u);
+    put_u16le(bytes, 48u, 5u);
+    put_u16le(bytes, 50u, 2u);
+    put_u32le(bytes, 52u, 1u);
+    put_u32le(bytes, 56u, text_offset);
+    put_u32le(bytes, 60u, 0x1000u);
+    put_u32le(bytes, 68u, 4u);
+    put_u32le(bytes, 72u, 4u);
+    put_u32le(bytes, 76u, 5u);
+    put_u32le(bytes, 80u, 4u);
+    put_u32le(bytes, 124u, 1u);
+    put_u32le(bytes, 128u, 1u);
+    put_u32le(bytes, 132u, 6u);
+    put_u32le(bytes, 136u, 0x1000u);
+    put_u32le(bytes, 140u, text_offset);
+    put_u32le(bytes, 144u, 4u);
+    put_u32le(bytes, 156u, 4u);
+    put_u32le(bytes, 164u, 7u);
+    put_u32le(bytes, 168u, 3u);
+    put_u32le(bytes, 180u, 284u);
+    put_u32le(bytes, 184u, (uint32_t)sizeof(names));
+    put_u32le(bytes, 196u, 1u);
+    put_u32le(bytes, 204u, 17u);
+    put_u32le(bytes, 208u, 3u);
+    put_u32le(bytes, 220u, 320u);
+    put_u32le(bytes, 224u, (uint32_t)sizeof(symbols));
+    put_u32le(bytes, 236u, 1u);
+    put_u32le(bytes, 244u, 25u);
+    put_u32le(bytes, 248u, 11u);
+    put_u32le(bytes, 260u, dynsym_offset);
+    put_u32le(bytes, 264u, (MANY_EXPORTS + 1u) * 16u);
+    put_u32le(bytes, 268u, 3u);
+    put_u32le(bytes, 272u, 1u);
+    put_u32le(bytes, 276u, 4u);
+    put_u32le(bytes, 280u, 16u);
+    memcpy(bytes + 284u, names, sizeof(names));
+    memcpy(bytes + 320u, symbols, sizeof(symbols));
+    for (uint32_t index = 1u; index <= MANY_EXPORTS; ++index) {
+        const size_t offset = dynsym_offset + (size_t)index * 16u;
+        put_u32le(bytes, offset, 1u);
+        put_u32le(bytes, offset + 4u, 0x1000u);
+        put_u32le(bytes, offset + 8u, 4u);
+        bytes[offset + 12u] = 0x12u;
+        put_u16le(bytes, offset + 14u, 1u);
+    }
+    bytes[text_offset] = 0x06u;
+    bytes[text_offset + 1u] = 0x01u;
+}
+
+static int test_elf_runtime_accounts_for_many_exported_symbols(void) {
+    uint8_t elf[MANY_ELF_SIZE];
+    uint32_t runtime_bytes = 0u;
+    make_many_symbol_xtensa_elf(elf);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 772u, &runtime_bytes) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(runtime_bytes == 772u);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 771u, NULL) ==
+          WATCHY_PACKAGE_ERR_LIMIT);
+    return 0;
+}
+
+static int test_reconciliation_distinguishes_valid_new_versions_from_transactions(void) {
+    CHECK(watchy_package_version_valid("1.new.0"));
+    CHECK(watchy_package_version_valid("release.new.beta"));
+    CHECK(!watchy_package_version_valid(".watchy-txn-1234abcd"));
+    CHECK(watchy_package_transaction_name_valid(".watchy-txn-1234abcd"));
+    CHECK(!watchy_package_transaction_name_valid("1.new.0"));
+    CHECK(!watchy_package_transaction_name_valid(".watchy-txn-1234abc"));
+    CHECK(!watchy_package_transaction_name_valid(".watchy-txn-1234abcd-extra"));
+    CHECK(watchy_package_reconcile_version("1.new.0", true) ==
+          WATCHY_PACKAGE_RECONCILE_KEEP);
+    CHECK(watchy_package_reconcile_version("1.new.0", false) ==
+          WATCHY_PACKAGE_RECONCILE_REMOVE_UNINDEXED);
+    CHECK(watchy_package_reconcile_version(".watchy-txn-1234abcd", false) ==
+          WATCHY_PACKAGE_RECONCILE_REMOVE_TRANSACTION);
+    CHECK(watchy_package_reconcile_version(".watchy-txn-bad", false) ==
+          WATCHY_PACKAGE_RECONCILE_REMOVE_INVALID);
+    return 0;
+}
+
+static watchy_status_t execute_async(void *context, uint32_t operation) {
+    unsigned *executions = (unsigned *)context;
+    ++*executions;
+    return operation == 7u ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
+}
+
+static int test_async_policy_pumps_once_and_preserves_cancelled_requests(void) {
+    watchy_package_async_slot_t slot = {0};
+    watchy_request_id_t next = 0u;
+    watchy_request_id_t request_id = 0u;
+    watchy_async_status_t status;
+    unsigned executions = 0u;
+    CHECK(watchy_package_async_begin(&slot, &next, 7u, 8u, &request_id) == WATCHY_STATUS_OK);
+    CHECK(request_id == 1u);
+    CHECK(watchy_package_async_pump_slot(&slot, execute_async, &executions) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_async_status_slot(&slot, request_id, &status) == WATCHY_STATUS_OK);
+    CHECK(status.state == WATCHY_ASYNC_SUCCEEDED && status.result == WATCHY_STATUS_OK);
+    CHECK(watchy_package_async_pump_slot(&slot, execute_async, &executions) == WATCHY_PACKAGE_OK);
+    CHECK(executions == 1u);
+    CHECK(watchy_package_async_begin(&slot, &next, 8u, 8u, &request_id) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_async_cancel_slot(&slot, request_id) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_async_pump_slot(&slot, execute_async, &executions) == WATCHY_PACKAGE_OK);
+    CHECK(executions == 1u);
+    CHECK(watchy_package_async_status_slot(&slot, request_id, &status) == WATCHY_STATUS_OK);
+    CHECK(status.state == WATCHY_ASYNC_CANCELLED);
+    return 0;
+}
+
+static int test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure(void) {
+    CHECK(watchy_package_post_action(true, false, true, false) == WATCHY_PACKAGE_POST_CONTINUE);
+    CHECK(watchy_package_post_action(true, false, true, true) ==
+          WATCHY_PACKAGE_POST_CLEAN_EXIT);
+    CHECK(watchy_package_post_action(true, true, false, false) ==
+          WATCHY_PACKAGE_POST_FAIL_CLEANUP);
+    CHECK(watchy_package_post_action(false, false, true, false) ==
+          WATCHY_PACKAGE_POST_FAIL_CLEANUP);
+    return 0;
+}
+
+static int test_callback_budget_stops_repeated_sleeps_and_watchdog_feeds(void) {
+    watchy_package_callback_budget_t budget = {0};
+    watchy_package_callback_budget_begin(&budget, 100u);
+    CHECK(watchy_package_callback_budget_reserve_sleep(&budget, 100u, 2000u));
+    CHECK(watchy_package_callback_budget_reserve_sleep(&budget, 100u, 2000u));
+    CHECK(!watchy_package_callback_budget_reserve_sleep(&budget, 100u, 1u));
+    CHECK(watchy_package_callback_budget_may_feed(&budget, 4099u));
+    CHECK(!watchy_package_callback_budget_may_feed(&budget, 4101u));
+    watchy_package_callback_budget_end(&budget);
+    CHECK(!watchy_package_callback_budget_reserve_sleep(&budget, 100u, 1u));
+    CHECK(!watchy_package_callback_budget_may_feed(&budget, 100u));
+    return 0;
+}
+
+static bool ensure_watchdog(void *context) {
+    return *(const bool *)context;
+}
+
+static int test_watchdog_enrollment_adapter_fails_closed(void) {
+    bool enrolled = false;
+    watchy_package_watchdog_api_t watchdog = {
+        .ensure_current = ensure_watchdog,
+        .context = &enrolled,
+    };
+    CHECK(watchy_package_watchdog_ensure_current(&watchdog) == WATCHY_PACKAGE_ERR_STATE);
+    enrolled = true;
+    CHECK(watchy_package_watchdog_ensure_current(&watchdog) == WATCHY_PACKAGE_OK);
+    watchdog.ensure_current = NULL;
+    CHECK(watchy_package_watchdog_ensure_current(&watchdog) == WATCHY_PACKAGE_ERR_STATE);
+    return 0;
+}
+
+static int test_state_pointer_and_canvas_policies_fail_closed_at_boundaries(void) {
+    uint8_t pixels[32] = {0};
+    watchy_canvas_t bound = {
+        .pixels = pixels, .width = 8u, .height = 8u, .stride = 4u,
+        .rotation = 0u, .format = WATCHY_PIXEL_GRAY4,
+    };
+    watchy_canvas_t changed = bound;
+    CHECK(watchy_package_state_quota_allows(16383u, 1u));
+    CHECK(!watchy_package_state_quota_allows(16384u, 1u));
+    CHECK(watchy_package_storage_node_allowed(WATCHY_PACKAGE_STORAGE_REGULAR, false));
+    CHECK(watchy_package_storage_node_allowed(WATCHY_PACKAGE_STORAGE_DIRECTORY, true));
+    CHECK(!watchy_package_storage_node_allowed(WATCHY_PACKAGE_STORAGE_DIRECTORY, false));
+    CHECK(!watchy_package_storage_node_allowed(WATCHY_PACKAGE_STORAGE_LINK, true));
+    CHECK(watchy_package_range_within(0x1000u, 0x100u, (const void *)0x1080u, 0x80u));
+    CHECK(!watchy_package_range_within(0x1000u, 0x100u, (const void *)0x1080u, 0x81u));
+    CHECK(!watchy_package_range_within(UINTPTR_MAX - 1u, 4u,
+                                       (const void *)(UINTPTR_MAX - 1u), 1u));
+    CHECK(watchy_package_canvas_binding_valid(&bound, &bound, sizeof(pixels)));
+    changed.stride = 3u;
+    CHECK(!watchy_package_canvas_binding_valid(&bound, &changed, sizeof(pixels)));
+    CHECK(!watchy_package_canvas_binding_valid(&bound, &bound, sizeof(pixels) - 1u));
+    return 0;
+}
+
+static int test_absolute_wpk_limit_is_80_kib_before_parsing(void) {
+    static uint8_t exact[80u * 1024u];
+    static uint8_t oversized[(80u * 1024u) + 1u];
+    digest_probe_t probe = {0};
+    watchy_crypto_api_t crypto = {.sha256 = digest_probe_sha256, .context = &probe};
+    watchy_validated_package_t package;
+    CHECK(watchy_package_validate(exact, sizeof(exact), &crypto, &package) ==
+          WATCHY_PACKAGE_ERR_WPK);
+    CHECK(watchy_package_validate(oversized, sizeof(oversized), &crypto, &package) ==
+          WATCHY_PACKAGE_ERR_LIMIT);
     return 0;
 }
 
@@ -436,7 +693,7 @@ static int test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data
     probe.normalized_size = size;
     CHECK(watchy_package_validate(bytes, size, &crypto, &package) == WATCHY_PACKAGE_OK);
     CHECK(strcmp(package.manifest.id, "clock.simple") == 0);
-    CHECK(package.runtime_bytes == 4u);
+    CHECK(package.runtime_bytes == 36u);
     CHECK(package.assets_size == 3u);
 
     asset_size_digit = (uint8_t *)strstr((char *)bytes + header->manifest_offset,
@@ -622,6 +879,11 @@ static int test_index_wire_is_fixed_width_and_rejects_corruption_or_bad_selectio
     CHECK(wire_size > 0u && wire_size < sizeof(wire));
     CHECK(watchy_package_index_decode(wire, wire_size, &decoded) == WATCHY_PACKAGE_OK);
     CHECK(decoded.installed_count == 2u && decoded.installed_types[1] == WATCHY_PACKAGE_TYPE_APP);
+
+    wire[installed_offset + 2u + strlen("face@1") + 1u] = 0x5au;
+    CHECK(watchy_package_index_decode(wire, wire_size, &decoded) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(watchy_package_index_encode(watchy_package_index_snapshot(&manager),
+                                      wire, sizeof(wire), &wire_size) == WATCHY_PACKAGE_OK);
 
     wire[6] = 1u;
     CHECK(watchy_package_index_decode(wire, wire_size, &decoded) == WATCHY_PACKAGE_ERR_STORE);
@@ -963,7 +1225,19 @@ typedef struct {
     uint32_t next_unique;
     unsigned operations;
     bool tamper_stage;
+    bool transaction_name_seen;
+    unsigned transaction_collisions;
+    bool collision_path_present;
 } fake_package_fs_t;
+
+static const char *path_basename(const char *path) {
+    const char *separator = path != NULL ? strrchr(path, '/') : NULL;
+    return separator != NULL ? separator + 1u : path;
+}
+
+static bool fake_transaction_path(const char *path) {
+    return watchy_package_transaction_name_valid(path_basename(path));
+}
 
 static bool fake_fs_write(void *context,
                           const char *path,
@@ -1021,19 +1295,23 @@ static bool fake_fs_read(void *context,
 static bool fake_fs_mkdirs(void *context, const char *path) {
     fake_package_fs_t *fs = (fake_package_fs_t *)context;
     ++fs->operations;
-    if (strstr(path, ".new") != NULL) {
-        fs->temp_present = true;
-    }
+    (void)path;
     return true;
 }
 
 static bool fake_fs_mkdir_exclusive(void *context, const char *path) {
     fake_package_fs_t *fs = (fake_package_fs_t *)context;
     ++fs->operations;
-    if (fs->temp_present || path == NULL || strstr(path, ".new") == NULL) {
+    if (fs->temp_present || !fake_transaction_path(path)) {
+        return false;
+    }
+    if (fs->transaction_collisions != 0u) {
+        --fs->transaction_collisions;
+        fs->collision_path_present = true;
         return false;
     }
     fs->temp_present = true;
+    fs->transaction_name_seen = true;
     return true;
 }
 
@@ -1046,7 +1324,9 @@ static bool fake_fs_sync_tree(void *context, const char *path) {
 static bool fake_fs_rename(void *context, const char *source, const char *destination) {
     fake_package_fs_t *fs = (fake_package_fs_t *)context;
     ++fs->operations;
-    if (!fs->temp_present || strstr(source, ".new") == NULL || strstr(destination, ".new") != NULL) {
+    if (!fs->temp_present || !fake_transaction_path(source) ||
+        fake_transaction_path(destination) ||
+        !watchy_package_version_valid(path_basename(destination))) {
         return false;
     }
     fs->temp_present = false;
@@ -1060,7 +1340,11 @@ static bool fake_fs_exists(void *context, const char *path) {
     if (path != NULL && strncmp(path, "/data/staging/", strlen("/data/staging/")) == 0) {
         return fs->stage_present;
     }
-    return path != NULL && strstr(path, ".new") == NULL && fs->final_present;
+    if (fake_transaction_path(path) && fs->collision_path_present) {
+        fs->collision_path_present = false;
+        return true;
+    }
+    return path != NULL && !fake_transaction_path(path) && fs->final_present;
 }
 
 static uint32_t fake_fs_unique(void *context) {
@@ -1074,7 +1358,7 @@ static bool fake_fs_remove_tree(void *context, const char *path) {
     ++fs->operations;
     if (strncmp(path, "/data/staging/", strlen("/data/staging/")) == 0) {
         fs->stage_present = false;
-    } else if (strstr(path, ".new") != NULL) {
+    } else if (fake_transaction_path(path)) {
         fs->temp_present = false;
     } else if (strncmp(path, "/data/packages/", strlen("/data/packages/")) == 0) {
         fs->final_present = false;
@@ -1106,7 +1390,10 @@ static int test_install_transaction_stages_validates_unpacks_and_rolls_back_nvs_
     fake_index_store_t store = {0};
     watchy_package_index_store_t store_api = fake_store_api(&store);
     watchy_package_index_manager_t manager;
-    fake_package_fs_t fs = {.unpacked_files_read_only = true};
+    fake_package_fs_t fs = {
+        .unpacked_files_read_only = true,
+        .transaction_collisions = 1u,
+    };
     watchy_package_fs_api_t fs_api = fake_fs_api(&fs);
     uint8_t stage_readback[1024];
     watchy_package_install_workspace_t workspace = {
@@ -1143,6 +1430,7 @@ static int test_install_transaction_stages_validates_unpacks_and_rolls_back_nvs_
           WATCHY_PACKAGE_OK);
     CHECK(strcmp(installed_ref, "clock.simple@1.2.3") == 0);
     CHECK(!fs.stage_present && !fs.temp_present && fs.final_present);
+    CHECK(fs.transaction_name_seen);
     CHECK(fs.unpacked_files_read_only);
     CHECK(watchy_package_index_snapshot(&manager)->installed_count == 1u);
     CHECK(strcmp(watchy_package_index_snapshot(&manager)->installed[0], installed_ref) == 0);
@@ -1240,8 +1528,16 @@ int main(void) {
     CHECK(test_manifest_accepts_the_canonical_required_schema() == 0);
     CHECK(test_manifest_rejects_noncanonical_duplicate_or_unsafe_content() == 0);
     CHECK(test_elf_validator_accepts_only_sane_xtensa_shared_objects() == 0);
-    CHECK(test_elf_validator_rejects_files_larger_than_384_kib() == 0);
+    CHECK(test_elf_validator_rejects_files_larger_than_64_kib() == 0);
     CHECK(test_elf_validator_rejects_loader_consumed_hostile_structures() == 0);
+    CHECK(test_elf_runtime_accounts_for_many_exported_symbols() == 0);
+    CHECK(test_reconciliation_distinguishes_valid_new_versions_from_transactions() == 0);
+    CHECK(test_async_policy_pumps_once_and_preserves_cancelled_requests() == 0);
+    CHECK(test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure() == 0);
+    CHECK(test_callback_budget_stops_repeated_sleeps_and_watchdog_feeds() == 0);
+    CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
+    CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
+    CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
     CHECK(test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data() == 0);
     CHECK(test_selection_is_transactional_when_persistence_fails() == 0);
     CHECK(test_pending_watchface_promotes_after_render_and_rolls_back_on_failure() == 0);
@@ -1255,6 +1551,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 21 package tests");
+    puts("PASS 29 package tests");
     return 0;
 }

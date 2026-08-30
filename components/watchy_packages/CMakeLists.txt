@@ -5,6 +5,7 @@ idf_component_register(
         "src/idf_runtime.c"
         "src/package_format.c"
         "src/package_install.c"
+        "src/package_policy.c"
         "src/package_runtime.c"
         "src/package_state.c"
         "src/package_validate.c"

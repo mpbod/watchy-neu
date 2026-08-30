@@ -155,6 +155,8 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
     uint32_t text_addr = 0u;
     uint32_t text_size = 0u;
     uint8_t seen_loader_sections = 0u;
+    uint16_t dynsym_index = 0u;
+    uint16_t dynstr_index = 0u;
 
     if (elf == NULL) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
@@ -199,6 +201,33 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
         if (shstr[0] != '\0' || shstr[shstr_size - 1u] != '\0') {
             return WATCHY_PACKAGE_ERR_ELF;
         }
+    }
+    for (uint16_t i = 1u; i < shnum; ++i) {
+        const uint8_t *sh = section(elf, shoff, i);
+        const uint32_t name_offset = u32(sh);
+        const char *name;
+        if (!nul_string(shstr, shstr_size, name_offset)) {
+            return WATCHY_PACKAGE_ERR_ELF;
+        }
+        name = (const char *)shstr + name_offset;
+        if (strcmp(name, ".dynsym") == 0) {
+            if (dynsym_index != 0u || u32(sh + 4u) != SHT_DYNSYM) {
+                return WATCHY_PACKAGE_ERR_ELF;
+            }
+            dynsym_index = i;
+        } else if (u32(sh + 4u) == SHT_DYNSYM) {
+            return WATCHY_PACKAGE_ERR_ELF;
+        }
+        if (strcmp(name, ".dynstr") == 0) {
+            if (dynstr_index != 0u || u32(sh + 4u) != SHT_STRTAB) {
+                return WATCHY_PACKAGE_ERR_ELF;
+            }
+            dynstr_index = i;
+        }
+    }
+    if (dynsym_index == 0u || dynstr_index == 0u ||
+        u32(section(elf, shoff, dynsym_index) + 24u) != dynstr_index) {
+        return WATCHY_PACKAGE_ERR_ELF;
     }
 
     for (uint16_t i = 0u; i < phnum; ++i) {
@@ -336,6 +365,25 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
                      * the .text base, including undefined functions. Reject
                      * those before it can perform that invalid mapping. */
                     return WATCHY_PACKAGE_ERR_ELF;
+                }
+                if (type == SHT_DYNSYM && (sym[12u] >> 4u) == STB_GLOBAL &&
+                    (sym[12u] & 0x0fu) == STT_FUNC) {
+                    const uint8_t *terminator = memchr(str + u32(sym), '\0',
+                                                       str_size - u32(sym));
+                    const uint32_t name_bytes = (uint32_t)(terminator - (str + u32(sym))) + 1u;
+                    uint32_t aligned_name;
+                    /* ESP32 esp_symtab_t is two 32-bit pointers. elf_loader
+                     * allocates a table entry and a separate name for every
+                     * exported global function. */
+                    if (name_bytes > UINT32_MAX - 3u) {
+                        return WATCHY_PACKAGE_ERR_LIMIT;
+                    }
+                    aligned_name = (name_bytes + 3u) & ~UINT32_C(3);
+                    if (runtime > UINT32_MAX - 8u ||
+                        runtime + 8u > UINT32_MAX - aligned_name) {
+                        return WATCHY_PACKAGE_ERR_LIMIT;
+                    }
+                    runtime += 8u + aligned_name;
                 }
             }
         } else if (type == SHT_RELA) {
