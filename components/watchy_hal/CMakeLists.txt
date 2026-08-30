@@ -30,6 +30,7 @@ idf_component_register(
         esp_event
         esp_netif
         esp_timer
+        esp_system
         esp_wifi
         bt
         nvs_flash
@@ -38,4 +39,8 @@ idf_component_register(
 )
 
 target_compile_features(${COMPONENT_LIB} PUBLIC c_std_11 cxx_std_17)
-target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wall -Wextra -Werror
+    -Wframe-larger-than=2048
+    -fstack-usage
+)

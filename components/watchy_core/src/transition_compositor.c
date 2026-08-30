@@ -163,7 +163,7 @@ static void compose_push(uint8_t frame_index,
         for (int32_t x = rect.left; x < rect.right; ++x) {
             int32_t input_x = x;
             int32_t input_y = y;
-            const uint8_t *input;
+            const uint8_t *input = source;
 
             switch (direction) {
             case WATCHY_TRANSITION_DIRECTION_LEFT:

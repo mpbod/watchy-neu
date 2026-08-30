@@ -78,6 +78,7 @@ add_executable(watchy_hal_tests
   ../../components/watchy_hal/src/storage_policy.c
 )
 target_include_directories(watchy_hal_tests PRIVATE
+  ../../components/watchy_core/include
   ../../components/watchy_hal/include
   ../../sdk/include
 )

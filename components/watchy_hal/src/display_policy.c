@@ -35,6 +35,12 @@ bool watchy_display_retained_valid(const watchy_display_retained_state_t *state)
            state->checksum == retained_checksum(state);
 }
 
+void watchy_display_invalidate_retained(watchy_display_retained_state_t *state) {
+    if (state != NULL) {
+        state->magic = 0u;
+    }
+}
+
 watchy_refresh_mode_t watchy_display_prepare_refresh(const watchy_display_retained_state_t *state,
                                                      watchy_refresh_mode_t requested,
                                                      uint16_t partial_limit) {
@@ -50,9 +56,7 @@ void watchy_display_commit_refresh(watchy_display_retained_state_t *state,
                                    const uint8_t *framebuffer,
                                    size_t size) {
     if (state == NULL || framebuffer == NULL || size != sizeof(state->previous_frame)) {
-        if (state != NULL) {
-            state->magic = 0;
-        }
+        watchy_display_invalidate_retained(state);
         return;
     }
     if (completed == WATCHY_REFRESH_FULL || !watchy_display_retained_valid(state)) {

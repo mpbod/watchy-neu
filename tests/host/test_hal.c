@@ -143,6 +143,75 @@ static int test_display_retained_state_controls_boot_refresh_and_commits_only_on
     return 0;
 }
 
+static watchy_display_retained_state_t valid_retained_state(uint16_t partial_count) {
+    static uint8_t frame[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_display_retained_state_t retained = {0};
+
+    memset(frame, 0x11, sizeof(frame));
+    watchy_display_commit_refresh(&retained, WATCHY_REFRESH_FULL, frame, sizeof(frame));
+    for (uint16_t write = 0u; write < partial_count; ++write) {
+        watchy_display_commit_refresh(&retained, WATCHY_REFRESH_PARTIAL, frame, sizeof(frame));
+    }
+    return retained;
+}
+
+static int test_display_refresh_policy_promotes_and_counts_each_physical_write(void) {
+    static uint8_t frame[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_display_retained_state_t retained = valid_retained_state(18u);
+
+    memset(frame, 0x22, sizeof(frame));
+    CHECK(watchy_display_prepare_refresh(&retained, WATCHY_REFRESH_PARTIAL, 20u) ==
+          WATCHY_REFRESH_PARTIAL);
+    watchy_display_commit_refresh(&retained, WATCHY_REFRESH_PARTIAL, frame, sizeof(frame));
+    CHECK(retained.partial_count == 19u);
+    CHECK(memcmp(retained.previous_frame, frame, sizeof(frame)) == 0);
+
+    memset(frame, 0x33, sizeof(frame));
+    CHECK(watchy_display_prepare_refresh(&retained, WATCHY_REFRESH_PARTIAL, 20u) ==
+          WATCHY_REFRESH_FULL);
+    watchy_display_commit_refresh(&retained, WATCHY_REFRESH_FULL, frame, sizeof(frame));
+    CHECK(retained.partial_count == 0u);
+    CHECK(memcmp(retained.previous_frame, frame, sizeof(frame)) == 0);
+    return 0;
+}
+
+static watchy_status_t simulate_transition_writes(watchy_display_retained_state_t *retained,
+                                                   size_t write_count,
+                                                   size_t fail_at) {
+    static uint8_t frame[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+
+    for (size_t write = 0u; write < write_count; ++write) {
+        watchy_refresh_mode_t completed;
+
+        memset(frame, (int)(0x40u + write), sizeof(frame));
+        if (write == fail_at) {
+            watchy_display_invalidate_retained(retained);
+            return WATCHY_STATUS_INVALID_STATE;
+        }
+        completed = watchy_display_prepare_refresh(retained, WATCHY_REFRESH_PARTIAL, 20u);
+        watchy_display_commit_refresh(retained, completed, frame, sizeof(frame));
+    }
+    return WATCHY_STATUS_OK;
+}
+
+static int test_display_multi_write_tracks_each_frame_and_invalidates_on_failure(void) {
+    static uint8_t expected_frame[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_display_retained_state_t retained = valid_retained_state(18u);
+
+    memset(expected_frame, 0x42, sizeof(expected_frame));
+    CHECK(simulate_transition_writes(&retained, 3u, SIZE_MAX) == WATCHY_STATUS_OK);
+    CHECK(watchy_display_retained_valid(&retained));
+    CHECK(retained.partial_count == 1u);
+    CHECK(memcmp(retained.previous_frame, expected_frame, sizeof(expected_frame)) == 0);
+
+    retained = valid_retained_state(0u);
+    memset(expected_frame, 0x40, sizeof(expected_frame));
+    CHECK(simulate_transition_writes(&retained, 3u, 1u) == WATCHY_STATUS_INVALID_STATE);
+    CHECK(!watchy_display_retained_valid(&retained));
+    CHECK(memcmp(retained.previous_frame, expected_frame, sizeof(expected_frame)) == 0);
+    return 0;
+}
+
 static int test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets(void) {
     uint8_t registers[7] = {0x56, 0x34, 0x12, 0x29, 0x04, 0x02, 0x24};
     watchy_time_t time;
@@ -309,6 +378,8 @@ int main(void) {
     CHECK(test_wake_cause_mapping_distinguishes_hardware_sources() == 0);
     CHECK(test_ssd1681_busy_is_active_high_and_requires_settling() == 0);
     CHECK(test_display_retained_state_controls_boot_refresh_and_commits_only_on_success() == 0);
+    CHECK(test_display_refresh_policy_promotes_and_counts_each_physical_write() == 0);
+    CHECK(test_display_multi_write_tracks_each_frame_and_invalidates_on_failure() == 0);
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
     CHECK(test_pcf8563_alarm_encodes_documented_next_match_fields() == 0);
     CHECK(test_sleep_admission_and_wake_source_debounce_are_fail_closed() == 0);
@@ -316,6 +387,6 @@ int main(void) {
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 14 HAL tests");
+    puts("PASS 16 HAL tests");
     return 0;
 }

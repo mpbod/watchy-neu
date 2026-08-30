@@ -27,6 +27,7 @@ typedef struct {
 
 bool watchy_display_busy_observe(watchy_display_busy_filter_t *filter, bool busy_high);
 bool watchy_display_retained_valid(const watchy_display_retained_state_t *state);
+void watchy_display_invalidate_retained(watchy_display_retained_state_t *state);
 watchy_refresh_mode_t watchy_display_prepare_refresh(const watchy_display_retained_state_t *state,
                                                      watchy_refresh_mode_t requested,
                                                      uint16_t partial_limit);

@@ -4,11 +4,13 @@
 #include "bus_internal.h"
 #include "watchy/board.h"
 #include "watchy/buses.h"
+#include "watchy/buttons.h"
 
 #include <string.h>
 
 #include "driver/gpio.h"
 #include "esp_attr.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,11 +19,24 @@
 #define WATCHY_DISPLAY_PARTIAL_LIMIT 20u
 
 static uint8_t s_framebuffer[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+static uint8_t s_target_framebuffer[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
 static uint8_t s_cold_previous_framebuffer[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
 static RTC_DATA_ATTR watchy_display_retained_state_t s_retained;
 static bool s_ready;
 static bool s_hibernated;
+static bool s_presenting;
 static uint16_t s_partial_limit = WATCHY_DISPLAY_PARTIAL_LIMIT;
+static watchy_transition_level_t s_transition_level = WATCHY_TRANSITION_LEVEL_FULL;
+static bool s_transition_attended;
+static bool s_transition_safe_mode;
+static uint16_t s_transition_battery_mv;
+
+typedef struct {
+    watchy_refresh_mode_t target_requested;
+    watchy_button_mask_t baseline_buttons;
+    uint8_t write_count;
+    uint8_t writes_started;
+} watchy_display_execution_t;
 
 static watchy_status_t from_esp_error(esp_err_t error) {
     return error == ESP_OK ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
@@ -74,6 +89,62 @@ static watchy_status_t write_ram(uint8_t command, const uint8_t *framebuffer) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     return WATCHY_STATUS_OK;
+}
+
+static watchy_status_t refresh_current(watchy_refresh_mode_t requested) {
+    const bool retained_valid = watchy_display_retained_valid(&s_retained);
+    const watchy_refresh_mode_t mode =
+        watchy_display_prepare_refresh(&s_retained, requested, s_partial_limit);
+    const uint8_t update_control = mode == WATCHY_REFRESH_FULL ? 0xf7 : 0xfc;
+    const uint8_t *previous = retained_valid ? s_retained.previous_frame
+                                             : s_cold_previous_framebuffer;
+
+    if (write_ram(0x26, previous) != WATCHY_STATUS_OK ||
+        write_ram(0x24, s_framebuffer) != WATCHY_STATUS_OK ||
+        send_command_with_data(0x22, &update_control, 1) != WATCHY_STATUS_OK ||
+        watchy_bus_display_command(0x20) != ESP_OK || wait_ready() != WATCHY_STATUS_OK ||
+        write_ram(0x26, s_framebuffer) != WATCHY_STATUS_OK) {
+        watchy_display_invalidate_retained(&s_retained);
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    watchy_display_commit_refresh(&s_retained, mode, s_framebuffer, sizeof(s_framebuffer));
+    return WATCHY_STATUS_OK;
+}
+
+static watchy_status_t transition_write(void *context,
+                                        const uint8_t *frame,
+                                        watchy_refresh_mode_t requested) {
+    watchy_display_execution_t *execution = (watchy_display_execution_t *)context;
+
+    if (execution == NULL || frame == NULL || execution->writes_started >= execution->write_count) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (frame != s_framebuffer) {
+        memcpy(s_framebuffer, frame, sizeof(s_framebuffer));
+    }
+    if (execution->target_requested == WATCHY_REFRESH_FULL &&
+        execution->writes_started + 1u == execution->write_count) {
+        requested = WATCHY_REFRESH_FULL;
+    }
+    ++execution->writes_started;
+    return refresh_current(requested);
+}
+
+static bool transition_cancel(void *context) {
+    const watchy_display_execution_t *execution = (const watchy_display_execution_t *)context;
+    const watchy_button_mask_t current = watchy_buttons_sample();
+
+    return execution != NULL && (current & ~execution->baseline_buttons) != 0u;
+}
+
+static void transition_feed_watchdog(void *context) {
+    (void)context;
+    (void)esp_task_wdt_reset();
+}
+
+static bool valid_transition_level(watchy_transition_level_t level) {
+    return level == WATCHY_TRANSITION_LEVEL_FULL ||
+           level == WATCHY_TRANSITION_LEVEL_REDUCED || level == WATCHY_TRANSITION_LEVEL_OFF;
 }
 
 watchy_status_t watchy_display_init(void) {
@@ -137,6 +208,20 @@ watchy_status_t watchy_display_set_partial_limit(uint16_t partial_limit) {
     return WATCHY_STATUS_OK;
 }
 
+watchy_status_t watchy_display_set_transition_policy(watchy_transition_level_t level,
+                                                     bool attended,
+                                                     bool safe_mode,
+                                                     uint16_t battery_mv) {
+    if (!valid_transition_level(level)) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    s_transition_level = level;
+    s_transition_attended = attended;
+    s_transition_safe_mode = safe_mode;
+    s_transition_battery_mv = battery_mv;
+    return WATCHY_STATUS_OK;
+}
+
 watchy_canvas_t watchy_display_acquire(void) {
     watchy_canvas_t canvas = {
         .width = WATCHY_DISPLAY_WIDTH,
@@ -149,26 +234,65 @@ watchy_canvas_t watchy_display_acquire(void) {
     return canvas;
 }
 
-watchy_status_t watchy_display_refresh(watchy_refresh_mode_t requested) {
-    const bool retained_valid = watchy_display_retained_valid(&s_retained);
-    const watchy_refresh_mode_t mode =
-        watchy_display_prepare_refresh(&s_retained, requested, s_partial_limit);
-    const uint8_t update_control = mode == WATCHY_REFRESH_FULL ? 0xf7 : 0xfc;
-    const uint8_t *previous = retained_valid ? s_retained.previous_frame
-                                             : s_cold_previous_framebuffer;
+watchy_status_t watchy_display_present(watchy_refresh_mode_t requested,
+                                       const watchy_transition_request_v1_t *request) {
+    const bool source_valid = watchy_display_retained_valid(&s_retained);
+    watchy_transition_policy_context_t policy = {
+        .level = s_transition_level,
+        .attended = s_transition_attended,
+        .safe_mode = s_transition_safe_mode,
+        .source_valid = source_valid,
+        .clear_required = source_valid && requested == WATCHY_REFRESH_PARTIAL &&
+                          watchy_display_prepare_refresh(&s_retained, requested,
+                                                         s_partial_limit) == WATCHY_REFRESH_FULL,
+        .battery_mv = s_transition_battery_mv,
+    };
+    watchy_transition_plan_t plan;
+    watchy_transition_result_t result;
+    watchy_display_execution_t execution;
+    const uint8_t *source = source_valid ? s_retained.previous_frame
+                                         : s_cold_previous_framebuffer;
+    watchy_status_t status;
 
     if (!s_ready) {
         return WATCHY_STATUS_INVALID_STATE;
     }
-    if (write_ram(0x26, previous) != WATCHY_STATUS_OK ||
-        write_ram(0x24, s_framebuffer) != WATCHY_STATUS_OK ||
-        send_command_with_data(0x22, &update_control, 1) != WATCHY_STATUS_OK ||
-        watchy_bus_display_command(0x20) != ESP_OK || wait_ready() != WATCHY_STATUS_OK ||
-        write_ram(0x26, s_framebuffer) != WATCHY_STATUS_OK) {
-        return WATCHY_STATUS_INVALID_STATE;
+    if (requested != WATCHY_REFRESH_PARTIAL && requested != WATCHY_REFRESH_FULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    watchy_display_commit_refresh(&s_retained, mode, s_framebuffer, sizeof(s_framebuffer));
-    return WATCHY_STATUS_OK;
+    if (s_presenting) {
+        return WATCHY_STATUS_BUSY;
+    }
+    if (watchy_transition_plan(request, &policy, &plan) != WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+
+    memcpy(s_target_framebuffer, s_framebuffer, sizeof(s_target_framebuffer));
+    execution = (watchy_display_execution_t){
+        .target_requested = requested,
+        .baseline_buttons = watchy_buttons_sample(),
+        .write_count = plan.write_count,
+    };
+    s_presenting = true;
+    status = watchy_transition_execute(&plan, source, s_target_framebuffer, s_framebuffer,
+                                       sizeof(s_framebuffer), transition_write,
+                                       transition_cancel, transition_feed_watchdog,
+                                       &execution, &result);
+    s_presenting = false;
+
+    if (status != WATCHY_STATUS_OK &&
+        result.failure_cause == WATCHY_TRANSITION_FAILURE_WRITE) {
+        watchy_display_invalidate_retained(&s_retained);
+    }
+    return status;
+}
+
+watchy_status_t watchy_display_refresh(watchy_refresh_mode_t requested) {
+    return watchy_display_present(requested, NULL);
+}
+
+void watchy_display_invalidate_previous(void) {
+    watchy_display_invalidate_retained(&s_retained);
 }
 
 watchy_status_t watchy_display_power_off(void) {
