@@ -31,8 +31,12 @@ watchy_status_t watchy_transition_execute(const watchy_transition_plan_t *plan,
         const watchy_status_t status =
             watchy_transition_compose_frame(plan, frame, source, target, scratch, size);
 
-        if (status != WATCHY_STATUS_OK || write(context, scratch, frame_mode(plan, frame)) !=
-                                              WATCHY_STATUS_OK) {
+        if (status != WATCHY_STATUS_OK) {
+            out_result->failure_cause = WATCHY_TRANSITION_FAILURE_COMPOSE;
+            return WATCHY_STATUS_INVALID_STATE;
+        }
+        if (write(context, scratch, frame_mode(plan, frame)) != WATCHY_STATUS_OK) {
+            out_result->failure_cause = WATCHY_TRANSITION_FAILURE_WRITE;
             return WATCHY_STATUS_INVALID_STATE;
         }
         ++out_result->writes_completed;

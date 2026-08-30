@@ -45,12 +45,19 @@ typedef watchy_status_t (*watchy_transition_write_fn)(void *context,
 typedef bool (*watchy_transition_cancel_fn)(void *context);
 typedef void (*watchy_transition_feed_fn)(void *context);
 
+typedef enum {
+    WATCHY_TRANSITION_FAILURE_NONE = 0,
+    WATCHY_TRANSITION_FAILURE_COMPOSE,
+    WATCHY_TRANSITION_FAILURE_WRITE,
+} watchy_transition_failure_t;
+
 typedef struct {
     uint8_t writes_completed;
     bool completed;
     bool cancelled;
     bool source_valid;
     bool last_frame_is_target;
+    watchy_transition_failure_t failure_cause;
 } watchy_transition_result_t;
 
 watchy_status_t watchy_transition_validate(const watchy_transition_request_v1_t *request);

@@ -767,6 +767,7 @@ static int test_transition_executor_writes_bounded_sequence_and_target(void) {
     CHECK(writer.frames_are_target[3]);
     CHECK(result.writes_completed == plan.write_count);
     CHECK(result.completed && !result.cancelled && result.source_valid && result.last_frame_is_target);
+    CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_NONE);
     return 0;
 }
 
@@ -794,6 +795,7 @@ static int test_transition_executor_cancels_optional_sequence_at_write_boundarie
         CHECK(result.writes_completed == cancelled_after + 1u);
         CHECK(!result.completed && result.cancelled && result.source_valid &&
               !result.last_frame_is_target);
+        CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_NONE);
     }
     return 0;
 }
@@ -825,6 +827,7 @@ static int test_transition_executor_completes_mandatory_clear_without_cancellati
     CHECK(writer.frames_are_target[1]);
     CHECK(result.writes_completed == plan.write_count);
     CHECK(result.completed && !result.cancelled && result.source_valid && result.last_frame_is_target);
+    CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_NONE);
     return 0;
 }
 
@@ -848,7 +851,29 @@ static int test_transition_executor_invalidates_source_for_each_failed_write(voi
         CHECK(result.writes_completed == fail_at);
         CHECK(!result.completed && !result.cancelled && !result.source_valid &&
               !result.last_frame_is_target);
+        CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_WRITE);
     }
+    return 0;
+}
+
+static int test_transition_executor_reports_composition_failure_before_write(void) {
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = test_transition_wipe_plan();
+    fake_writer_t writer = {.target = target, .fail_at = SIZE_MAX, .cancel_at = SIZE_MAX};
+    watchy_transition_result_t result;
+
+    memset(target, 0xff, sizeof(target));
+    CHECK(watchy_transition_execute(&plan, NULL, target, scratch, sizeof(scratch), fake_write,
+                                    fake_cancel, fake_feed, &writer, &result) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(writer.write_count == 0u);
+    CHECK(writer.feed_count == 0u);
+    CHECK(writer.cancel_count == 0u);
+    CHECK(result.writes_completed == 0u);
+    CHECK(!result.completed && !result.cancelled && !result.source_valid &&
+          !result.last_frame_is_target);
+    CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_COMPOSE);
     return 0;
 }
 
@@ -903,6 +928,7 @@ int main(void) {
         test_transition_executor_cancels_optional_sequence_at_write_boundaries,
         test_transition_executor_completes_mandatory_clear_without_cancellation,
         test_transition_executor_invalidates_source_for_each_failed_write,
+        test_transition_executor_reports_composition_failure_before_write,
         test_transition_executor_rejects_empty_plan_without_callbacks,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
