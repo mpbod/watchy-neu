@@ -2,6 +2,7 @@
 #define WATCHY_TRANSITION_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "watchy/sdk.h"
@@ -12,6 +13,7 @@ extern "C" {
 
 #define WATCHY_TRANSITION_CANVAS_WIDTH 200
 #define WATCHY_TRANSITION_CANVAS_HEIGHT 200
+#define WATCHY_TRANSITION_FRAME_BYTES 5000u
 
 typedef enum {
     WATCHY_TRANSITION_LEVEL_FULL = 0,
@@ -41,6 +43,12 @@ watchy_status_t watchy_transition_validate(const watchy_transition_request_v1_t 
 watchy_status_t watchy_transition_plan(const watchy_transition_request_v1_t *request,
                                        const watchy_transition_policy_context_t *context,
                                        watchy_transition_plan_t *out_plan);
+watchy_status_t watchy_transition_compose_frame(const watchy_transition_plan_t *plan,
+                                                uint8_t frame_index,
+                                                const uint8_t *source,
+                                                const uint8_t *target,
+                                                uint8_t *out,
+                                                size_t size);
 
 #ifdef __cplusplus
 }

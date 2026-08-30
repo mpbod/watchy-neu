@@ -7,6 +7,8 @@
 #include "watchy/transition.h"
 #include "watchy/wpk.h"
 
+#include "transition_golden.h"
+
 #define CHECK(expr) do { \
     if (!(expr)) { \
         fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
@@ -188,6 +190,51 @@ static watchy_transition_request_v1_t valid_transition_request(void) {
         .effect = WATCHY_TRANSITION_WIPE,
         .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
     };
+}
+
+static bool transition_fixture_black(uint16_t x, uint16_t y, bool target) {
+    if (target) {
+        return (((uint32_t)x * 3u + (uint32_t)y * 5u) % 11u) < 5u;
+    }
+    return ((((uint16_t)(x / 5u)) + ((uint16_t)(y / 7u))) & 1u) != 0u;
+}
+
+static void transition_fixture_set(uint8_t *frame, uint16_t x, uint16_t y, bool black) {
+    const size_t offset = (size_t)y * 25u + (size_t)x / 8u;
+    const uint8_t bit = (uint8_t)(0x80u >> (x & 7u));
+
+    if (black) {
+        frame[offset] &= (uint8_t)~bit;
+    } else {
+        frame[offset] |= bit;
+    }
+}
+
+static void make_transition_fixture(uint8_t *source, uint8_t *target) {
+    memset(source, 0xff, WATCHY_TRANSITION_FRAME_BYTES);
+    memset(target, 0xff, WATCHY_TRANSITION_FRAME_BYTES);
+    for (uint16_t y = 0u; y < WATCHY_TRANSITION_CANVAS_HEIGHT; ++y) {
+        for (uint16_t x = 0u; x < WATCHY_TRANSITION_CANVAS_WIDTH; ++x) {
+            transition_fixture_set(source, x, y, transition_fixture_black(x, y, false));
+            transition_fixture_set(target, x, y, transition_fixture_black(x, y, true));
+        }
+    }
+}
+
+static bool transition_pixel_black(const uint8_t *frame, uint16_t x, uint16_t y) {
+    const size_t offset = (size_t)y * 25u + (size_t)x / 8u;
+    const uint8_t bit = (uint8_t)(0x80u >> (x & 7u));
+    return (frame[offset] & bit) == 0u;
+}
+
+static uint32_t transition_fnv1a(const uint8_t *frame, size_t size) {
+    uint32_t hash = UINT32_C(2166136261);
+
+    for (size_t i = 0u; i < size; ++i) {
+        hash ^= frame[i];
+        hash *= UINT32_C(16777619);
+    }
+    return hash;
 }
 
 static int test_transition_rejects_malformed_requests(void) {
@@ -431,6 +478,220 @@ static int test_transition_clear_overrides_invalid_optional_request(void) {
     return 0;
 }
 
+static int test_transition_compositor_rejects_invalid_calls(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = {
+        .effect = WATCHY_TRANSITION_CUT,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {0, 0, 200, 200},
+        .write_count = 1u,
+    };
+
+    make_transition_fixture(source, target);
+    CHECK(watchy_transition_compose_frame(NULL, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, NULL, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, NULL, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, NULL, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 1u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch,
+                                          WATCHY_TRANSITION_FRAME_BYTES - 1u) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, source, sizeof(source)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, target, sizeof(target)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+
+    plan.effect = (watchy_transition_effect_t)10;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    plan.effect = WATCHY_TRANSITION_CUT;
+    plan.rect = (watchy_transition_rect_t){200, 0, 1, 1};
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    return 0;
+}
+
+static int test_transition_compositor_clips_intersecting_rectangles(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = {
+        .effect = WATCHY_TRANSITION_FLASH,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {-4, -3, 9, 8},
+        .write_count = 2u,
+    };
+
+    make_transition_fixture(source, target);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 0u, 0u) != transition_pixel_black(target, 0u, 0u));
+    CHECK(transition_pixel_black(scratch, 4u, 4u) != transition_pixel_black(target, 4u, 4u));
+    CHECK(transition_pixel_black(scratch, 5u, 4u) == transition_pixel_black(source, 5u, 4u));
+    CHECK(watchy_transition_compose_frame(&plan, 1u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(memcmp(scratch, target, sizeof(target)) == 0);
+
+    plan.effect = WATCHY_TRANSITION_GROW;
+    plan.rect = (watchy_transition_rect_t){0, 0, 3, 1};
+    plan.write_count = 3u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(memcmp(scratch, source, sizeof(source)) == 0);
+    return 0;
+}
+
+static int test_transition_effect_edges_and_checkerboard(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = {
+        .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+        .rect = {80, 80, 40, 36},
+    };
+
+    make_transition_fixture(source, target);
+
+    plan.effect = WATCHY_TRANSITION_FLASH;
+    plan.write_count = 2u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 84u) != transition_pixel_black(target, 84u, 84u));
+    CHECK(transition_pixel_black(scratch, 79u, 84u) == transition_pixel_black(source, 79u, 84u));
+
+    plan.effect = WATCHY_TRANSITION_WIPE;
+    plan.write_count = 4u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 84u) == transition_pixel_black(target, 84u, 84u));
+    CHECK(transition_pixel_black(scratch, 88u, 85u));
+    CHECK(transition_pixel_black(scratch, 89u, 85u));
+    CHECK(transition_pixel_black(scratch, 91u, 84u) == transition_pixel_black(source, 91u, 84u));
+
+    plan.effect = WATCHY_TRANSITION_PUSH;
+    plan.write_count = 3u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 83u, 84u) == transition_pixel_black(target, 110u, 84u));
+    CHECK(transition_pixel_black(scratch, 93u, 84u));
+    CHECK(transition_pixel_black(scratch, 95u, 84u) == transition_pixel_black(source, 82u, 84u));
+
+    plan.effect = WATCHY_TRANSITION_DITHER;
+    plan.write_count = 2u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 84u) == transition_pixel_black(source, 84u, 84u));
+    CHECK(transition_pixel_black(scratch, 87u, 84u) == transition_pixel_black(target, 87u, 84u));
+
+    plan.effect = WATCHY_TRANSITION_GROW;
+    plan.write_count = 3u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 90u, 98u) == transition_pixel_black(source, 90u, 98u));
+    CHECK(transition_pixel_black(scratch, 93u, 98u));
+    CHECK(transition_pixel_black(scratch, 95u, 98u) == transition_pixel_black(target, 95u, 98u));
+
+    plan.effect = WATCHY_TRANSITION_ODOMETER;
+    plan.direction = WATCHY_TRANSITION_DIRECTION_UP;
+    plan.write_count = 3u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 84u) == transition_pixel_black(source, 84u, 96u));
+    CHECK(transition_pixel_black(scratch, 85u, 104u));
+    CHECK(transition_pixel_black(scratch, 89u, 108u) == transition_pixel_black(target, 89u, 84u));
+
+    plan.effect = WATCHY_TRANSITION_SPLIT;
+    plan.direction = WATCHY_TRANSITION_DIRECTION_NONE;
+    plan.write_count = 3u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 90u));
+    CHECK(transition_pixel_black(scratch, 85u, 92u) == transition_pixel_black(source, 85u, 92u));
+    CHECK(transition_pixel_black(scratch, 84u, 104u));
+
+    plan.effect = WATCHY_TRANSITION_FILL;
+    plan.write_count = 5u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 84u));
+    CHECK(transition_pixel_black(scratch, 91u, 84u) == transition_pixel_black(source, 91u, 84u));
+
+    plan.effect = WATCHY_TRANSITION_SHUTTER;
+    plan.write_count = 5u;
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(transition_pixel_black(scratch, 84u, 84u));
+    CHECK(transition_pixel_black(scratch, 91u, 84u) == transition_pixel_black(source, 91u, 84u));
+    CHECK(transition_pixel_black(scratch, 115u, 93u));
+    CHECK(transition_pixel_black(scratch, 109u, 93u) == transition_pixel_black(source, 109u, 93u));
+    return 0;
+}
+
+static int test_transition_effects_match_frozen_frames(void) {
+    static const uint8_t write_counts[] = {1u, 2u, 4u, 3u, 2u, 3u, 3u, 3u, 5u, 5u};
+    static const watchy_transition_direction_t directions[] = {
+        WATCHY_TRANSITION_DIRECTION_NONE, WATCHY_TRANSITION_DIRECTION_NONE,
+        WATCHY_TRANSITION_DIRECTION_RIGHT, WATCHY_TRANSITION_DIRECTION_RIGHT,
+        WATCHY_TRANSITION_DIRECTION_NONE, WATCHY_TRANSITION_DIRECTION_NONE,
+        WATCHY_TRANSITION_DIRECTION_UP, WATCHY_TRANSITION_DIRECTION_NONE,
+        WATCHY_TRANSITION_DIRECTION_NONE, WATCHY_TRANSITION_DIRECTION_NONE,
+    };
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+
+    make_transition_fixture(source, target);
+    for (uint8_t effect = WATCHY_TRANSITION_CUT; effect <= WATCHY_TRANSITION_SHUTTER; ++effect) {
+        watchy_transition_plan_t plan = {
+            .effect = (watchy_transition_effect_t)effect,
+            .direction = directions[effect],
+            .rect = {80, 80, 40, 36},
+            .write_count = write_counts[effect],
+        };
+
+        for (uint8_t frame = 0u; frame < plan.write_count; ++frame) {
+            CHECK(watchy_transition_compose_frame(&plan, frame, source, target, scratch,
+                                                  sizeof(scratch)) == WATCHY_STATUS_OK);
+            CHECK(transition_fnv1a(scratch, sizeof(scratch)) ==
+                  watchy_transition_golden_hashes[effect][frame]);
+        }
+        CHECK(memcmp(scratch, target, sizeof(target)) == 0);
+    }
+    return 0;
+}
+
+static int test_transition_mandatory_clear_inverts_then_targets(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = {
+        .effect = WATCHY_TRANSITION_CUT,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {0, 0, 200, 200},
+        .write_count = 2u,
+        .target_full = true,
+        .mandatory_clear = true,
+    };
+
+    make_transition_fixture(source, target);
+    CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    for (size_t i = 0u; i < sizeof(scratch); ++i) {
+        CHECK(scratch[i] == (uint8_t)~target[i]);
+    }
+    CHECK(watchy_transition_compose_frame(&plan, 1u, source, target, scratch, sizeof(scratch)) ==
+          WATCHY_STATUS_OK);
+    CHECK(memcmp(scratch, target, sizeof(target)) == 0);
+    return 0;
+}
+
 int main(void) {
     int (*tests[])(void) = {
         test_bundle_rejects_bad_magic,
@@ -457,6 +718,11 @@ int main(void) {
         test_transition_policy_matrix_downgrades_optional_motion,
         test_transition_clear_overrides_optional_effect,
         test_transition_clear_overrides_invalid_optional_request,
+        test_transition_compositor_rejects_invalid_calls,
+        test_transition_compositor_clips_intersecting_rectangles,
+        test_transition_effect_edges_and_checkerboard,
+        test_transition_effects_match_frozen_frames,
+        test_transition_mandatory_clear_inverts_then_targets,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {
