@@ -57,6 +57,9 @@ wpk_status_t wpk_parse(const void *bytes, size_t size, wpk_view_t *out_view) {
     if ((size_t)header.header_size > size || (size_t)header.total_size > size) {
         return WPK_ERR_TRUNCATED;
     }
+    if ((size_t)header.total_size != size) {
+        return WPK_ERR_LAYOUT;
+    }
 
     status = validate_section(header.manifest_offset, header.manifest_size, header.header_size, &next_offset);
     if (status != WPK_OK) {

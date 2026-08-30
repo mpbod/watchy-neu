@@ -332,3 +332,106 @@ PASS test_sdk_cpp
 - `tests/host/CMakeLists.txt` now knows about the extra SDK tests even though
   this environment still lacks `cmake`, so that integration path remains an
   external verification gap rather than an untracked omission.
+
+## Round 2 review fix
+
+### Files touched
+
+- `tests/host/test_core.c`
+- `components/watchy_core/src/wpk.c`
+
+### Red: oversized caller blob is rejected only after tightening the size contract
+
+Command:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror \
+  -I/Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/include \
+  -I/Users/maxb/Work/watchy-stuff/watchy-fw/sdk/include \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/tests/host/test_core.c \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/src/wpk.c \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/src/runtime.c \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/src/refresh_policy.c \
+  -o /tmp/watchy_core_tests_round2_red && /tmp/watchy_core_tests_round2_red
+```
+
+Exit code: `1`
+
+Output:
+
+```text
+FAIL /Users/maxb/Work/watchy-stuff/watchy-fw/tests/host/test_core.c:135: wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_LAYOUT
+```
+
+This captures the root cause directly: a valid contiguous package whose
+`header.total_size` ends at the assets section was still being accepted when the
+caller passed a larger blob size.
+
+### Green: host runtime tests after requiring exact caller blob size
+
+Command:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror \
+  -I/Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/include \
+  -I/Users/maxb/Work/watchy-stuff/watchy-fw/sdk/include \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/tests/host/test_core.c \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/src/wpk.c \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/src/runtime.c \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/components/watchy_core/src/refresh_policy.c \
+  -o /tmp/watchy_core_tests_round2_green && /tmp/watchy_core_tests_round2_green
+```
+
+Exit code: `0`
+
+Output:
+
+```text
+PASS 15 tests
+```
+
+### Green: full Task 1 SDK coverage still passes
+
+Command:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror \
+  -I/Users/maxb/Work/watchy-stuff/watchy-fw/sdk/include \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/tests/host/test_sdk_c.c \
+  -o /tmp/watchy_sdk_c_tests_round2 && /tmp/watchy_sdk_c_tests_round2
+```
+
+Exit code: `0`
+
+Output:
+
+```text
+PASS test_sdk_c
+```
+
+Command:
+
+```sh
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I/Users/maxb/Work/watchy-stuff/watchy-fw/sdk/include \
+  /Users/maxb/Work/watchy-stuff/watchy-fw/tests/host/test_sdk_cpp.cpp \
+  -o /tmp/watchy_sdk_cpp_tests_round2 && /tmp/watchy_sdk_cpp_tests_round2
+```
+
+Exit code: `0`
+
+Output:
+
+```text
+PASS test_sdk_cpp
+```
+
+### Appended self-review
+
+- The happy-path host fixture now passes `header->total_size` explicitly, so it
+  no longer hides an oversized-input acceptance bug behind spare stack bytes.
+- `wpk_parse` now has a single, tighter caller contract: undersized blobs are
+  `WPK_ERR_TRUNCATED`, oversized blobs are `WPK_ERR_LAYOUT`, and exact-size
+  blobs continue through section validation.
+- The change stayed isolated to Task 1’s WPK contract and did not disturb the
+  SDK ABI coverage added in round 1.
