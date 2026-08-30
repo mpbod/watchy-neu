@@ -102,12 +102,12 @@ class Storage {
 public:
     explicit Storage(const watchy_storage_api_v1_t *api = nullptr) noexcept : api_(api) {}
 
-    watchy_status_t read(const char *path, void *buffer, size_t buffer_size, size_t *out_size) const noexcept {
+    watchy_status_t read(const char *path, void *buffer, uint32_t buffer_size, uint32_t *out_size) const noexcept {
         return (api_ != nullptr && api_->read != nullptr)
                    ? api_->read(api_->context, path, buffer, buffer_size, out_size)
                    : WATCHY_STATUS_UNSUPPORTED;
     }
-    watchy_status_t write(const char *path, const void *data, size_t data_size) const noexcept {
+    watchy_status_t write(const char *path, const void *data, uint32_t data_size) const noexcept {
         return (api_ != nullptr && api_->write != nullptr) ? api_->write(api_->context, path, data, data_size)
                                                             : WATCHY_STATUS_UNSUPPORTED;
     }

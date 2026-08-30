@@ -13,18 +13,14 @@ static int add_overflows_u32(uint32_t lhs, uint32_t rhs, uint32_t *sum) {
 
 static wpk_status_t validate_section(uint32_t offset,
                                      uint32_t size,
-                                     uint32_t minimum_offset,
-                                     uint32_t total_size,
+                                     uint32_t expected_offset,
                                      uint32_t *next_offset) {
     uint32_t end = 0;
 
-    if (offset < minimum_offset) {
+    if (offset != expected_offset) {
         return WPK_ERR_LAYOUT;
     }
     if (add_overflows_u32(offset, size, &end)) {
-        return WPK_ERR_LAYOUT;
-    }
-    if (end > total_size) {
         return WPK_ERR_LAYOUT;
     }
 
@@ -62,18 +58,20 @@ wpk_status_t wpk_parse(const void *bytes, size_t size, wpk_view_t *out_view) {
         return WPK_ERR_TRUNCATED;
     }
 
-    status = validate_section(header.manifest_offset, header.manifest_size, header.header_size, header.total_size,
-                              &next_offset);
+    status = validate_section(header.manifest_offset, header.manifest_size, header.header_size, &next_offset);
     if (status != WPK_OK) {
         return status;
     }
-    status = validate_section(header.elf_offset, header.elf_size, next_offset, header.total_size, &next_offset);
+    status = validate_section(header.elf_offset, header.elf_size, next_offset, &next_offset);
     if (status != WPK_OK) {
         return status;
     }
-    status = validate_section(header.assets_offset, header.assets_size, next_offset, header.total_size, &next_offset);
+    status = validate_section(header.assets_offset, header.assets_size, next_offset, &next_offset);
     if (status != WPK_OK) {
         return status;
+    }
+    if (header.total_size != next_offset) {
+        return WPK_ERR_LAYOUT;
     }
 
     memset(out_view, 0, sizeof(*out_view));

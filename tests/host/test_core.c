@@ -25,7 +25,7 @@ static wpk_header_t *make_valid_header(uint8_t *bytes, size_t size) {
     header->elf_size = 16;
     header->assets_offset = WPK_HEADER_SIZE + 24;
     header->assets_size = 8;
-    header->total_size = (uint32_t)size;
+    header->total_size = header->assets_offset + header->assets_size;
     return header;
 }
 
@@ -37,7 +37,7 @@ static int test_bundle_rejects_bad_magic(void) {
 }
 
 static int test_bundle_accepts_well_formed_layout(void) {
-    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
     make_valid_header(bytes, sizeof(bytes));
     wpk_view_t view = {0};
     CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_OK);
@@ -48,15 +48,15 @@ static int test_bundle_accepts_well_formed_layout(void) {
 }
 
 static int test_bundle_rejects_truncated_blob(void) {
-    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
-    make_valid_header(bytes, sizeof(bytes));
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
     wpk_view_t view = {0};
-    CHECK(wpk_parse(bytes, sizeof(bytes) - 1, &view) == WPK_ERR_TRUNCATED);
+    CHECK(wpk_parse(bytes, header->total_size - 1u, &view) == WPK_ERR_TRUNCATED);
     return 0;
 }
 
 static int test_bundle_rejects_overlapping_sections(void) {
-    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
     wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
     header->manifest_offset = WPK_HEADER_SIZE;
     header->manifest_size = 16;
@@ -67,7 +67,7 @@ static int test_bundle_rejects_overlapping_sections(void) {
 }
 
 static int test_bundle_rejects_out_of_order_sections(void) {
-    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
     wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
     header->elf_offset = WPK_HEADER_SIZE + 16;
     header->assets_offset = WPK_HEADER_SIZE + 8;
@@ -77,12 +77,54 @@ static int test_bundle_rejects_out_of_order_sections(void) {
 }
 
 static int test_bundle_rejects_section_offset_overflow(void) {
-    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
     wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
     header->assets_offset = UINT32_MAX - 3;
     header->assets_size = 8;
     wpk_view_t view = {0};
     CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_LAYOUT);
+    return 0;
+}
+
+static int test_bundle_rejects_gap_before_manifest(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
+    header->manifest_offset += 4;
+    header->elf_offset = header->manifest_offset + header->manifest_size;
+    header->assets_offset = header->elf_offset + header->elf_size;
+    header->total_size = header->assets_offset + header->assets_size;
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, header->total_size, &view) == WPK_ERR_LAYOUT);
+    return 0;
+}
+
+static int test_bundle_rejects_gap_between_manifest_and_elf(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
+    header->elf_offset += 4;
+    header->assets_offset = header->elf_offset + header->elf_size;
+    header->total_size = header->assets_offset + header->assets_size;
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, header->total_size, &view) == WPK_ERR_LAYOUT);
+    return 0;
+}
+
+static int test_bundle_rejects_gap_between_elf_and_assets(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
+    header->assets_offset += 4;
+    header->total_size = header->assets_offset + header->assets_size;
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, header->total_size, &view) == WPK_ERR_LAYOUT);
+    return 0;
+}
+
+static int test_bundle_rejects_trailing_bytes(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 40] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
+    header->total_size += 4;
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, header->total_size, &view) == WPK_ERR_LAYOUT);
     return 0;
 }
 
@@ -139,6 +181,10 @@ int main(void) {
         test_bundle_rejects_overlapping_sections,
         test_bundle_rejects_out_of_order_sections,
         test_bundle_rejects_section_offset_overflow,
+        test_bundle_rejects_gap_before_manifest,
+        test_bundle_rejects_gap_between_manifest_and_elf,
+        test_bundle_rejects_gap_between_elf_and_assets,
+        test_bundle_rejects_trailing_bytes,
         test_abi_negotiation,
         test_runtime_lifecycle,
         test_refresh_policy_promotes_after_partial_limit,

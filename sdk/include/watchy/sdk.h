@@ -2,7 +2,6 @@
 #define WATCHY_SDK_H
 
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -137,8 +136,12 @@ typedef struct {
 
 typedef struct {
     void *context;
-    watchy_status_t (*read)(void *context, const char *path, void *buffer, size_t buffer_size, size_t *out_size);
-    watchy_status_t (*write)(void *context, const char *path, const void *data, size_t data_size);
+    watchy_status_t (*read)(void *context,
+                            const char *path,
+                            void *buffer,
+                            uint32_t buffer_size,
+                            uint32_t *out_size);
+    watchy_status_t (*write)(void *context, const char *path, const void *data, uint32_t data_size);
 } watchy_storage_api_v1_t;
 
 typedef struct {
@@ -160,7 +163,7 @@ typedef struct {
 
 typedef struct {
     watchy_abi_version_t abi;
-    size_t size;
+    uint32_t size;
     const watchy_canvas_api_v1_t *canvas;
     const watchy_clock_api_v1_t *clock;
     const watchy_input_api_v1_t *input;

@@ -1,5 +1,7 @@
 #include "watchy/runtime.h"
 
+#include <stddef.h>
+
 void watchy_refresh_policy_reset(watchy_refresh_policy_t *policy, uint16_t partial_limit) {
     if (policy == NULL) {
         return;
