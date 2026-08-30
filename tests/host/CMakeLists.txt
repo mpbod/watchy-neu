@@ -50,3 +50,23 @@ target_include_directories(watchy_hal_tests PRIVATE
 target_compile_features(watchy_hal_tests PRIVATE c_std_11)
 target_compile_options(watchy_hal_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_hal_tests COMMAND watchy_hal_tests)
+
+add_executable(watchy_packages_tests
+  test_packages.c
+  ../../components/watchy_packages/src/package_format.c
+  ../../components/watchy_packages/src/elf_validate.c
+  ../../components/watchy_packages/src/package_validate.c
+  ../../components/watchy_packages/src/package_state.c
+  ../../components/watchy_packages/src/package_runtime.c
+  ../../components/watchy_packages/src/package_install.c
+  ../../components/watchy_core/src/wpk.c
+  ../../components/watchy_core/src/runtime.c
+)
+target_include_directories(watchy_packages_tests PRIVATE
+  ../../components/watchy_packages/include
+  ../../components/watchy_core/include
+  ../../sdk/include
+)
+target_compile_features(watchy_packages_tests PRIVATE c_std_11)
+target_compile_options(watchy_packages_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_packages_tests COMMAND watchy_packages_tests)

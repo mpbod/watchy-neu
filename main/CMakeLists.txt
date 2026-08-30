@@ -6,6 +6,7 @@ idf_component_register(
         "."
     REQUIRES
         watchy_hal
+        watchy_packages
 )
 
 target_compile_features(${COMPONENT_LIB} PRIVATE c_std_11)

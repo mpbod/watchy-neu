@@ -101,6 +101,7 @@ void app_main(void) {
     bool time_valid;
     bool battery_valid;
     bool timer_configured = false;
+    bool package_rendered = false;
 
     ESP_LOGI(TAG, "boot wake_cause=%d", wake_cause);
     if (watchy_storage_init() != WATCHY_STATUS_OK) {
@@ -121,14 +122,16 @@ void app_main(void) {
     if (safe_mode) {
         watchy_app_safe_mode_hook();
     } else {
-        watchy_app_loader_hook();
+        package_rendered = watchy_app_loader_hook();
     }
 
     time_valid = watchy_rtc_read_local(&time) == WATCHY_STATUS_OK;
     battery_valid = watchy_battery_read(&battery) == WATCHY_STATUS_OK;
     log_diagnostics();
-    render_status(&time, time_valid, &battery, battery_valid, safe_mode, wake_cause);
-    if (watchy_display_ready()) {
+    if (!package_rendered) {
+        render_status(&time, time_valid, &battery, battery_valid, safe_mode, wake_cause);
+    }
+    if (!package_rendered && watchy_display_ready()) {
         if (watchy_display_refresh(wake_cause == WATCHY_WAKE_COLD ? WATCHY_REFRESH_FULL
                                                                   : WATCHY_REFRESH_PARTIAL) !=
             WATCHY_STATUS_OK) {
