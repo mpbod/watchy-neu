@@ -15,6 +15,16 @@ static bool valid_direction(watchy_transition_direction_t direction) {
            direction <= WATCHY_TRANSITION_DIRECTION_DOWN;
 }
 
+static bool valid_level(watchy_transition_level_t level) {
+    switch (level) {
+    case WATCHY_TRANSITION_LEVEL_FULL:
+    case WATCHY_TRANSITION_LEVEL_REDUCED:
+    case WATCHY_TRANSITION_LEVEL_OFF:
+        return true;
+    }
+    return false;
+}
+
 static bool valid_rect(const watchy_transition_rect_t *rect) {
     int32_t right;
     int32_t bottom;
@@ -93,14 +103,15 @@ watchy_status_t watchy_transition_plan(const watchy_transition_request_v1_t *req
                                        watchy_transition_plan_t *out_plan) {
     watchy_status_t status;
 
-    if (context == NULL || out_plan == NULL || context->level > WATCHY_TRANSITION_LEVEL_OFF) {
+    if (context == NULL || out_plan == NULL || !valid_level(context->level)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (context->clear_required) {
+        set_clear_plan(out_plan);
+        return WATCHY_STATUS_OK;
     }
     if (request == NULL) {
         set_default_cut_plan(out_plan);
-        if (context->clear_required) {
-            set_clear_plan(out_plan);
-        }
         return WATCHY_STATUS_OK;
     }
     status = watchy_transition_validate(request);
@@ -117,11 +128,6 @@ watchy_status_t watchy_transition_plan(const watchy_transition_request_v1_t *req
     out_plan->write_count = write_count_for_effect(out_plan->effect);
     out_plan->target_full = (request->flags & WATCHY_TRANSITION_PREFER_FULL) != 0u;
     out_plan->mandatory_clear = false;
-
-    if (context->clear_required) {
-        set_clear_plan(out_plan);
-        return WATCHY_STATUS_OK;
-    }
 
     if (context->level == WATCHY_TRANSITION_LEVEL_OFF || context->safe_mode ||
         !context->attended || !context->source_valid ||

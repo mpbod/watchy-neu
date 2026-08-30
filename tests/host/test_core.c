@@ -276,17 +276,23 @@ static int test_transition_uses_cut_when_no_request_is_supplied(void) {
     return 0;
 }
 
-static int test_transition_rejects_unknown_policy_level(void) {
+static int test_transition_rejects_out_of_range_policy_levels(void) {
+    static const watchy_transition_level_t levels[] = {
+        (watchy_transition_level_t)-1,
+        (watchy_transition_level_t)3,
+    };
     watchy_transition_request_v1_t request = valid_transition_request();
     watchy_transition_policy_context_t context = {
-        .level = (watchy_transition_level_t)-1,
         .attended = true,
         .battery_mv = 3900u,
         .source_valid = true,
     };
     watchy_transition_plan_t plan;
 
-    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_INVALID_ARGUMENT);
+    for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); ++i) {
+        context.level = levels[i];
+        CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_INVALID_ARGUMENT);
+    }
     return 0;
 }
 
@@ -404,6 +410,27 @@ static int test_transition_clear_overrides_optional_effect(void) {
     return 0;
 }
 
+static int test_transition_clear_overrides_invalid_optional_request(void) {
+    watchy_transition_request_v1_t request = valid_transition_request();
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_FULL,
+        .attended = true,
+        .clear_required = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    request.flags = UINT32_C(4);
+    CHECK(watchy_transition_validate(&request) == WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT);
+    CHECK(plan.direction == WATCHY_TRANSITION_DIRECTION_NONE);
+    CHECK(plan.write_count == 2u);
+    CHECK(plan.target_full && plan.mandatory_clear);
+    return 0;
+}
+
 int main(void) {
     int (*tests[])(void) = {
         test_bundle_rejects_bad_magic,
@@ -424,11 +451,12 @@ int main(void) {
         test_transition_rejects_malformed_requests,
         test_transition_normalizes_omitted_rectangle,
         test_transition_uses_cut_when_no_request_is_supplied,
-        test_transition_rejects_unknown_policy_level,
+        test_transition_rejects_out_of_range_policy_levels,
         test_transition_assigns_bounded_write_counts,
         test_transition_respects_full_target_preference,
         test_transition_policy_matrix_downgrades_optional_motion,
         test_transition_clear_overrides_optional_effect,
+        test_transition_clear_overrides_invalid_optional_request,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {
