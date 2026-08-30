@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.16)
+
+if(DEFINED ENV{IDF_PATH})
+  include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+  project(watchy_fw)
+else()
+  project(watchy_fw_host C CXX)
+  enable_testing()
+  add_subdirectory(tests/host)
+endif()
