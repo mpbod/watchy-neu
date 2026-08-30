@@ -53,6 +53,16 @@ typedef struct {
 } watchy_shell_transition_context_t;
 
 typedef enum {
+    WATCHY_SHELL_PRESENT_TARGET = 0,
+    WATCHY_SHELL_PRESENT_RECOVERY,
+    WATCHY_SHELL_PRESENT_FAILED,
+} watchy_shell_presentation_outcome_t;
+
+typedef struct {
+    bool sleep_deferred;
+} watchy_shell_presentation_state_t;
+
+typedef enum {
     WATCHY_SHELL_ACTION_NONE = 0,
     WATCHY_SHELL_ACTION_START_PORTAL_CLIENT,
     WATCHY_SHELL_ACTION_START_PORTAL_AP,
@@ -103,6 +113,13 @@ void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive);
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input);
 bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t *change,
                                         watchy_transition_request_v1_t *out_request);
+void watchy_shell_presentation_observe(watchy_shell_presentation_state_t *state,
+                                       watchy_shell_t *shell,
+                                       watchy_shell_presentation_outcome_t outcome);
+bool watchy_shell_presentation_allows_sleep(
+    const watchy_shell_presentation_state_t *state);
+bool watchy_shell_presentation_needs_post_action(
+    watchy_shell_presentation_outcome_t outcome);
 void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count);
 void watchy_shell_set_package_catalog(watchy_shell_t *shell,
                                      const watchy_package_catalog_t *catalog,

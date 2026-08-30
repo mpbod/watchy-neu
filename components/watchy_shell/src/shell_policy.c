@@ -278,6 +278,28 @@ bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t 
     return true;
 }
 
+void watchy_shell_presentation_observe(watchy_shell_presentation_state_t *state,
+                                       watchy_shell_t *shell,
+                                       watchy_shell_presentation_outcome_t outcome) {
+    const bool target_presented = outcome == WATCHY_SHELL_PRESENT_TARGET;
+    if (state != NULL) {
+        state->sleep_deferred = !target_presented;
+    }
+    if (!target_presented && shell != NULL) {
+        shell->sleep_requested = false;
+    }
+}
+
+bool watchy_shell_presentation_allows_sleep(
+    const watchy_shell_presentation_state_t *state) {
+    return state != NULL && !state->sleep_deferred;
+}
+
+bool watchy_shell_presentation_needs_post_action(
+    watchy_shell_presentation_outcome_t outcome) {
+    return outcome == WATCHY_SHELL_PRESENT_TARGET;
+}
+
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
     uint8_t count;
     if (shell == NULL) {
