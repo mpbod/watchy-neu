@@ -175,6 +175,18 @@ static bool package_ref_valid(const char *reference) {
     return watchy_package_id_valid(identifier) && watchy_package_version_valid(separator + 1u);
 }
 
+static bool transition_level_valid(watchy_transition_level_t value) {
+    return value == WATCHY_TRANSITION_LEVEL_FULL ||
+           value == WATCHY_TRANSITION_LEVEL_REDUCED ||
+           value == WATCHY_TRANSITION_LEVEL_OFF;
+}
+
+static watchy_transition_level_t next_transition_level(watchy_transition_level_t value) {
+    return value == WATCHY_TRANSITION_LEVEL_FULL ? WATCHY_TRANSITION_LEVEL_REDUCED
+         : value == WATCHY_TRANSITION_LEVEL_REDUCED ? WATCHY_TRANSITION_LEVEL_OFF
+                                                    : WATCHY_TRANSITION_LEVEL_FULL;
+}
+
 void watchy_settings_defaults(watchy_settings_t *out_settings) {
     if (out_settings == NULL) {
         return;
@@ -183,6 +195,7 @@ void watchy_settings_defaults(watchy_settings_t *out_settings) {
     memcpy(out_settings->timezone, "UTC0", sizeof("UTC0"));
     out_settings->time_24h = true;
     out_settings->motion_wake = true;
+    out_settings->transition_level = WATCHY_TRANSITION_LEVEL_FULL;
     out_settings->partial_refresh_limit = WATCHY_SETTINGS_DEFAULT_PARTIAL_LIMIT;
     memcpy(out_settings->ntp_server, "pool.ntp.org", sizeof("pool.ntp.org"));
 }
@@ -191,6 +204,7 @@ bool watchy_settings_valid(const watchy_settings_t *settings) {
     return settings != NULL && timezone_valid(settings->timezone) &&
            package_ref_valid(settings->active_watchface) &&
            wifi_valid(settings->wifi_ssid, settings->wifi_password) &&
+           transition_level_valid(settings->transition_level) &&
            settings->partial_refresh_limit > 0u &&
            settings->partial_refresh_limit <= WATCHY_SETTINGS_PARTIAL_LIMIT_MAX &&
            hostname_valid(settings->ntp_server);
@@ -212,6 +226,9 @@ void watchy_settings_sanitize(const watchy_settings_t *stored,
     }
     out_settings->time_24h = stored->time_24h;
     out_settings->motion_wake = stored->motion_wake;
+    if (transition_level_valid(stored->transition_level)) {
+        out_settings->transition_level = stored->transition_level;
+    }
     if (package_ref_valid(stored->active_watchface)) {
         memcpy(out_settings->active_watchface, stored->active_watchface,
                sizeof(out_settings->active_watchface));
@@ -228,6 +245,14 @@ void watchy_settings_sanitize(const watchy_settings_t *stored,
     if (hostname_valid(stored->ntp_server)) {
         memcpy(out_settings->ntp_server, stored->ntp_server, sizeof(out_settings->ntp_server));
     }
+}
+
+bool watchy_settings_cycle_transition_level(watchy_settings_t *settings) {
+    if (settings == NULL) {
+        return false;
+    }
+    settings->transition_level = next_transition_level(settings->transition_level);
+    return true;
 }
 
 bool watchy_settings_set_wifi(watchy_settings_t *settings,

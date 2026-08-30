@@ -3,6 +3,7 @@
 
 #include "watchy/settings.h"
 #include "watchy/shell.h"
+#include "watchy/transition.h"
 #include "watchy/ui.h"
 #include "watchy/wifi_credentials.h"
 
@@ -31,6 +32,65 @@ static int test_invalid_persisted_settings_fall_back_field_by_field(void) {
     CHECK(settings.active_watchface[0] == '\0');
     CHECK(settings.wifi_ssid[0] == '\0');
     CHECK(strcmp(settings.ntp_server, "pool.ntp.org") == 0);
+    return 0;
+}
+
+static int test_display_motion_level_defaults_sanitizes_and_cycles(void) {
+    watchy_settings_t stored;
+    watchy_settings_t settings;
+
+    watchy_settings_defaults(&settings);
+    CHECK(settings.transition_level == WATCHY_TRANSITION_LEVEL_FULL);
+
+    stored = settings;
+    stored.transition_level = (watchy_transition_level_t)99;
+    watchy_settings_sanitize(&stored, &settings);
+    CHECK(settings.transition_level == WATCHY_TRANSITION_LEVEL_FULL);
+
+    CHECK(watchy_settings_cycle_transition_level(&settings));
+    CHECK(settings.transition_level == WATCHY_TRANSITION_LEVEL_REDUCED);
+    CHECK(watchy_settings_cycle_transition_level(&settings));
+    CHECK(settings.transition_level == WATCHY_TRANSITION_LEVEL_OFF);
+    CHECK(watchy_settings_cycle_transition_level(&settings));
+    CHECK(settings.transition_level == WATCHY_TRANSITION_LEVEL_FULL);
+    return 0;
+}
+
+static int test_shell_transition_mapping_returns_complete_safe_requests(void) {
+    static const struct {
+        watchy_shell_transition_context_t change;
+        watchy_transition_effect_t effect;
+        watchy_transition_direction_t direction;
+    } cases[] = {
+        {{WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER, WATCHY_SHELL_INPUT_MENU,
+          false, false, false}, WATCHY_TRANSITION_WIPE, WATCHY_TRANSITION_DIRECTION_NONE},
+        {{WATCHY_SHELL_LAUNCHER, WATCHY_SHELL_SETTINGS, WATCHY_SHELL_INPUT_MENU,
+          false, false, false}, WATCHY_TRANSITION_PUSH, WATCHY_TRANSITION_DIRECTION_RIGHT},
+        {{WATCHY_SHELL_SETTINGS, WATCHY_SHELL_LAUNCHER, WATCHY_SHELL_INPUT_BACK,
+          false, false, false}, WATCHY_TRANSITION_PUSH, WATCHY_TRANSITION_DIRECTION_LEFT},
+        {{WATCHY_SHELL_SETTINGS, WATCHY_SHELL_SETTINGS, WATCHY_SHELL_INPUT_MENU,
+          true, false, false}, WATCHY_TRANSITION_FLASH, WATCHY_TRANSITION_DIRECTION_NONE},
+        {{WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_INPUT_BACK,
+          false, true, false}, WATCHY_TRANSITION_SPLIT, WATCHY_TRANSITION_DIRECTION_NONE},
+        {{WATCHY_SHELL_SETTINGS, WATCHY_SHELL_SETTINGS, WATCHY_SHELL_INPUT_DOWN,
+          false, false, false}, WATCHY_TRANSITION_CUT, WATCHY_TRANSITION_DIRECTION_NONE},
+        {{WATCHY_SHELL_SAFE_MODE, WATCHY_SHELL_DIAGNOSTICS, WATCHY_SHELL_INPUT_MENU,
+          false, false, true}, WATCHY_TRANSITION_CUT, WATCHY_TRANSITION_DIRECTION_NONE},
+    };
+
+    for (size_t index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        watchy_transition_request_v1_t request = {
+            .reserved = {UINT32_MAX, UINT32_MAX},
+        };
+        CHECK(watchy_shell_transition_for_change(&cases[index].change, &request));
+        CHECK(request.size == sizeof(request));
+        CHECK(request.effect == cases[index].effect);
+        CHECK(request.direction == cases[index].direction);
+        CHECK(request.flags == 0u);
+        CHECK(request.rect.x == 0 && request.rect.y == 0 && request.rect.width == 0 &&
+              request.rect.height == 0);
+        CHECK(request.reserved[0] == 0u && request.reserved[1] == 0u);
+    }
     return 0;
 }
 
@@ -223,6 +283,7 @@ static int test_manual_time_editor_and_portal_modes_require_explicit_selection(v
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
     CHECK(!shell.editing);
@@ -235,7 +296,7 @@ static int test_manual_time_editor_and_portal_modes_require_explicit_selection(v
     CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME);
     CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
 
-    shell.selection = 5u;
+    shell.selection = 6u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_PACKAGE_PORTAL);
     CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_NONE);
@@ -455,6 +516,8 @@ static int test_compact_font_draws_and_clips_real_framebuffer_pixels(void) {
 int main(void) {
     int failures = 0;
     failures += test_invalid_persisted_settings_fall_back_field_by_field();
+    failures += test_display_motion_level_defaults_sanitizes_and_cycles();
+    failures += test_shell_transition_mapping_returns_complete_safe_requests();
     failures += test_wifi_settings_accept_only_open_or_valid_psk_credentials();
     failures += test_erased_settings_can_be_provisioned_and_reused_after_reload();
     failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();

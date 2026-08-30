@@ -89,15 +89,20 @@ static void render_settings(watchy_canvas_t *canvas,
     char label[32];
     title(canvas, "SETTINGS");
     snprintf(label, sizeof(label), "CLOCK %s", settings->time_24h ? "24H" : "12H");
-    row(canvas, 0, label, shell->selection == 0u);
+    compact_row(canvas, 0, label, shell->selection == 0u);
     snprintf(label, sizeof(label), "MOTION %s", settings->motion_wake ? "ON" : "OFF");
-    row(canvas, 1, label, shell->selection == 1u);
-    row(canvas, 2, "SET TIME", shell->selection == 2u);
-    row(canvas, 3, "NTP SYNC", shell->selection == 3u);
-    row(canvas, 4, "WIFI", shell->selection == 4u);
-    row(canvas, 5, "PORTAL", shell->selection == 5u);
+    compact_row(canvas, 1, label, shell->selection == 1u);
+    snprintf(label, sizeof(label), "MOTION %s",
+             settings->transition_level == WATCHY_TRANSITION_LEVEL_FULL ? "FULL"
+             : settings->transition_level == WATCHY_TRANSITION_LEVEL_REDUCED ? "REDUCED"
+                                                                       : "OFF");
+    compact_row(canvas, 2, label, shell->selection == 2u);
+    compact_row(canvas, 3, "SET TIME", shell->selection == 3u);
+    compact_row(canvas, 4, "NTP SYNC", shell->selection == 4u);
+    compact_row(canvas, 5, "WIFI", shell->selection == 5u);
+    compact_row(canvas, 6, "PORTAL", shell->selection == 6u);
     snprintf(label, sizeof(label), "REFRESH %u", settings->partial_refresh_limit);
-    row(canvas, 6, label, shell->selection == 6u);
+    compact_row(canvas, 7, label, shell->selection == 7u);
 }
 
 static void render_packages(watchy_canvas_t *canvas,

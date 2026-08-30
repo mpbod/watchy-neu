@@ -8,6 +8,7 @@
 #include "watchy/power.h"
 #include "watchy/package_runtime.h"
 #include "watchy/diagnostics.h"
+#include "watchy/transition.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,6 +42,15 @@ typedef enum {
     WATCHY_SHELL_INPUT_BACK,
     WATCHY_SHELL_INPUT_IDLE,
 } watchy_shell_input_t;
+
+typedef struct {
+    watchy_shell_screen_t from;
+    watchy_shell_screen_t to;
+    watchy_shell_input_t input;
+    bool saved;
+    bool sleep_requested;
+    bool safe_mode;
+} watchy_shell_transition_context_t;
 
 typedef enum {
     WATCHY_SHELL_ACTION_NONE = 0,
@@ -91,6 +101,8 @@ void watchy_shell_begin(watchy_shell_t *shell,
                         bool package_watchface_failed);
 void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive);
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input);
+bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t *change,
+                                        watchy_transition_request_v1_t *out_request);
 void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count);
 void watchy_shell_set_package_catalog(watchy_shell_t *shell,
                                      const watchy_package_catalog_t *catalog,

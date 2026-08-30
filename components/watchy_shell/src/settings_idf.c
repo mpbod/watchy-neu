@@ -52,6 +52,12 @@ watchy_status_t watchy_settings_load(watchy_settings_t *out_settings) {
     } else if (error == ESP_OK && field_error != ESP_ERR_NVS_NOT_FOUND && field_error != ESP_OK) {
         error = field_error;
     }
+    field_error = nvs_get_u8(handle, "motion_fx", &value);
+    if (field_error == ESP_OK) {
+        stored.transition_level = (watchy_transition_level_t)value;
+    } else if (error == ESP_OK && field_error != ESP_ERR_NVS_NOT_FOUND) {
+        error = field_error;
+    }
     if (error == ESP_OK) error = get_string(handle, "face", stored.active_watchface,
                                              sizeof(stored.active_watchface));
     if (error == ESP_OK) error = get_string(handle, WATCHY_WIFI_CREDENTIAL_SSID_KEY,
@@ -83,6 +89,9 @@ watchy_status_t watchy_settings_save(const watchy_settings_t *settings) {
     if (error == ESP_OK) error = nvs_set_str(handle, "tz", settings->timezone);
     if (error == ESP_OK) error = nvs_set_u8(handle, "hour24", settings->time_24h ? 1u : 0u);
     if (error == ESP_OK) error = nvs_set_u8(handle, "motion", settings->motion_wake ? 1u : 0u);
+    if (error == ESP_OK) {
+        error = nvs_set_u8(handle, "motion_fx", (uint8_t)settings->transition_level);
+    }
     if (error == ESP_OK) error = nvs_set_str(handle, "face", settings->active_watchface);
     if (error == ESP_OK) {
         error = nvs_set_str(handle, WATCHY_WIFI_CREDENTIAL_SSID_KEY, settings->wifi_ssid);

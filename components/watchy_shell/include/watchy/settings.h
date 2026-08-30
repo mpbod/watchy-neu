@@ -6,6 +6,7 @@
 
 #include "watchy/packages.h"
 #include "watchy/sdk.h"
+#include "watchy/transition.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,6 +23,7 @@ typedef struct {
     char timezone[WATCHY_SETTINGS_TIMEZONE_MAX + 1u];
     bool time_24h;
     bool motion_wake;
+    watchy_transition_level_t transition_level;
     char active_watchface[WATCHY_PACKAGE_REF_MAX + 1u];
     char wifi_ssid[WATCHY_SETTINGS_WIFI_SSID_MAX + 1u];
     char wifi_password[WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u];
@@ -36,6 +38,7 @@ void watchy_settings_sanitize(const watchy_settings_t *stored,
 bool watchy_settings_set_wifi(watchy_settings_t *settings,
                               const char *ssid,
                               const char *password);
+bool watchy_settings_cycle_transition_level(watchy_settings_t *settings);
 watchy_status_t watchy_settings_load(watchy_settings_t *out_settings);
 watchy_status_t watchy_settings_save(const watchy_settings_t *settings);
 

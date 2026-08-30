@@ -8,7 +8,7 @@ static uint8_t item_count(const watchy_shell_t *shell) {
     case WATCHY_SHELL_LAUNCHER:
         return WATCHY_SHELL_LAUNCHER_ITEMS;
     case WATCHY_SHELL_SETTINGS:
-        return 7u;
+        return 8u;
     case WATCHY_SHELL_SAFE_MODE:
         return 3u;
     case WATCHY_SHELL_PACKAGE_APPS:
@@ -224,25 +224,58 @@ static void select_settings(watchy_shell_t *shell) {
     switch (shell->selection) {
     case 0u:
     case 1u:
-    case 6u:
+    case 2u:
+    case 7u:
         shell->pending_action = WATCHY_SHELL_ACTION_SAVE_SETTINGS;
         break;
-    case 2u:
+    case 3u:
         enter(shell, WATCHY_SHELL_MANUAL_TIME, WATCHY_SHELL_SETTINGS);
         break;
-    case 3u:
+    case 4u:
         enter(shell, WATCHY_SHELL_NTP_SYNC, WATCHY_SHELL_SETTINGS);
         shell->pending_action = WATCHY_SHELL_ACTION_SYNC_NTP;
         break;
-    case 4u:
+    case 5u:
         enter(shell, WATCHY_SHELL_CONNECTIVITY, WATCHY_SHELL_SETTINGS);
         break;
-    case 5u:
+    case 6u:
         enter(shell, WATCHY_SHELL_PACKAGE_PORTAL, WATCHY_SHELL_SETTINGS);
         break;
     default:
         break;
     }
+}
+
+bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t *change,
+                                        watchy_transition_request_v1_t *out_request) {
+    if (change == NULL || out_request == NULL) {
+        return false;
+    }
+
+    *out_request = (watchy_transition_request_v1_t){
+        .size = sizeof(*out_request),
+        .effect = WATCHY_TRANSITION_CUT,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+    };
+    if (change->safe_mode || change->from == WATCHY_SHELL_SAFE_MODE ||
+        change->to == WATCHY_SHELL_SAFE_MODE) {
+        return true;
+    }
+    if (change->saved) {
+        out_request->effect = WATCHY_TRANSITION_FLASH;
+    } else if (change->sleep_requested && change->input == WATCHY_SHELL_INPUT_BACK) {
+        out_request->effect = WATCHY_TRANSITION_SPLIT;
+    } else if (change->from == WATCHY_SHELL_WATCHFACE &&
+               change->to == WATCHY_SHELL_LAUNCHER) {
+        out_request->effect = WATCHY_TRANSITION_WIPE;
+    } else if (change->from != change->to && change->input == WATCHY_SHELL_INPUT_MENU) {
+        out_request->effect = WATCHY_TRANSITION_PUSH;
+        out_request->direction = WATCHY_TRANSITION_DIRECTION_RIGHT;
+    } else if (change->from != change->to && change->input == WATCHY_SHELL_INPUT_BACK) {
+        out_request->effect = WATCHY_TRANSITION_PUSH;
+        out_request->direction = WATCHY_TRANSITION_DIRECTION_LEFT;
+    }
+    return true;
 }
 
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
