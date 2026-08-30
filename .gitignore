@@ -9,6 +9,7 @@
 /sdkconfig.watchy_v2
 /.cache/
 /.superpowers/
+/.worktrees/
 sdkconfig
 sdkconfig.old
 managed_components/
