@@ -29,6 +29,11 @@ typedef struct {
     bool active;
 } watchy_package_callback_budget_t;
 
+typedef struct {
+    watchy_transition_request_v1_t request;
+    bool occupied;
+} watchy_package_transition_latch_t;
+
 typedef enum {
     WATCHY_PACKAGE_POST_CONTINUE = 0,
     WATCHY_PACKAGE_POST_CLEAN_EXIT = 1,
@@ -57,6 +62,7 @@ typedef struct {
     size_t bound_canvas_bytes;
     bool canvas_acquired;
     watchy_package_callback_budget_t callback_budget;
+    watchy_package_transition_latch_t transition;
     watchy_request_id_t next_request_id;
     watchy_package_async_slot_t network_request;
     watchy_package_async_slot_t bluetooth_request;
@@ -104,6 +110,12 @@ bool watchy_package_callback_budget_reserve_sleep(watchy_package_callback_budget
 bool watchy_package_callback_budget_may_feed(const watchy_package_callback_budget_t *budget,
                                              uint32_t now_ms);
 void watchy_package_callback_budget_end(watchy_package_callback_budget_t *budget);
+watchy_status_t watchy_package_transition_latch(
+    watchy_package_transition_latch_t *latch,
+    const watchy_transition_request_v1_t *request);
+/* A NULL output discards the occupied request for teardown. */
+bool watchy_package_transition_take(watchy_package_transition_latch_t *latch,
+                                    watchy_transition_request_v1_t *out_request);
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,
                                                         bool refresh_requested,
                                                         bool refresh_ok,

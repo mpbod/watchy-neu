@@ -1,5 +1,6 @@
 #include "watchy/package_host.h"
 #include "watchy/package_runtime.h"
+#include "watchy/transition.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -241,6 +242,32 @@ void watchy_package_callback_budget_end(watchy_package_callback_budget_t *budget
     if (budget != NULL) {
         memset(budget, 0, sizeof(*budget));
     }
+}
+
+watchy_status_t watchy_package_transition_latch(
+    watchy_package_transition_latch_t *latch,
+    const watchy_transition_request_v1_t *request) {
+    if (latch == NULL || watchy_transition_validate(request) != WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (latch->occupied) {
+        return WATCHY_STATUS_BUSY;
+    }
+    latch->request = *request;
+    latch->occupied = true;
+    return WATCHY_STATUS_OK;
+}
+
+bool watchy_package_transition_take(watchy_package_transition_latch_t *latch,
+                                    watchy_transition_request_v1_t *out_request) {
+    if (latch == NULL || !latch->occupied) {
+        return false;
+    }
+    if (out_request != NULL) {
+        *out_request = latch->request;
+    }
+    memset(latch, 0, sizeof(*latch));
+    return true;
 }
 
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,

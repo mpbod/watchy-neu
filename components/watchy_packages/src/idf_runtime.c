@@ -1034,6 +1034,7 @@ watchy_package_status_t watchy_packages_runner_event(const watchy_event_t *event
 watchy_package_status_t watchy_packages_runner_render(void) {
     watchy_canvas_t canvas;
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
+    watchy_transition_request_v1_t transition;
     watchy_package_status_t status;
     if (watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
         xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
@@ -1054,16 +1055,27 @@ watchy_package_status_t watchy_packages_runner_render(void) {
     if (status == WATCHY_PACKAGE_OK && s_runner.host.canvas_acquired) {
         status = WATCHY_PACKAGE_ERR_CALLBACK;
     }
-    if (status == WATCHY_PACKAGE_OK && watchy_display_refresh(mode) == WATCHY_STATUS_OK) {
-        s_runner.rendered = true;
-        if (s_runner.pending) {
-            status = watchy_package_promote_pending(&s_index, s_runner.reference);
-            if (status == WATCHY_PACKAGE_OK) {
-                s_runner.pending = false;
-            }
+    if (status == WATCHY_PACKAGE_OK) {
+        const bool transition_requested =
+            watchy_package_transition_take(&s_runner.host.transition, &transition);
+        watchy_status_t display_status = watchy_display_present(
+            mode, transition_requested ? &transition : NULL);
+        /* Presentation policy may reject an otherwise valid optional request.
+         * The rendered target still receives the kernel-owned Cut path. */
+        if (transition_requested && display_status == WATCHY_STATUS_INVALID_ARGUMENT) {
+            display_status = watchy_display_present(mode, NULL);
         }
-    } else if (status == WATCHY_PACKAGE_OK) {
-        status = WATCHY_PACKAGE_ERR_CALLBACK;
+        if (display_status == WATCHY_STATUS_OK) {
+            s_runner.rendered = true;
+            if (s_runner.pending) {
+                status = watchy_package_promote_pending(&s_index, s_runner.reference);
+                if (status == WATCHY_PACKAGE_OK) {
+                    s_runner.pending = false;
+                }
+            }
+        } else {
+            status = WATCHY_PACKAGE_ERR_CALLBACK;
+        }
     }
     if (status == WATCHY_PACKAGE_OK) {
         status = runner_post_callback();

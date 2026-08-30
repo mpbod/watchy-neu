@@ -808,6 +808,75 @@ static int test_callback_budget_stops_repeated_sleeps_and_watchdog_feeds(void) {
     return 0;
 }
 
+static watchy_transition_request_v1_t valid_package_transition_request(void) {
+    return (watchy_transition_request_v1_t){
+        .size = sizeof(watchy_transition_request_v1_t),
+        .effect = WATCHY_TRANSITION_ODOMETER,
+        .direction = WATCHY_TRANSITION_DIRECTION_UP,
+        .rect = {.x = 20, .y = 40, .width = 80, .height = 24},
+        .flags = WATCHY_TRANSITION_HAS_RECT | WATCHY_TRANSITION_PREFER_FULL,
+    };
+}
+
+static int test_transition_latch_copies_one_request_and_consumes_it_once(void) {
+    watchy_package_transition_latch_t latch = {0};
+    watchy_transition_request_v1_t request = valid_package_transition_request();
+    const watchy_transition_request_v1_t expected = request;
+    watchy_transition_request_v1_t taken = {0};
+
+    CHECK(watchy_package_transition_latch(&latch, &request) == WATCHY_STATUS_OK);
+    request.effect = WATCHY_TRANSITION_CUT;
+    CHECK(watchy_package_transition_latch(&latch, &expected) == WATCHY_STATUS_BUSY);
+    CHECK(watchy_package_transition_take(&latch, &taken));
+    CHECK(memcmp(&taken, &expected, sizeof(taken)) == 0);
+    CHECK(!watchy_package_transition_take(&latch, &taken));
+
+    CHECK(watchy_package_transition_latch(&latch, &expected) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_take(&latch, NULL));
+    CHECK(!watchy_package_transition_take(&latch, &taken));
+    return 0;
+}
+
+static int test_transition_latch_rejects_invalid_requests_without_occupying(void) {
+    watchy_package_transition_latch_t latch = {0};
+    const watchy_transition_request_v1_t valid = valid_package_transition_request();
+    watchy_transition_request_v1_t invalid[] = {
+        valid,
+        valid,
+        valid,
+        valid,
+        valid,
+        valid,
+        valid,
+        valid,
+        valid,
+    };
+    watchy_transition_request_v1_t taken;
+
+    invalid[0].size -= 1u;
+    invalid[1].effect = (watchy_transition_effect_t)(WATCHY_TRANSITION_SHUTTER + 1);
+    invalid[2].direction = (watchy_transition_direction_t)(WATCHY_TRANSITION_DIRECTION_DOWN + 1);
+    invalid[3].flags |= UINT32_C(0x80000000);
+    invalid[4].reserved[1] = 1u;
+    invalid[5].rect.width = 0;
+    invalid[6].rect.x = 200;
+    invalid[6].rect.width = 1;
+    invalid[7].rect.y = 200;
+    invalid[7].rect.height = 1;
+    invalid[8].flags &= ~WATCHY_TRANSITION_HAS_RECT;
+
+    CHECK(watchy_package_transition_latch(NULL, &valid) == WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_package_transition_latch(&latch, NULL) == WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(!watchy_package_transition_take(NULL, &taken));
+    for (size_t index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+        CHECK(watchy_package_transition_latch(&latch, &invalid[index]) ==
+              WATCHY_STATUS_INVALID_ARGUMENT);
+        CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+        CHECK(watchy_package_transition_take(&latch, &taken));
+    }
+    return 0;
+}
+
 static bool ensure_watchdog(void *context) {
     return *(const bool *)context;
 }
@@ -1943,6 +2012,8 @@ int main(void) {
     CHECK(test_watchface_cycle_requires_a_successful_render_and_refresh() == 0);
     CHECK(test_upload_finalize_distinguishes_incomplete_content_from_storage_failures() == 0);
     CHECK(test_callback_budget_stops_repeated_sleeps_and_watchdog_feeds() == 0);
+    CHECK(test_transition_latch_copies_one_request_and_consumes_it_once() == 0);
+    CHECK(test_transition_latch_rejects_invalid_requests_without_occupying() == 0);
     CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
@@ -1963,6 +2034,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 40 package tests");
+    puts("PASS 42 package tests");
     return 0;
 }

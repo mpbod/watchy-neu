@@ -54,6 +54,7 @@ add_executable(watchy_hardware_sample_tests
   test_hardware_sample.cpp
   ../../components/watchy_packages/src/package_policy.c
   ../../components/watchy_packages/src/package_format.c
+  ../../components/watchy_core/src/transition_policy.c
 )
 target_include_directories(watchy_hardware_sample_tests PRIVATE
   ../../components/watchy_packages/include
@@ -100,6 +101,7 @@ add_executable(watchy_packages_tests
   ../../components/watchy_packages/src/sha256.c
   ../../components/watchy_core/src/wpk.c
   ../../components/watchy_core/src/runtime.c
+  ../../components/watchy_core/src/transition_policy.c
 )
 target_include_directories(watchy_packages_tests PRIVATE
   ../../components/watchy_packages/include
