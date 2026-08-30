@@ -49,8 +49,13 @@ add_test(NAME watchy_digital_sample_tests COMMAND watchy_digital_sample_tests)
 
 add_executable(watchy_hardware_sample_tests
   test_hardware_sample.cpp
+  ../../components/watchy_packages/src/package_policy.c
+  ../../components/watchy_packages/src/package_format.c
 )
 target_include_directories(watchy_hardware_sample_tests PRIVATE
+  ../../components/watchy_packages/include
+  ../../components/watchy_core/include
+  ../../components/watchy_hal/include
   ../../sdk/include
   ../../samples/common
 )

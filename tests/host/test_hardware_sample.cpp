@@ -1,4 +1,8 @@
 #include <cstdio>
+#include <cstring>
+
+#include "watchy/package_host.h"
+#include "watchy/package_runtime.h"
 
 #include "../../samples/hardware-demo/main/hardware_demo.cpp"
 
@@ -11,17 +15,50 @@
 
 struct Probe {
     bool requests_supported;
+    bool asset_path_seen;
+    bool state_read_path_seen;
+    bool state_write_path_seen;
+    unsigned exit_calls;
     unsigned network_status_calls;
     unsigned bluetooth_status_calls;
 };
 
-static watchy_status_t unavailable_storage_read(void *, const char *, void *, uint32_t,
-                                                uint32_t *) {
-    return WATCHY_STATUS_UNSUPPORTED;
+static watchy_status_t storage_read(void *opaque, const char *path, void *buffer,
+                                    uint32_t capacity, uint32_t *out_size) {
+    auto *probe = static_cast<Probe *>(opaque);
+    char resolved[192];
+    if (!watchy_package_resolve_storage_path("/data/packages/sample.hardware/1.0.0",
+                                             "/data/state/sample.hardware", path, false,
+                                             resolved, sizeof(resolved))) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (std::strcmp(resolved, "/data/packages/sample.hardware/1.0.0/probe.bin") == 0 &&
+        capacity >= 5u) {
+        probe->asset_path_seen = true;
+        std::memcpy(buffer, "probe", 5u);
+        *out_size = 5u;
+        return WATCHY_STATUS_OK;
+    }
+    if (std::strcmp(resolved, "/data/state/sample.hardware/presses.bin") == 0 &&
+        capacity >= sizeof(unsigned)) {
+        const unsigned persisted = 7u;
+        probe->state_read_path_seen = true;
+        std::memcpy(buffer, &persisted, sizeof(persisted));
+        *out_size = sizeof(persisted);
+        return WATCHY_STATUS_OK;
+    }
+    return WATCHY_STATUS_INVALID_ARGUMENT;
 }
 
-static watchy_status_t unavailable_storage_write(void *, const char *, const void *, uint32_t) {
-    return WATCHY_STATUS_UNSUPPORTED;
+static watchy_status_t storage_write(void *opaque, const char *path, const void *, uint32_t size) {
+    auto *probe = static_cast<Probe *>(opaque);
+    char resolved[192];
+    probe->state_write_path_seen = watchy_package_resolve_storage_path(
+        "/data/packages/sample.hardware/1.0.0", "/data/state/sample.hardware",
+        path, true, resolved, sizeof(resolved)) &&
+        std::strcmp(resolved, "/data/state/sample.hardware/presses.bin") == 0 &&
+        size == sizeof(unsigned);
+    return probe->state_write_path_seen ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_ARGUMENT;
 }
 
 static watchy_status_t unavailable_pulse(void *, uint16_t, uint8_t) {
@@ -64,7 +101,10 @@ static watchy_status_t bluetooth_status(void *opaque, watchy_request_id_t reques
     return WATCHY_STATUS_OK;
 }
 
-static watchy_status_t unavailable_exit(void *) { return WATCHY_STATUS_UNSUPPORTED; }
+static watchy_status_t request_exit(void *opaque) {
+    ++static_cast<Probe *>(opaque)->exit_calls;
+    return WATCHY_STATUS_OK;
+}
 static watchy_status_t unavailable_clock(void *, watchy_time_t *) { return WATCHY_STATUS_UNSUPPORTED; }
 static watchy_status_t unavailable_motion(void *, watchy_motion_sample_t *) { return WATCHY_STATUS_UNSUPPORTED; }
 static watchy_status_t unavailable_battery(void *, watchy_battery_state_t *) { return WATCHY_STATUS_UNSUPPORTED; }
@@ -77,14 +117,51 @@ static watchy_event_t pressed(watchy_button_t button) {
     return value;
 }
 
+struct SampleRunner {
+    Probe *probe;
+    void *user_data;
+    watchy_canvas_t *canvas;
+    watchy_refresh_mode_t *mode;
+    bool active;
+};
+
+static watchy_package_status_t runner_event(void *opaque, const watchy_event_t *event_value) {
+    auto *runner = static_cast<SampleRunner *>(opaque);
+    const unsigned prior_exit_calls = runner->probe->exit_calls;
+    if (event(runner->user_data, event_value) != WATCHY_STATUS_OK) {
+        return WATCHY_PACKAGE_ERR_CALLBACK;
+    }
+    if (runner->probe->exit_calls != prior_exit_calls) {
+        runner->active = false;
+    }
+    return WATCHY_PACKAGE_OK;
+}
+
+static bool runner_active(void *opaque) {
+    return static_cast<SampleRunner *>(opaque)->active;
+}
+
+static watchy_package_status_t runner_render(void *opaque) {
+    auto *runner = static_cast<SampleRunner *>(opaque);
+    return render(runner->user_data, runner->canvas, runner->mode) == WATCHY_STATUS_OK
+               ? WATCHY_PACKAGE_OK : WATCHY_PACKAGE_ERR_CALLBACK;
+}
+
+static watchy_package_status_t runner_stop(void *opaque) {
+    auto *runner = static_cast<SampleRunner *>(opaque);
+    stop(runner->user_data);
+    runner->active = false;
+    return WATCHY_PACKAGE_OK;
+}
+
 int main() {
     Probe probe{};
-    watchy_storage_api_v1_t storage = {nullptr, unavailable_storage_read, unavailable_storage_write};
+    watchy_storage_api_v1_t storage = {&probe, storage_read, storage_write};
     watchy_haptics_api_v1_t haptics = {nullptr, unavailable_pulse};
     watchy_network_api_v1_t network = {&probe, false_state, network_request, nullptr, network_status};
     watchy_bluetooth_api_v1_t bluetooth = {&probe, false_state, bluetooth_request, nullptr,
                                            bluetooth_status};
-    watchy_system_api_v1_t system = {nullptr, nullptr, nullptr, nullptr, unavailable_exit, nullptr};
+    watchy_system_api_v1_t system = {&probe, nullptr, nullptr, nullptr, request_exit, nullptr};
     watchy_clock_api_v1_t clock = {nullptr, unavailable_clock, nullptr};
     watchy_motion_api_v1_t motion = {nullptr, unavailable_motion};
     watchy_battery_api_v1_t battery = {nullptr, unavailable_battery};
@@ -106,15 +183,26 @@ int main() {
     host.system = &system;
     CHECK(load(&host, &user_data) == WATCHY_STATUS_OK);
     CHECK(start(user_data) == WATCHY_STATUS_OK);
+    CHECK(probe.asset_path_seen);
+    CHECK(probe.state_read_path_seen);
+    CHECK(state.presses == 7u);
 
-    auto event_value = pressed(WATCHY_BUTTON_CONFIRM);
-    CHECK(event(user_data, &event_value) == WATCHY_STATUS_OK);
-    event_value = pressed(WATCHY_BUTTON_UP);
+    SampleRunner sample_runner = {&probe, user_data, &canvas, &mode, true};
+    const watchy_package_app_runner_t runner = {
+        runner_event, runner_active, runner_render, runner_stop, &sample_runner,
+    };
+
+    CHECK(watchy_package_dispatch_app_button(&runner, WATCHY_BUTTON_CONFIRM) ==
+          WATCHY_PACKAGE_OK);
+    auto event_value = pressed(WATCHY_BUTTON_UP);
     CHECK(event(user_data, &event_value) == WATCHY_STATUS_OK);
     event_value = pressed(WATCHY_BUTTON_DOWN);
     CHECK(event(user_data, &event_value) == WATCHY_STATUS_OK);
-    event_value = pressed(WATCHY_BUTTON_BACK);
-    CHECK(event(user_data, &event_value) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_dispatch_app_button(&runner, WATCHY_BUTTON_BACK) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(!sample_runner.active);
+    CHECK(probe.exit_calls == 1u);
+    CHECK(probe.state_write_path_seen);
 
     probe.requests_supported = true;
     event_value = pressed(WATCHY_BUTTON_UP);

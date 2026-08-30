@@ -24,10 +24,9 @@ static void callback_before(watchy_package_session_t *session) {
     }
 }
 
-static void callback_after(watchy_package_session_t *session) {
-    if (session->watchdog.after_callback != NULL) {
-        session->watchdog.after_callback(session->watchdog.context);
-    }
+static bool callback_after(watchy_package_session_t *session) {
+    return session->watchdog.after_callback == NULL ||
+           session->watchdog.after_callback(session->watchdog.context);
 }
 
 static bool checked_range(const watchy_package_loader_api_t *loader,
@@ -127,6 +126,7 @@ static bool descriptor_copy_valid(watchy_package_session_t *session,
 static watchy_package_status_t close_session_locked(watchy_package_session_t *session,
                                                     bool call_stop) {
     watchy_status_t transition_status = WATCHY_STATUS_OK;
+    bool callbacks_ok = true;
     int close_status;
 
     if (session->handle == NULL) {
@@ -138,14 +138,14 @@ static watchy_package_status_t close_session_locked(watchy_package_session_t *se
     if (call_stop && session->runtime.state == WATCHY_RUNTIME_STARTED) {
         callback_before(session);
         session->descriptor.callbacks.on_stop(session->user_data);
-        callback_after(session);
+        callbacks_ok = callback_after(session) && callbacks_ok;
         transition_status = watchy_runtime_transition(&session->runtime, WATCHY_RUNTIME_STOPPED);
     }
     if (session->on_load_completed) {
         session->on_load_completed = false;
         callback_before(session);
         session->descriptor.callbacks.on_unload(session->user_data);
-        callback_after(session);
+        callbacks_ok = callback_after(session) && callbacks_ok;
     }
     session->user_data = NULL;
     close_status = session->loader.close(session->loader.context, session->handle);
@@ -161,6 +161,9 @@ static watchy_package_status_t close_session_locked(watchy_package_session_t *se
     watchy_runtime_reset(&session->runtime);
     if (s_owner == session) {
         s_owner = NULL;
+    }
+    if (!callbacks_ok) {
+        return WATCHY_PACKAGE_ERR_CALLBACK;
     }
     return transition_status == WATCHY_STATUS_OK ? WATCHY_PACKAGE_OK : WATCHY_PACKAGE_ERR_STATE;
 }
@@ -242,25 +245,31 @@ watchy_package_status_t watchy_package_session_load(watchy_package_session_t *se
     memcpy(&entry, &symbol, sizeof(entry));
     callback_before(session);
     descriptor = entry();
-    callback_after(session);
+    if (!callback_after(session)) {
+        result = WATCHY_PACKAGE_ERR_CALLBACK;
+        goto cleanup;
+    }
     if (!descriptor_copy_valid(session, descriptor, manifest)) {
         result = WATCHY_PACKAGE_ERR_DESCRIPTOR;
         goto cleanup;
     }
     callback_before(session);
     callback_status = session->descriptor.callbacks.on_load(host, &session->user_data);
-    callback_after(session);
-    if (callback_status != WATCHY_STATUS_OK) {
+    const bool on_load_within_budget = callback_after(session);
+    if (callback_status == WATCHY_STATUS_OK) {
+        session->on_load_completed = true;
+    }
+    if (callback_status != WATCHY_STATUS_OK || !on_load_within_budget) {
         if (session->user_data != NULL) {
             callback_before(session);
             session->descriptor.callbacks.on_unload(session->user_data);
-            callback_after(session);
+            (void)callback_after(session);
             session->user_data = NULL;
+            session->on_load_completed = false;
         }
         result = WATCHY_PACKAGE_ERR_CALLBACK;
         goto cleanup;
     }
-    session->on_load_completed = true;
     if (watchy_runtime_transition(&session->runtime, WATCHY_RUNTIME_LOADED) != WATCHY_STATUS_OK) {
         result = WATCHY_PACKAGE_ERR_STATE;
         goto cleanup;
@@ -288,8 +297,8 @@ watchy_package_status_t watchy_package_session_start(watchy_package_session_t *s
     }
     callback_before(session);
     status = session->descriptor.callbacks.on_start(session->user_data);
-    callback_after(session);
-    if (status != WATCHY_STATUS_OK) {
+    const bool within_budget = callback_after(session);
+    if (status != WATCHY_STATUS_OK || !within_budget) {
         (void)close_session_locked(session, false);
         runtime_unlock();
         return WATCHY_PACKAGE_ERR_CALLBACK;
@@ -318,8 +327,8 @@ watchy_package_status_t watchy_package_session_event(watchy_package_session_t *s
     }
     callback_before(session);
     status = session->descriptor.callbacks.on_event(session->user_data, event);
-    callback_after(session);
-    if (status != WATCHY_STATUS_OK) {
+    const bool within_budget = callback_after(session);
+    if (status != WATCHY_STATUS_OK || !within_budget) {
         (void)close_session_locked(session, true);
         runtime_unlock();
         return WATCHY_PACKAGE_ERR_CALLBACK;
@@ -355,12 +364,12 @@ watchy_package_status_t watchy_package_session_render(watchy_package_session_t *
     bound_canvas = *canvas;
     callback_before(session);
     status = session->descriptor.callbacks.on_render(session->user_data, canvas, mode);
-    callback_after(session);
+    const bool within_budget = callback_after(session);
     if (!watchy_package_canvas_binding_valid(&bound_canvas, canvas, canvas_bytes)) {
         *canvas = bound_canvas;
         status = WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    if (status != WATCHY_STATUS_OK ||
+    if (status != WATCHY_STATUS_OK || !within_budget ||
         (*mode != WATCHY_REFRESH_PARTIAL && *mode != WATCHY_REFRESH_FULL)) {
         (void)close_session_locked(session, true);
         runtime_unlock();

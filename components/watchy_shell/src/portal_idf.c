@@ -26,6 +26,7 @@
 typedef struct {
     httpd_handle_t server;
     watchy_portal_session_info_t info;
+    uint64_t started_ms;
     uint64_t last_activity_ms;
     bool running;
 } portal_state_t;
@@ -45,14 +46,17 @@ static const char PAGE_HEAD[] =
     "padding:.7rem 0}.bad{color:#900}code{overflow-wrap:anywhere}</style></head><body>"
     "<h1>Watchy package portal</h1><section id=status>Loading status...</section>"
     "<section><h2>Install WPK</h2><input id=file type=file accept=.wpk><button id=upload>Upload</button>"
-    "<div id=result></div></section><section><h2>Packages</h2><div id=packages>Loading...</div></section>"
-    "<script>const TOKEN=\"";
+    "<div id=result></div></section><section><h2>Wi-Fi provisioning</h2>"
+    "<input id=ssid maxlength=32 placeholder=SSID><input id=wifiPassword maxlength=64 "
+    "type=password placeholder='Password (blank for open)'><button id=saveWifi>Save Wi-Fi</button>"
+    "</section><section><h2>Packages</h2><div id=packages>Loading...</div></section><script>";
 
 static const char PAGE_SCRIPT[] =
-    "\";const statusEl=document.getElementById('status'),packagesEl=document.getElementById('packages'),"
+    "const statusEl=document.getElementById('status'),packagesEl=document.getElementById('packages'),"
     "resultEl=document.getElementById('result'),fileEl=document.getElementById('file'),"
-    "uploadEl=document.getElementById('upload');async function call(path,options={}){options.headers=options.headers||{};"
-    "if(options.method&&options.method!=='GET')options.headers['X-Watchy-Token']=TOKEN;"
+    "uploadEl=document.getElementById('upload'),ssidEl=document.getElementById('ssid'),"
+    "wifiPasswordEl=document.getElementById('wifiPassword'),saveWifiEl=document.getElementById('saveWifi');"
+    "async function call(path,options={}){options.headers=options.headers||{};"
     "const r=await fetch(path,options),j=await r.json();if(!r.ok)throw Error(j.error?.code||'request_failed');"
     "return j}async function refresh(){try{const [s,p]=await Promise.all([call('/api/v1/status'),"
     "call('/api/v1/packages')]);statusEl.innerHTML='<h2>Status</h2><p>Battery '+s.battery.percent+'% ('+"
@@ -71,13 +75,16 @@ static const char PAGE_SCRIPT[] =
     "catch(e){resultEl.textContent=e.message}}uploadEl.onclick=async()=>{const f=fileEl.files[0];if(!f)return;"
     "resultEl.textContent='Uploading...';try{const j=await call('/api/v1/packages',{method:'POST',"
     "headers:{'Content-Type':'application/octet-stream'},body:f});resultEl.textContent='Installed '+j.reference;"
-    "refresh()}catch(e){resultEl.textContent=e.message}};refresh()</script></body></html>";
+    "refresh()}catch(e){resultEl.textContent=e.message}};saveWifiEl.onclick=async()=>{try{await call('/api/v1/wifi',"
+    "{method:'POST',headers:{'X-Watchy-SSID':ssidEl.value,'X-Watchy-WiFi-Password':wifiPasswordEl.value}});"
+    "wifiPasswordEl.value='';resultEl.textContent='Wi-Fi saved'}catch(e){resultEl.textContent=e.message}};"
+    "refresh()</script></body></html>";
 
 static uint64_t now_ms(void) {
     return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
-static void mark_activity(void) {
+static void mark_authenticated_activity(void) {
     const uint64_t value = now_ms();
     portENTER_CRITICAL(&s_portal_mux);
     s_portal.last_activity_ms = value;
@@ -118,6 +125,10 @@ static esp_err_t send_public_error(httpd_req_t *request,
     if (length < 0 || length >= (int)sizeof(body)) {
         return send_json(request, 500u, "{\"error\":{\"code\":\"internal_error\"}}");
     }
+    if (error.http_status == 401u) {
+        httpd_resp_set_hdr(request, "WWW-Authenticate",
+                           "Basic realm=\"Watchy\", charset=\"UTF-8\"");
+    }
     return send_json(request, error.http_status, body);
 }
 
@@ -130,17 +141,16 @@ static bool read_header(httpd_req_t *request,
            httpd_req_get_hdr_value_str(request, name, value, capacity) == ESP_OK;
 }
 
-static bool mutation_authorized(httpd_req_t *request) {
-    char token[WATCHY_PORTAL_TOKEN_HEX_SIZE + 1u];
-    return read_header(request, "X-Watchy-Token", token, sizeof(token)) &&
-           watchy_portal_token_authorized(s_portal.info.token, token);
+static bool request_authorized(httpd_req_t *request) {
+    char authorization[96];
+    return read_header(request, "Authorization", authorization, sizeof(authorization)) &&
+           watchy_portal_basic_authorized(s_portal.info.token, authorization);
 }
 
 static esp_err_t send_page(httpd_req_t *request) {
     httpd_resp_set_type(request, "text/html; charset=utf-8");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     if (httpd_resp_send_chunk(request, PAGE_HEAD, HTTPD_RESP_USE_STRLEN) != ESP_OK ||
-        httpd_resp_send_chunk(request, s_portal.info.token, HTTPD_RESP_USE_STRLEN) != ESP_OK ||
         httpd_resp_send_chunk(request, PAGE_SCRIPT, HTTPD_RESP_USE_STRLEN) != ESP_OK) {
         return ESP_FAIL;
     }
@@ -291,6 +301,11 @@ static esp_err_t receive_upload(httpd_req_t *request) {
             return send_public_error(request, watchy_portal_map_upload_io_error(
                 WATCHY_PORTAL_UPLOAD_IO_CLIENT, WATCHY_PACKAGE_OK));
         }
+        if (watchy_portal_timed_out()) {
+            watchy_packages_upload_abort();
+            return send_public_error(request, watchy_portal_error_from_policy(
+                                          WATCHY_PORTAL_ERR_UNAUTHORIZED));
+        }
         package_status = watchy_packages_upload_write(chunk, (size_t)received);
         if (package_status != WATCHY_PACKAGE_OK) {
             watchy_packages_upload_abort();
@@ -298,7 +313,7 @@ static esp_err_t receive_upload(httpd_req_t *request) {
                 WATCHY_PORTAL_UPLOAD_IO_PACKAGE, package_status));
         }
         remaining -= (size_t)received;
-        mark_activity();
+        mark_authenticated_activity();
     }
     package_status = watchy_packages_upload_finish(package_ref);
     if (package_status != WATCHY_PACKAGE_OK) {
@@ -325,10 +340,63 @@ static esp_err_t mutate_package(httpd_req_t *request,
                : send_public_error(request, watchy_portal_map_package_error(status));
 }
 
+static esp_err_t provision_wifi(httpd_req_t *request) {
+    watchy_settings_t settings;
+    char ssid[WATCHY_SETTINGS_WIFI_SSID_MAX + 1u];
+    char password[WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u] = {0};
+    const size_t password_length =
+        httpd_req_get_hdr_value_len(request, "X-Watchy-WiFi-Password");
+    if (s_portal.info.client_mode) {
+        return send_public_error(request,
+            (watchy_portal_error_response_t){409u, "conflict"});
+    }
+    if (!read_header(request, "X-Watchy-SSID", ssid, sizeof(ssid)) ||
+        password_length >= sizeof(password) ||
+        (password_length != 0u &&
+         httpd_req_get_hdr_value_str(request, "X-Watchy-WiFi-Password", password,
+                                     sizeof(password)) != ESP_OK)) {
+        memset(password, 0, sizeof(password));
+        return send_public_error(request,
+            (watchy_portal_error_response_t){400u, "invalid_request"});
+    }
+    if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
+        memset(password, 0, sizeof(password));
+        return send_public_error(request,
+            (watchy_portal_error_response_t){507u, "storage_error"});
+    }
+    if (!watchy_settings_set_wifi(&settings, ssid, password)) {
+        memset(password, 0, sizeof(password));
+        return send_public_error(request,
+            (watchy_portal_error_response_t){400u, "invalid_request"});
+    }
+    const watchy_status_t status = watchy_settings_save(&settings);
+    memset(settings.wifi_password, 0, sizeof(settings.wifi_password));
+    memset(password, 0, sizeof(password));
+    return status == WATCHY_STATUS_OK
+               ? send_json(request, 200u, "{\"ok\":true}")
+               : send_public_error(request,
+                    (watchy_portal_error_response_t){507u, "storage_error"});
+}
+
 static esp_err_t request_handler(httpd_req_t *request) {
     watchy_portal_method_t method;
     watchy_portal_route_t route;
-    mark_activity();
+    uint64_t started;
+    uint64_t last;
+    uint64_t accepted_last;
+    const uint64_t now = now_ms();
+    const bool authenticated = request_authorized(request);
+    portENTER_CRITICAL(&s_portal_mux);
+    started = s_portal.started_ms;
+    last = s_portal.last_activity_ms;
+    portEXIT_CRITICAL(&s_portal_mux);
+    if (!watchy_portal_session_accept(started, last, now, authenticated, &accepted_last)) {
+        return send_public_error(request, watchy_portal_error_from_policy(
+                                      WATCHY_PORTAL_ERR_UNAUTHORIZED));
+    }
+    portENTER_CRITICAL(&s_portal_mux);
+    s_portal.last_activity_ms = accepted_last;
+    portEXIT_CRITICAL(&s_portal_mux);
     if (request->method == HTTP_GET) method = WATCHY_PORTAL_METHOD_GET;
     else if (request->method == HTTP_POST) method = WATCHY_PORTAL_METHOD_POST;
     else if (request->method == HTTP_DELETE) method = WATCHY_PORTAL_METHOD_DELETE;
@@ -338,17 +406,12 @@ static esp_err_t request_handler(httpd_req_t *request) {
         return send_public_error(request, watchy_portal_error_from_policy(
                                       WATCHY_PORTAL_ERR_INVALID_ROUTE));
     }
-    if ((route.action == WATCHY_PORTAL_ROUTE_UPLOAD ||
-         route.action == WATCHY_PORTAL_ROUTE_ACTIVATE ||
-         route.action == WATCHY_PORTAL_ROUTE_REMOVE) && !mutation_authorized(request)) {
-        return send_public_error(request, watchy_portal_error_from_policy(
-                                      WATCHY_PORTAL_ERR_UNAUTHORIZED));
-    }
     switch (route.action) {
     case WATCHY_PORTAL_ROUTE_PAGE: return send_page(request);
     case WATCHY_PORTAL_ROUTE_STATUS: return send_status(request);
     case WATCHY_PORTAL_ROUTE_PACKAGES: return send_packages(request);
     case WATCHY_PORTAL_ROUTE_UPLOAD: return receive_upload(request);
+    case WATCHY_PORTAL_ROUTE_PROVISION_WIFI: return provision_wifi(request);
     case WATCHY_PORTAL_ROUTE_ACTIVATE:
     case WATCHY_PORTAL_ROUTE_REMOVE: return mutate_package(request, &route);
     default: return send_public_error(request, watchy_portal_error_from_policy(
@@ -498,7 +561,7 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
         return WATCHY_STATUS_INVALID_STATE;
     }
     /* The Wi-Fi radio is now an initialized true-entropy source. Keep the
-     * mutation token at the full 128 bits and generate it only after startup. */
+     * out-of-band session credential at 128 bits and generate it after startup. */
     random_hex(s_portal.info.token, WATCHY_PORTAL_TOKEN_HEX_SIZE / 2u);
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 4u;
@@ -514,9 +577,10 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
         return WATCHY_STATUS_INVALID_STATE;
     }
     portENTER_CRITICAL(&s_portal_mux);
+    s_portal.started_ms = now_ms();
+    s_portal.last_activity_ms = s_portal.started_ms;
     s_portal.running = true;
     portEXIT_CRITICAL(&s_portal_mux);
-    mark_activity();
     *out_info = s_portal.info;
     return WATCHY_STATUS_OK;
 }
@@ -531,12 +595,17 @@ bool watchy_portal_active(void) {
 
 bool watchy_portal_timed_out(void) {
     bool running;
+    uint64_t started_ms;
     uint64_t last_activity_ms;
     portENTER_CRITICAL(&s_portal_mux);
     running = s_portal.running;
+    started_ms = s_portal.started_ms;
     last_activity_ms = s_portal.last_activity_ms;
     portEXIT_CRITICAL(&s_portal_mux);
-    return running && watchy_portal_idle_expired(last_activity_ms, now_ms());
+    const uint64_t now = now_ms();
+    return running &&
+           (watchy_portal_idle_expired(last_activity_ms, now) ||
+            now - started_ms >= WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS);
 }
 
 watchy_status_t watchy_portal_stop(void) {

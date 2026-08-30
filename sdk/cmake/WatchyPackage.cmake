@@ -1,4 +1,4 @@
-# Watchy package project template for ESP-IDF 5.5 and elf_loader 1.3.x.
+# Watchy package project template for ESP-IDF 5.5.0 and elf_loader 1.3.3.
 # Include after project() and include(elf_loader), then call watchy_project_so().
 
 set(WATCHY_PACKAGE_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
@@ -24,7 +24,7 @@ function(watchy_project_so package_name)
     -fno-builtin
   )
 
-  # The 1.3.x project_so macro discovers C bridge files itself. The actual C++
+  # The 1.3.3 project_so macro discovers C bridge files itself. The actual C++
   # package is pulled from main's archive by the bridge's entry-point reference.
   set(watchy_linker "${watchy_sdk_dir}/ld/watchy_package_linker.o")
   set(ELF_LIBS

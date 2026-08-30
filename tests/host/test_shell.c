@@ -4,6 +4,7 @@
 #include "watchy/settings.h"
 #include "watchy/shell.h"
 #include "watchy/ui.h"
+#include "watchy/wifi_credentials.h"
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -45,6 +46,25 @@ static int test_wifi_settings_accept_only_open_or_valid_psk_credentials(void) {
     CHECK(!watchy_settings_valid(&settings));
     settings.wifi_password[0] = '\0';
     CHECK(watchy_settings_valid(&settings));
+    return 0;
+}
+
+static int test_erased_settings_can_be_provisioned_and_reused_after_reload(void) {
+    watchy_settings_t erased;
+    watchy_settings_t persisted;
+    watchy_settings_t reloaded;
+    watchy_settings_defaults(&erased);
+    CHECK(erased.wifi_ssid[0] == '\0' && erased.wifi_password[0] == '\0');
+    CHECK(watchy_settings_set_wifi(&erased, "Lab WiFi", "correct horse battery"));
+    persisted = erased;
+    watchy_settings_sanitize(&persisted, &reloaded);
+    CHECK(strcmp(reloaded.wifi_ssid, "Lab WiFi") == 0);
+    CHECK(strcmp(reloaded.wifi_password, "correct horse battery") == 0);
+    CHECK(strcmp(WATCHY_WIFI_CREDENTIAL_NAMESPACE, "watchy_cfg") == 0);
+    CHECK(strcmp(WATCHY_WIFI_CREDENTIAL_SSID_KEY, "ssid") == 0);
+    CHECK(strcmp(WATCHY_WIFI_CREDENTIAL_PASSWORD_KEY, "wifi_pass") == 0);
+    CHECK(!watchy_settings_set_wifi(&reloaded, "Bad\nSSID", "correct horse battery"));
+    CHECK(strcmp(reloaded.wifi_ssid, "Lab WiFi") == 0);
     return 0;
 }
 
@@ -144,6 +164,25 @@ static int test_safe_mode_cold_boot_bypasses_normal_routes(void) {
     watchy_shell_begin(&shell, WATCHY_WAKE_RTC, true, true, false);
     CHECK(shell.safe_mode);
     CHECK(shell.screen == WATCHY_SHELL_SAFE_MODE);
+    CHECK(shell.sleep_requested);
+    return 0;
+}
+
+static int test_invalid_rtc_routes_to_manual_recovery_and_timer_safe_mode_is_low_duty(void) {
+    watchy_shell_t shell;
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_require_manual_time(&shell, true);
+    CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
+    CHECK(!shell.sleep_requested);
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_TIMER, true, false, false);
+    watchy_shell_require_manual_time(&shell, false);
+    CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
+    CHECK(shell.sleep_requested);
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_TIMER, true, true, false);
+    CHECK(shell.screen == WATCHY_SHELL_SAFE_MODE);
+    CHECK(shell.sleep_requested);
     return 0;
 }
 
@@ -347,14 +386,14 @@ static int test_all_operation_failures_enter_a_bounded_safe_error_screen(void) {
     return 0;
 }
 
-static int test_diagnostics_have_structured_visible_service_states_and_pages(void) {
+static int test_diagnostics_distinguish_passive_status_from_active_acceptance(void) {
     static const watchy_diagnostic_state_t states[] = {
         WATCHY_DIAGNOSTIC_PASS,
         WATCHY_DIAGNOSTIC_FAIL,
         WATCHY_DIAGNOSTIC_UNAVAILABLE,
         WATCHY_DIAGNOSTIC_STOPPED,
     };
-    static const char *const expected[] = {"PASS", "FAIL", "N/A", "OFF"};
+    static const char *const expected[] = {"READY", "FAIL", "N/A", "OFF"};
     watchy_shell_t shell;
     char label[WATCHY_SHELL_DIAGNOSTIC_LABEL_SIZE];
     watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
@@ -363,6 +402,7 @@ static int test_diagnostics_have_structured_visible_service_states_and_pages(voi
     for (size_t index = 0u; index < sizeof(states) / sizeof(states[0]); ++index) {
         const watchy_diagnostic_entry_t entry = {
             .service = "storage", .state = states[index], .status_code = -123,
+            .scope = WATCHY_DIAGNOSTIC_PASSIVE,
             .detail = "must not be displayed",
         };
         CHECK(watchy_shell_format_diagnostic_label(&entry, label, sizeof(label)));
@@ -370,6 +410,14 @@ static int test_diagnostics_have_structured_visible_service_states_and_pages(voi
         CHECK(strstr(label, expected[index]) != NULL);
         CHECK(strstr(label, "must") == NULL);
     }
+    const watchy_diagnostic_entry_t active = {
+        .service = "buttons", .state = WATCHY_DIAGNOSTIC_PASS,
+        .scope = WATCHY_DIAGNOSTIC_ACTIVE_ACCEPTANCE, .status_code = 0,
+        .detail = "bounded interactive exercise",
+    };
+    CHECK(watchy_shell_format_diagnostic_label(&active, label, sizeof(label)));
+    CHECK(strstr(label, "PASS") != NULL);
+    CHECK(strstr(label, "READY") == NULL);
     for (size_t index = 0u; index < WATCHY_SHELL_PACKAGE_PAGE_ITEMS; ++index) {
         watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     }
@@ -408,9 +456,11 @@ int main(void) {
     int failures = 0;
     failures += test_invalid_persisted_settings_fall_back_field_by_field();
     failures += test_wifi_settings_accept_only_open_or_valid_psk_credentials();
+    failures += test_erased_settings_can_be_provisioned_and_reused_after_reload();
     failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();
     failures += test_button_wake_enters_launcher_and_navigation_is_deterministic();
     failures += test_safe_mode_cold_boot_bypasses_normal_routes();
+    failures += test_invalid_rtc_routes_to_manual_recovery_and_timer_safe_mode_is_low_duty();
     failures += test_wake_and_idle_policy_return_to_builtin_watchface_before_sleep();
     failures += test_failed_package_render_keeps_builtin_watchface_with_warning();
     failures += test_manual_time_editor_and_portal_modes_require_explicit_selection();
@@ -419,7 +469,7 @@ int main(void) {
     failures += test_package_labels_are_bounded_and_disambiguated();
     failures += test_safe_mode_uses_readable_metadata_for_individual_removal();
     failures += test_all_operation_failures_enter_a_bounded_safe_error_screen();
-    failures += test_diagnostics_have_structured_visible_service_states_and_pages();
+    failures += test_diagnostics_distinguish_passive_status_from_active_acceptance();
     failures += test_compact_font_draws_and_clips_real_framebuffer_pixels();
     if (failures == 0) {
         puts("shell tests passed");

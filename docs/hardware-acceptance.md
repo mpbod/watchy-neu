@@ -18,15 +18,17 @@ temperature, instruments, test duration, and pass/fail evidence.
 ## Time, motion, battery, haptics
 
 - [ ] PCF8563 read/set preserves valid date, weekday, and local UTC offset.
-- [ ] Minute alarm wakes repeatedly and alarm flags are cleared/rearmed.
+- [ ] PCF8563 minute/hour/day/weekday next-match alarm wakes at the intended
+      match and alarm flags are cleared/rearmed.
 - [ ] BMA423 XYZ/shake data is plausible; configured interrupt wakes the watch.
 - [ ] Battery ADC is compared against a calibrated meter across useful range.
 - [ ] Vibration pulse duration/strength is bounded and GPIO is low after stop.
 
 ## Connectivity and storage
 
-- [ ] AP portal shows unique temporary credentials, serves at 192.168.4.1,
-      uploads/activates/removes, times out, and leaves Wi-Fi off.
+- [ ] AP portal shows unique AP and out-of-band HTTP Basic credentials, serves
+      at 192.168.4.1, provisions saved STA credentials, uploads/activates/removes,
+      enforces idle/absolute expiry, and leaves Wi-Fi off.
 - [ ] Saved STA connects, portal advertises the assigned address, NTP sets RTC,
       failure/timeout leaves Wi-Fi off, and credentials are not logged.
 - [ ] BLE start/status/stop works and radio is disabled after the operation.
@@ -41,8 +43,10 @@ temperature, instruments, test duration, and pass/fail evidence.
 - [ ] A crashing/overrunning package is quarantined without a boot loop.
 - [ ] Pending watchface failure rolls back; built-in watchface remains usable.
 - [ ] Safe mode removes one package; corrupt-index fallback purge recovers UI.
-- [ ] Diagnostics exercises display, buttons, RTC, BMA423, ADC, motor, Wi-Fi,
-      BLE, NVS, LittleFS, and reports actionable failure state.
+- [ ] Passive built-in diagnostic `READY` rows accurately report initialization
+      and bounded reads without being mistaken for active hardware acceptance.
+- [ ] Separately exercise display, buttons, RTC, BMA423, ADC, motor, Wi-Fi, BLE,
+      NVS, and LittleFS on-device and record actionable pass/fail evidence.
 
 ## Power regression
 

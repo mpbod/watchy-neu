@@ -1,6 +1,7 @@
 #include "watchy/package_host.h"
 #include "watchy/package_runtime.h"
 
+#include <stdio.h>
 #include <string.h>
 
 bool watchy_package_transaction_name_valid(const char *name) {
@@ -39,6 +40,35 @@ bool watchy_package_run_watchface_cycle(const watchy_package_watchface_runner_t 
     return rendered && status == WATCHY_PACKAGE_OK;
 }
 
+watchy_package_status_t watchy_package_dispatch_app_button(
+    const watchy_package_app_runner_t *runner,
+    watchy_button_t button) {
+    watchy_package_status_t status;
+    const watchy_event_t event = {
+        .type = WATCHY_EVENT_BUTTON,
+        .data.button = {.button = button, .pressed = true},
+    };
+    if (runner == NULL || runner->event == NULL || runner->active == NULL ||
+        runner->render == NULL || runner->stop == NULL || button < WATCHY_BUTTON_UP ||
+        button > WATCHY_BUTTON_BACK) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    if (!runner->active(runner->context)) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    status = runner->event(runner->context, &event);
+    if (status == WATCHY_PACKAGE_OK && runner->active(runner->context)) {
+        status = runner->render(runner->context);
+    }
+    /* Back is delivered first so a package can request a graceful exit. It is
+     * only a kernel fallback when the package remains active afterwards. */
+    if (button == WATCHY_BUTTON_BACK && status == WATCHY_PACKAGE_OK &&
+        runner->active(runner->context)) {
+        status = runner->stop(runner->context);
+    }
+    return status;
+}
+
 watchy_package_status_t watchy_package_upload_finalize_status(bool active,
                                                               bool output_valid,
                                                               bool content_complete,
@@ -75,7 +105,7 @@ watchy_status_t watchy_package_async_begin(watchy_package_async_slot_t *slot,
                                            uint32_t maximum,
                                            watchy_request_id_t *out_request_id) {
     if (slot == NULL || next_request_id == NULL || out_request_id == NULL ||
-        operation > maximum || (slot->occupied && slot->status.state == WATCHY_ASYNC_PENDING)) {
+        operation > maximum || slot->occupied) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     if (++*next_request_id == 0u) {
@@ -92,41 +122,81 @@ watchy_status_t watchy_package_async_begin(watchy_package_async_slot_t *slot,
 }
 
 watchy_status_t watchy_package_async_cancel_slot(watchy_package_async_slot_t *slot,
-                                                 watchy_request_id_t request_id) {
+                                                 watchy_request_id_t request_id,
+                                                 watchy_package_async_execute_fn_t rollback,
+                                                 void *rollback_context) {
+    watchy_status_t rollback_status = WATCHY_STATUS_OK;
     if (slot == NULL || !slot->occupied || slot->id != request_id ||
         slot->status.state != WATCHY_ASYNC_PENDING) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    slot->status.state = WATCHY_ASYNC_CANCELLED;
-    slot->status.result = WATCHY_STATUS_OK;
-    return WATCHY_STATUS_OK;
+    if (slot->started) {
+        if (rollback == NULL) {
+            return WATCHY_STATUS_INVALID_STATE;
+        }
+        rollback_status = rollback(rollback_context, slot->operation);
+    }
+    slot->status.state = rollback_status == WATCHY_STATUS_OK ? WATCHY_ASYNC_CANCELLED
+                                                             : WATCHY_ASYNC_FAILED;
+    slot->status.result = rollback_status;
+    return rollback_status;
 }
 
-watchy_status_t watchy_package_async_status_slot(const watchy_package_async_slot_t *slot,
+watchy_status_t watchy_package_async_status_slot(watchy_package_async_slot_t *slot,
                                                  watchy_request_id_t request_id,
                                                  watchy_async_status_t *out_status) {
     if (slot == NULL || out_status == NULL || !slot->occupied || slot->id != request_id) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     *out_status = slot->status;
+    if (slot->status.state != WATCHY_ASYNC_PENDING) {
+        slot->occupied = false;
+    }
     return WATCHY_STATUS_OK;
 }
 
 watchy_package_status_t watchy_package_async_pump_slot(
     watchy_package_async_slot_t *slot,
+    uint32_t now_ms,
+    uint32_t timeout_ms,
     watchy_package_async_execute_fn_t execute,
+    watchy_package_async_observe_fn_t observe,
+    watchy_package_async_execute_fn_t rollback,
     void *execute_context) {
     watchy_status_t status;
-    if (slot == NULL || execute == NULL) {
+    watchy_async_status_t observed;
+    if (slot == NULL || execute == NULL || observe == NULL || rollback == NULL ||
+        timeout_ms == 0u) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
     }
     if (!slot->occupied || slot->status.state != WATCHY_ASYNC_PENDING) {
         return WATCHY_PACKAGE_OK;
     }
-    status = execute(execute_context, slot->operation);
-    slot->status.result = status;
-    slot->status.state = status == WATCHY_STATUS_OK ? WATCHY_ASYNC_SUCCEEDED
-                                                    : WATCHY_ASYNC_FAILED;
+    if (!slot->started) {
+        slot->started = true;
+        slot->deadline_ms = now_ms + timeout_ms;
+        status = execute(execute_context, slot->operation);
+        if (status != WATCHY_STATUS_OK) {
+            (void)rollback(execute_context, slot->operation);
+            slot->status = (watchy_async_status_t){.state = WATCHY_ASYNC_FAILED,
+                                                   .result = status};
+            return WATCHY_PACKAGE_OK;
+        }
+    }
+    observed = observe(execute_context, slot->operation);
+    if (observed.state > WATCHY_ASYNC_CANCELLED) {
+        (void)rollback(execute_context, slot->operation);
+        slot->status = (watchy_async_status_t){.state = WATCHY_ASYNC_FAILED,
+                                               .result = WATCHY_STATUS_INVALID_STATE};
+    } else if (observed.state != WATCHY_ASYNC_PENDING) {
+        slot->status = observed;
+    } else if ((int32_t)(now_ms - slot->deadline_ms) >= 0) {
+        status = rollback(execute_context, slot->operation);
+        slot->status = (watchy_async_status_t){
+            .state = WATCHY_ASYNC_FAILED,
+            .result = status == WATCHY_STATUS_OK ? WATCHY_STATUS_INVALID_STATE : status,
+        };
+    }
     return WATCHY_PACKAGE_OK;
 }
 
@@ -232,4 +302,61 @@ bool watchy_package_canvas_binding_valid(const watchy_canvas_t *bound,
            candidate->width == bound->width && candidate->height == bound->height &&
            candidate->stride == bound->stride && candidate->rotation == bound->rotation &&
            candidate->format == bound->format;
+}
+
+bool watchy_package_upload_heap_allows(size_t request_bytes,
+                                       size_t free_internal_bytes,
+                                       size_t largest_internal_block) {
+    return request_bytes <= largest_internal_block &&
+           request_bytes <= SIZE_MAX - WATCHY_PACKAGE_UPLOAD_HEAP_RESERVE_BYTES &&
+           free_internal_bytes >= request_bytes + WATCHY_PACKAGE_UPLOAD_HEAP_RESERVE_BYTES;
+}
+
+bool watchy_package_state_temporary_name_valid(const char *name) {
+    static const char prefix[] = ".watchy-state-";
+    static const char hex[] = "0123456789abcdef";
+    const size_t prefix_size = sizeof(prefix) - 1u;
+    if (name == NULL || strnlen(name, prefix_size + 9u) != prefix_size + 8u ||
+        memcmp(name, prefix, prefix_size) != 0) {
+        return false;
+    }
+    for (size_t index = prefix_size; index < prefix_size + 8u; ++index) {
+        if (strchr(hex, name[index]) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool watchy_package_resolve_storage_path(const char *package_root,
+                                         const char *state_root,
+                                         const char *path,
+                                         bool write,
+                                         char *out,
+                                         size_t out_size) {
+    const char *root;
+    const char *relative;
+    int written;
+    if (package_root == NULL || state_root == NULL || path == NULL || out == NULL ||
+        out_size == 0u || strnlen(package_root, WATCHY_PACKAGE_HOST_PATH_MAX) >=
+                              WATCHY_PACKAGE_HOST_PATH_MAX ||
+        strnlen(state_root, WATCHY_PACKAGE_HOST_PATH_MAX) >= WATCHY_PACKAGE_HOST_PATH_MAX ||
+        strnlen(path, WATCHY_PACKAGE_ASSET_PATH_MAX + 8u) >
+            WATCHY_PACKAGE_ASSET_PATH_MAX + 7u) {
+        return false;
+    }
+    if (!write && strncmp(path, "assets/", 7u) == 0) {
+        root = package_root;
+        relative = path + 7u;
+    } else if (strncmp(path, "state/", 6u) == 0) {
+        root = state_root;
+        relative = path + 6u;
+    } else {
+        return false;
+    }
+    if (!watchy_package_relative_path_valid(relative)) {
+        return false;
+    }
+    written = snprintf(out, out_size, "%s/%s", root, relative);
+    return written >= 0 && (size_t)written < out_size;
 }

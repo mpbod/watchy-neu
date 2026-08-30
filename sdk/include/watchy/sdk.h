@@ -137,6 +137,8 @@ typedef struct {
 typedef struct {
     void *context;
     watchy_status_t (*now)(void *context, watchy_time_t *out_time);
+    /* PCF8563 next-match alarm: minute/hour/day/weekday are matched. The full
+     * value must be valid; year/month/second/UTC-offset are otherwise ignored. */
     watchy_status_t (*set_alarm)(void *context, const watchy_time_t *alarm_time);
 } watchy_clock_api_v1_t;
 

@@ -33,6 +33,9 @@ void watchy_settings_defaults(watchy_settings_t *out_settings);
 bool watchy_settings_valid(const watchy_settings_t *settings);
 void watchy_settings_sanitize(const watchy_settings_t *stored,
                               watchy_settings_t *out_settings);
+bool watchy_settings_set_wifi(watchy_settings_t *settings,
+                              const char *ssid,
+                              const char *password);
 watchy_status_t watchy_settings_load(watchy_settings_t *out_settings);
 watchy_status_t watchy_settings_save(const watchy_settings_t *settings);
 

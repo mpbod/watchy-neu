@@ -18,6 +18,7 @@ watchy_status_t watchy_calendar_from_unix(int64_t unix_seconds,
                                           watchy_time_t *out_time);
 watchy_status_t watchy_pcf8563_decode(const uint8_t registers[7], watchy_time_t *out_utc);
 watchy_status_t watchy_pcf8563_encode(const watchy_time_t *utc, uint8_t registers[7]);
+watchy_status_t watchy_pcf8563_alarm_encode(const watchy_time_t *time, uint8_t registers[4]);
 
 #ifdef __cplusplus
 }

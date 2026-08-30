@@ -229,3 +229,22 @@ void watchy_settings_sanitize(const watchy_settings_t *stored,
         memcpy(out_settings->ntp_server, stored->ntp_server, sizeof(out_settings->ntp_server));
     }
 }
+
+bool watchy_settings_set_wifi(watchy_settings_t *settings,
+                              const char *ssid,
+                              const char *password) {
+    watchy_settings_t candidate;
+    if (settings == NULL || !wifi_valid(ssid, password)) {
+        return false;
+    }
+    candidate = *settings;
+    memset(candidate.wifi_ssid, 0, sizeof(candidate.wifi_ssid));
+    memset(candidate.wifi_password, 0, sizeof(candidate.wifi_password));
+    memcpy(candidate.wifi_ssid, ssid, strlen(ssid));
+    memcpy(candidate.wifi_password, password, strlen(password));
+    if (!watchy_settings_valid(&candidate)) {
+        return false;
+    }
+    *settings = candidate;
+    return true;
+}

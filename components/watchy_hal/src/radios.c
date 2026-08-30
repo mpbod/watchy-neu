@@ -1,4 +1,5 @@
 #include "watchy/radios.h"
+#include "watchy/wifi_credentials.h"
 
 #include <string.h>
 
@@ -13,9 +14,6 @@
 #include "freertos/event_groups.h"
 #include "nvs.h"
 
-#define WATCHY_WIFI_NVS_NAMESPACE "watchy_wifi"
-#define WATCHY_WIFI_NVS_SSID "ssid"
-#define WATCHY_WIFI_NVS_PASSWORD "password"
 #define WATCHY_BLE_ADV_STOPPED_BIT BIT0
 #define WATCHY_BLE_STOP_TIMEOUT_MS 1000
 
@@ -98,12 +96,12 @@ static bool valid_string(const char *value, size_t capacity, size_t minimum) {
 
 static watchy_status_t persist_sta(const watchy_wifi_sta_config_t *config) {
     nvs_handle_t handle = 0;
-    esp_err_t error = nvs_open(WATCHY_WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    esp_err_t error = nvs_open(WATCHY_WIFI_CREDENTIAL_NAMESPACE, NVS_READWRITE, &handle);
     if (error == ESP_OK) {
-        error = nvs_set_str(handle, WATCHY_WIFI_NVS_SSID, config->ssid);
+        error = nvs_set_str(handle, WATCHY_WIFI_CREDENTIAL_SSID_KEY, config->ssid);
     }
     if (error == ESP_OK) {
-        error = nvs_set_str(handle, WATCHY_WIFI_NVS_PASSWORD, config->password);
+        error = nvs_set_str(handle, WATCHY_WIFI_CREDENTIAL_PASSWORD_KEY, config->password);
     }
     if (error == ESP_OK) {
         error = nvs_commit(handle);
@@ -149,12 +147,13 @@ watchy_status_t watchy_wifi_start_stored_sta(void) {
     nvs_handle_t handle = 0;
     size_t ssid_size = sizeof(config.ssid);
     size_t password_size = sizeof(config.password);
-    esp_err_t error = nvs_open(WATCHY_WIFI_NVS_NAMESPACE, NVS_READONLY, &handle);
+    esp_err_t error = nvs_open(WATCHY_WIFI_CREDENTIAL_NAMESPACE, NVS_READONLY, &handle);
     if (error == ESP_OK) {
-        error = nvs_get_str(handle, WATCHY_WIFI_NVS_SSID, config.ssid, &ssid_size);
+        error = nvs_get_str(handle, WATCHY_WIFI_CREDENTIAL_SSID_KEY, config.ssid, &ssid_size);
     }
     if (error == ESP_OK) {
-        error = nvs_get_str(handle, WATCHY_WIFI_NVS_PASSWORD, config.password, &password_size);
+        error = nvs_get_str(handle, WATCHY_WIFI_CREDENTIAL_PASSWORD_KEY,
+                            config.password, &password_size);
     }
     if (handle != 0) {
         nvs_close(handle);

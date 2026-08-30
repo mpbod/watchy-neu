@@ -156,7 +156,7 @@ typedef struct {
 
 typedef struct {
     void (*before_callback)(void *context);
-    void (*after_callback)(void *context);
+    bool (*after_callback)(void *context);
     bool (*ensure_current)(void *context);
     void *context;
 } watchy_package_watchdog_api_t;
@@ -275,6 +275,9 @@ watchy_package_status_t watchy_package_register_installed(
     const char *package_ref);
 watchy_package_status_t watchy_package_unregister(watchy_package_index_manager_t *manager,
                                                   const char *package_ref);
+watchy_package_status_t watchy_package_index_clear(watchy_package_index_manager_t *manager);
+bool watchy_package_index_has_id(const watchy_package_index_manager_t *manager,
+                                 const char *identifier);
 watchy_package_status_t watchy_package_register_installed_typed(
     watchy_package_index_manager_t *manager,
     const char *package_ref,

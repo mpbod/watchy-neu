@@ -23,15 +23,28 @@ watchy_wake_cause_t watchy_power_map_wake(watchy_raw_wake_cause_t raw_cause,
             return WATCHY_WAKE_MOTION;
         }
     }
+    if (raw_cause == WATCHY_RAW_WAKE_TIMER) {
+        return WATCHY_WAKE_TIMER;
+    }
     return WATCHY_WAKE_OTHER;
 }
 
 bool watchy_power_sleep_allowed(const watchy_sleep_requirements_t *requirements) {
-    return requirements != NULL && requirements->timer_configured && requirements->radios_stopped &&
-           requirements->motor_off && requirements->display_hibernated &&
-           requirements->rtc_source_cleared && requirements->motion_source_configured &&
-           requirements->ext0_configured && requirements->ext1_configured &&
-           requirements->sources_inactive;
+    if (requirements == NULL || !requirements->radios_stopped || !requirements->motor_off ||
+        !requirements->display_hibernated || !requirements->ext1_configured ||
+        !requirements->sources_inactive) {
+        return false;
+    }
+    if (requirements->button_only) {
+        return !requirements->timer_configured && !requirements->rtc_source_cleared &&
+               !requirements->motion_source_configured && !requirements->ext0_configured;
+    }
+    return requirements->timer_configured && requirements->rtc_source_cleared &&
+           requirements->motion_source_configured && requirements->ext0_configured;
+}
+
+bool watchy_power_safe_mode_chord_allowed(watchy_wake_cause_t wake_cause) {
+    return wake_cause == WATCHY_WAKE_COLD || wake_cause == WATCHY_WAKE_OTHER;
 }
 
 bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,

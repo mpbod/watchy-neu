@@ -11,12 +11,16 @@ extern "C" {
 #define WATCHY_PACKAGE_STATE_NODE_MAX 32u
 #define WATCHY_PACKAGE_CALLBACK_BUDGET_MS 4000u
 #define WATCHY_PACKAGE_STATE_QUOTA (16u * 1024u)
+#define WATCHY_PACKAGE_RADIO_REQUEST_TIMEOUT_MS 15000u
+#define WATCHY_PACKAGE_UPLOAD_HEAP_RESERVE_BYTES (32u * 1024u)
 
 typedef struct {
     watchy_request_id_t id;
     uint32_t operation;
     watchy_async_status_t status;
+    uint32_t deadline_ms;
     bool occupied;
+    bool started;
 } watchy_package_async_slot_t;
 
 typedef struct {
@@ -40,6 +44,8 @@ typedef enum {
 
 typedef watchy_status_t (*watchy_package_async_execute_fn_t)(void *context,
                                                              uint32_t operation);
+typedef watchy_async_status_t (*watchy_package_async_observe_fn_t)(void *context,
+                                                                   uint32_t operation);
 
 typedef struct {
     uint32_t capabilities;
@@ -76,13 +82,19 @@ watchy_status_t watchy_package_async_begin(watchy_package_async_slot_t *slot,
                                            uint32_t maximum,
                                            watchy_request_id_t *out_request_id);
 watchy_status_t watchy_package_async_cancel_slot(watchy_package_async_slot_t *slot,
-                                                 watchy_request_id_t request_id);
-watchy_status_t watchy_package_async_status_slot(const watchy_package_async_slot_t *slot,
+                                                 watchy_request_id_t request_id,
+                                                 watchy_package_async_execute_fn_t rollback,
+                                                 void *rollback_context);
+watchy_status_t watchy_package_async_status_slot(watchy_package_async_slot_t *slot,
                                                  watchy_request_id_t request_id,
                                                  watchy_async_status_t *out_status);
 watchy_package_status_t watchy_package_async_pump_slot(
     watchy_package_async_slot_t *slot,
+    uint32_t now_ms,
+    uint32_t timeout_ms,
     watchy_package_async_execute_fn_t execute,
+    watchy_package_async_observe_fn_t observe,
+    watchy_package_async_execute_fn_t rollback,
     void *execute_context);
 void watchy_package_callback_budget_begin(watchy_package_callback_budget_t *budget,
                                           uint32_t now_ms);
@@ -106,6 +118,16 @@ bool watchy_package_range_within(uintptr_t allocation_start,
 bool watchy_package_canvas_binding_valid(const watchy_canvas_t *bound,
                                          const watchy_canvas_t *candidate,
                                          size_t bound_capacity);
+bool watchy_package_upload_heap_allows(size_t request_bytes,
+                                       size_t free_internal_bytes,
+                                       size_t largest_internal_block);
+bool watchy_package_state_temporary_name_valid(const char *name);
+bool watchy_package_resolve_storage_path(const char *package_root,
+                                         const char *state_root,
+                                         const char *path,
+                                         bool write,
+                                         char *out,
+                                         size_t out_size);
 
 watchy_package_status_t watchy_package_host_init(watchy_package_host_context_t *context,
                                                  const watchy_package_manifest_t *manifest);

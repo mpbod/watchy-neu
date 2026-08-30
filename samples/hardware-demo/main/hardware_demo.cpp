@@ -46,7 +46,7 @@ watchy_status_t start(void *opaque) noexcept {
     uint32_t received = 0;
     current->asset_read = storage.read("assets/probe.bin", probe, sizeof(probe), &received) == WATCHY_STATUS_OK && received == 5u;
     unsigned persisted = 0;
-    if (storage.read("presses.bin", &persisted, sizeof(persisted), &received) == WATCHY_STATUS_OK &&
+    if (storage.read("state/presses.bin", &persisted, sizeof(persisted), &received) == WATCHY_STATUS_OK &&
         received == sizeof(persisted)) current->presses = persisted;
     return WATCHY_STATUS_OK;
 }
@@ -60,7 +60,7 @@ watchy_status_t event(void *opaque, const watchy_event_t *event_value) noexcept 
         return WATCHY_STATUS_OK;
     ++current->presses;
     current->storage_status = watchy::Storage(current->host->storage).write(
-        "presses.bin", &current->presses, sizeof(current->presses));
+        "state/presses.bin", &current->presses, sizeof(current->presses));
     switch (event_value->data.button.button) {
     case WATCHY_BUTTON_CONFIRM:
         current->haptics_status = watchy::Haptics(current->host->haptics).pulse(80u, 180u);

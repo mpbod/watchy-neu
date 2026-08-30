@@ -3,7 +3,7 @@
 Pure ESP-IDF firmware for the **SQFMI Watchy 2.0** (ESP32-PICO-D4, 200×200
 SSD1681 e-paper). The kernel owns hardware, power, storage, recovery, networking,
 and the built-in UI. One installable Xtensa ELF watchface or app may run at a
-time through Espressif `elf_loader` 1.3.x.
+time through the exactly pinned Espressif `elf_loader` 1.3.3 component.
 
 > **Native-code trust boundary:** WPK packages contain trusted native Xtensa
 > code. Capabilities organize access to kernel APIs; they are not a security
@@ -53,15 +53,24 @@ peripherals, and returns to deep sleep.
 ## Package portal
 
 On the watch, open **Menu → Settings → Portal**, then choose saved client Wi-Fi
-or the temporary Watchy access point. The screen shows the URL and temporary AP
-credentials. AP mode uses `http://192.168.4.1/`; client mode shows its assigned
-address. The session ends on Back or idle timeout and turns Wi-Fi off.
+or the temporary Watchy access point. The screen shows the URL, an out-of-band
+32-character session credential, and temporary AP credentials. AP mode uses
+`http://192.168.4.1/`; client mode shows its assigned address. Authenticate every
+route with HTTP Basic username `watchy` and the displayed session credential as
+the password. The credential is never embedded in the served page. The session
+ends on Back, after 10 minutes without authenticated activity, or at its absolute
+30-minute lifetime, and turns Wi-Fi off.
 
-The portal lists, uploads, activates, and removes packages. Uploads are staged
-and atomically promoted after full validation. Mutations carry a per-session
-128-bit token embedded by the served page. Installation is rejected for unsafe
-battery/storage conditions. A new watchface does not replace the previous one
-until it completes a successful render.
+The portal lists, uploads, activates, and removes packages. AP mode also accepts
+and persists initial station Wi-Fi credentials, so an erased watch can be
+provisioned without reflashing. Uploads are staged and atomically promoted after
+full validation. Installation is rejected for unsafe battery/storage/heap
+conditions. A new watchface does not replace the previous one until it completes
+a successful render.
+
+Built-in diagnostic `READY` rows are passive initialization/read checks, not
+physical acceptance results. Only the still-open on-device checklist below can
+establish display, input, radio, storage, motor, wake, and current behavior.
 
 ## Develop packages
 

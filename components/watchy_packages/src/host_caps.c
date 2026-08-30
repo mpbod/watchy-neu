@@ -109,27 +109,12 @@ static bool resolve_storage_path(const watchy_package_host_context_t *context,
                                  const char *path,
                                  bool write,
                                  char out[WATCHY_PACKAGE_HOST_PATH_MAX]) {
-    const char *relative;
-    const char *root;
-    int written;
-
     if (context == NULL || !bounded_string(path, WATCHY_PACKAGE_ASSET_PATH_MAX + 7u, NULL)) {
         return false;
     }
-    if (strncmp(path, "assets/", 7u) == 0 && !write) {
-        relative = path + 7u;
-        root = context->package_root;
-    } else if (strncmp(path, "state/", 6u) == 0) {
-        relative = path + 6u;
-        root = context->state_root;
-    } else {
-        return false;
-    }
-    if (!watchy_package_relative_path_valid(relative)) {
-        return false;
-    }
-    written = snprintf(out, WATCHY_PACKAGE_HOST_PATH_MAX, "%s/%s", root, relative);
-    return written >= 0 && written < (int)WATCHY_PACKAGE_HOST_PATH_MAX;
+    return watchy_package_resolve_storage_path(context->package_root, context->state_root,
+                                                path, write, out,
+                                                WATCHY_PACKAGE_HOST_PATH_MAX);
 }
 
 static bool tree_size(watchy_package_host_context_t *context,
@@ -264,7 +249,7 @@ static watchy_status_t host_clock_alarm(void *opaque, const watchy_time_t *alarm
         !watchy_calendar_valid(alarm_time)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    return watchy_rtc_set_minute_alarm(alarm_time->minute);
+    return watchy_rtc_set_alarm_next_match(alarm_time);
 }
 
 static bool host_input_pressed(void *opaque, watchy_button_t button) {
@@ -494,11 +479,24 @@ static watchy_status_t async_request(watchy_package_host_context_t *context,
 static watchy_status_t async_cancel(watchy_package_host_context_t *context,
                                    watchy_package_async_slot_t *slot,
                                    watchy_request_id_t request_id,
-                                   uint32_t capability) {
+                                   uint32_t capability,
+                                   watchy_package_async_execute_fn_t rollback) {
     if (!permitted(context, capability)) {
         return WATCHY_STATUS_UNSUPPORTED;
     }
-    return watchy_package_async_cancel_slot(slot, request_id);
+    return watchy_package_async_cancel_slot(slot, request_id, rollback, context);
+}
+
+static watchy_status_t host_rollback_network(void *context, uint32_t operation) {
+    (void)context;
+    (void)operation;
+    return watchy_wifi_stop();
+}
+
+static watchy_status_t host_rollback_bluetooth(void *context, uint32_t operation) {
+    (void)context;
+    (void)operation;
+    return watchy_ble_stop();
 }
 
 static watchy_status_t async_status(watchy_package_host_context_t *context,
@@ -531,7 +529,8 @@ static watchy_status_t host_network_cancel(void *opaque, watchy_request_id_t req
     if (context == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    return async_cancel(context, &context->network_request, request_id, WATCHY_CAP_NETWORK);
+    return async_cancel(context, &context->network_request, request_id, WATCHY_CAP_NETWORK,
+                        host_rollback_network);
 }
 
 static watchy_status_t host_network_status(void *opaque,
@@ -566,7 +565,8 @@ static watchy_status_t host_bluetooth_cancel(void *opaque, watchy_request_id_t r
     if (context == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    return async_cancel(context, &context->bluetooth_request, request_id, WATCHY_CAP_BLUETOOTH);
+    return async_cancel(context, &context->bluetooth_request, request_id,
+                        WATCHY_CAP_BLUETOOTH, host_rollback_bluetooth);
 }
 
 static watchy_status_t host_bluetooth_status(void *opaque,
@@ -640,6 +640,36 @@ static void host_system_log(void *opaque, const char *message) {
     ESP_LOGI(TAG, "package: %s", message);
 }
 
+static bool scrub_state_temporaries(const char *state_root) {
+    DIR *directory = opendir(state_root);
+    bool result = true;
+    if (directory == NULL) {
+        return false;
+    }
+    for (;;) {
+        struct dirent *entry;
+        char path[WATCHY_PACKAGE_HOST_PATH_MAX];
+        struct stat info;
+        int written;
+        errno = 0;
+        entry = readdir(directory);
+        if (entry == NULL) {
+            result = errno == 0;
+            break;
+        }
+        if (!watchy_package_state_temporary_name_valid(entry->d_name)) {
+            continue;
+        }
+        written = snprintf(path, sizeof(path), "%s/%s", state_root, entry->d_name);
+        if (written < 0 || written >= (int)sizeof(path) || stat(path, &info) != 0 ||
+            !S_ISREG(info.st_mode) || S_ISLNK(info.st_mode) || unlink(path) != 0) {
+            (void)closedir(directory);
+            return false;
+        }
+    }
+    return closedir(directory) == 0 && result;
+}
+
 watchy_package_status_t watchy_package_host_init(watchy_package_host_context_t *context,
                                                  const watchy_package_manifest_t *manifest) {
     int written;
@@ -656,7 +686,8 @@ watchy_package_status_t watchy_package_host_init(watchy_package_host_context_t *
     written = snprintf(context->state_root, sizeof(context->state_root),
                        "/data/state/%s", manifest->id);
     if (written < 0 || written >= (int)sizeof(context->state_root) ||
-        (permitted(context, WATCHY_CAP_STORAGE) && !mkdirs(context->state_root))) {
+        (permitted(context, WATCHY_CAP_STORAGE) &&
+         (!mkdirs(context->state_root) || !scrub_state_temporaries(context->state_root)))) {
         return WATCHY_PACKAGE_ERR_FILESYSTEM;
     }
     if (permitted(context, WATCHY_CAP_STORAGE)) {
@@ -720,6 +751,7 @@ void watchy_package_host_deinit(watchy_package_host_context_t *context) {
     if (context->state_mutex != NULL) {
         vSemaphoreDelete((SemaphoreHandle_t)context->state_mutex);
     }
+    (void)watchy_radios_stop_all();
     memset(context, 0, sizeof(*context));
 }
 
@@ -735,16 +767,56 @@ static watchy_status_t host_execute_bluetooth(void *context, uint32_t operation)
                                                 : watchy_ble_stop();
 }
 
+static watchy_async_status_t host_observe_network(void *context, uint32_t operation) {
+    const watchy_wifi_state_t state = watchy_wifi_state();
+    (void)context;
+    if (operation == WATCHY_NETWORK_CONNECT) {
+        if (state == WATCHY_WIFI_STA_CONNECTED) {
+            return (watchy_async_status_t){WATCHY_ASYNC_SUCCEEDED, WATCHY_STATUS_OK};
+        }
+        if (state == WATCHY_WIFI_STOPPED || state == WATCHY_WIFI_AP_RUNNING ||
+            state == WATCHY_WIFI_STOPPING) {
+            return (watchy_async_status_t){WATCHY_ASYNC_FAILED,
+                                           WATCHY_STATUS_INVALID_STATE};
+        }
+    } else if (state == WATCHY_WIFI_STOPPED) {
+        return (watchy_async_status_t){WATCHY_ASYNC_SUCCEEDED, WATCHY_STATUS_OK};
+    }
+    return (watchy_async_status_t){WATCHY_ASYNC_PENDING, WATCHY_STATUS_INVALID_STATE};
+}
+
+static watchy_async_status_t host_observe_bluetooth(void *context, uint32_t operation) {
+    const watchy_ble_state_t state = watchy_ble_state();
+    (void)context;
+    if (operation == WATCHY_BLUETOOTH_START) {
+        if (state == WATCHY_BLE_HOST_RUNNING ||
+            state == WATCHY_BLE_DIAGNOSTICS_ADVERTISING) {
+            return (watchy_async_status_t){WATCHY_ASYNC_SUCCEEDED, WATCHY_STATUS_OK};
+        }
+        if (state == WATCHY_BLE_STOPPED || state == WATCHY_BLE_STOPPING) {
+            return (watchy_async_status_t){WATCHY_ASYNC_FAILED,
+                                           WATCHY_STATUS_INVALID_STATE};
+        }
+    } else if (state == WATCHY_BLE_STOPPED) {
+        return (watchy_async_status_t){WATCHY_ASYNC_SUCCEEDED, WATCHY_STATUS_OK};
+    }
+    return (watchy_async_status_t){WATCHY_ASYNC_PENDING, WATCHY_STATUS_INVALID_STATE};
+}
+
 watchy_package_status_t watchy_package_host_pump(watchy_package_host_context_t *context) {
     watchy_package_status_t status;
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
     if (context == NULL) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
     }
-    status = watchy_package_async_pump_slot(&context->network_request,
-                                            host_execute_network, NULL);
+    status = watchy_package_async_pump_slot(
+        &context->network_request, now, WATCHY_PACKAGE_RADIO_REQUEST_TIMEOUT_MS,
+        host_execute_network, host_observe_network, host_rollback_network, context);
     return status == WATCHY_PACKAGE_OK
-               ? watchy_package_async_pump_slot(&context->bluetooth_request,
-                                                 host_execute_bluetooth, NULL)
+               ? watchy_package_async_pump_slot(
+                    &context->bluetooth_request, now,
+                    WATCHY_PACKAGE_RADIO_REQUEST_TIMEOUT_MS, host_execute_bluetooth,
+                    host_observe_bluetooth, host_rollback_bluetooth, context)
                : status;
 }
 

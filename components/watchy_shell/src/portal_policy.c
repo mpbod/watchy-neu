@@ -1,5 +1,6 @@
 #include "watchy/portal.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static bool copy_component(const char *start, size_t length, char *out, size_t capacity) {
@@ -48,6 +49,45 @@ bool watchy_portal_token_authorized(const char *session_token,
     return difference == 0u;
 }
 
+bool watchy_portal_basic_authorized(const char *session_token,
+                                    const char *authorization_header) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    uint8_t credentials[7u + WATCHY_PORTAL_TOKEN_HEX_SIZE];
+    char expected[6u + ((sizeof(credentials) + 2u) / 3u) * 4u + 1u];
+    unsigned char difference = 0u;
+    size_t output = 6u;
+    if (!watchy_portal_token_authorized(session_token, session_token) ||
+        authorization_header == NULL) {
+        return false;
+    }
+    memcpy(credentials, "watchy:", 7u);
+    memcpy(credentials + 7u, session_token, WATCHY_PORTAL_TOKEN_HEX_SIZE);
+    memcpy(expected, "Basic ", 6u);
+    for (size_t input = 0u; input < sizeof(credentials); input += 3u) {
+        const uint32_t word = (uint32_t)credentials[input] << 16u |
+                              (uint32_t)credentials[input + 1u] << 8u |
+                              credentials[input + 2u];
+        expected[output++] = alphabet[(word >> 18u) & 0x3fu];
+        expected[output++] = alphabet[(word >> 12u) & 0x3fu];
+        expected[output++] = alphabet[(word >> 6u) & 0x3fu];
+        expected[output++] = alphabet[word & 0x3fu];
+    }
+    expected[output] = '\0';
+    if (strnlen(authorization_header, sizeof(expected)) != output) {
+        memset(credentials, 0, sizeof(credentials));
+        memset(expected, 0, sizeof(expected));
+        return false;
+    }
+    for (size_t index = 0u; index < output; ++index) {
+        difference |= (unsigned char)authorization_header[index] ^
+                      (unsigned char)expected[index];
+    }
+    memset(credentials, 0, sizeof(credentials));
+    memset(expected, 0, sizeof(expected));
+    return difference == 0u;
+}
+
 bool watchy_portal_parse_route(watchy_portal_method_t method,
                                const char *path,
                                watchy_portal_route_t *out_route) {
@@ -79,6 +119,10 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
             return true;
         }
         return false;
+    }
+    if (method == WATCHY_PORTAL_METHOD_POST && strcmp(path, "/api/v1/wifi") == 0) {
+        out_route->action = WATCHY_PORTAL_ROUTE_PROVISION_WIFI;
+        return true;
     }
     if (method == WATCHY_PORTAL_METHOD_POST &&
         strncmp(path, activate_prefix, sizeof(activate_prefix) - 1u) == 0) {
@@ -256,4 +300,60 @@ watchy_portal_error_response_t watchy_portal_map_package_error(
 
 bool watchy_portal_idle_expired(uint64_t last_activity_ms, uint64_t now_ms) {
     return now_ms - last_activity_ms >= WATCHY_PORTAL_IDLE_TIMEOUT_MS;
+}
+
+bool watchy_portal_session_accept(uint64_t started_ms,
+                                  uint64_t last_activity_ms,
+                                  uint64_t now_ms,
+                                  bool authenticated,
+                                  uint64_t *out_last_activity_ms) {
+    if (!authenticated || out_last_activity_ms == NULL ||
+        now_ms - started_ms >= WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS ||
+        watchy_portal_idle_expired(last_activity_ms, now_ms)) {
+        return false;
+    }
+    *out_last_activity_ms = now_ms;
+    return true;
+}
+
+bool watchy_portal_format_watch_instructions(
+    const watchy_portal_session_info_t *info,
+    char *out,
+    size_t out_size) {
+    size_t name_size;
+    size_t secret_size;
+    size_t address_size;
+    int written;
+    if (info == NULL || out == NULL || out_size == 0u ||
+        !watchy_portal_token_authorized(info->token, info->token) ||
+        (name_size = strnlen(info->network_name, sizeof(info->network_name))) == 0u ||
+        name_size == sizeof(info->network_name) ||
+        (secret_size = strnlen(info->network_secret, sizeof(info->network_secret))) ==
+            sizeof(info->network_secret) ||
+        (address_size = strnlen(info->address, sizeof(info->address))) == 0u ||
+        address_size == sizeof(info->address)) {
+        return false;
+    }
+    if (!info->client_mode) {
+        if (name_size > 27u || secret_size == 0u || secret_size > 27u) {
+            return false;
+        }
+        written = snprintf(out, out_size,
+                           "SSID %s\nPASS %s\nUSER watchy\nAUTH %.16s\n"
+                           "     %.16s\nIP %s",
+                           info->network_name, info->network_secret, info->token,
+                           info->token + 16u, info->address);
+    } else if (name_size <= 27u) {
+        written = snprintf(out, out_size,
+                           "SSID %s\nUSER watchy\nAUTH %.16s\n     %.16s\nIP %s",
+                           info->network_name, info->token, info->token + 16u,
+                           info->address);
+    } else {
+        written = snprintf(out, out_size,
+                           "SSID %.27s\n     %s\nUSER watchy\nAUTH %.16s\n"
+                           "     %.16s\nIP %s",
+                           info->network_name, info->network_name + 27u, info->token,
+                           info->token + 16u, info->address);
+    }
+    return written >= 0 && (size_t)written < out_size;
 }

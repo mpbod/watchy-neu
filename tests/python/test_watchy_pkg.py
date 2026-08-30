@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -180,6 +181,14 @@ class PackageToolTests(unittest.TestCase):
         with self.assertRaisesRegex(watchy_pkg.PackageError, "elf"):
             watchy_pkg.validate_elf(bytes(non_readable_load), 4096)
 
+        outside_load = bytearray(make_xtensa_so())
+        original_size = len(outside_load)
+        section_offset = struct.unpack_from("<I", outside_load, 32)[0]
+        outside_load.extend(bytes(4))
+        struct.pack_into("<I", outside_load, section_offset + 40 + 16, original_size)
+        with self.assertRaisesRegex(watchy_pkg.PackageError, "elf"):
+            watchy_pkg.validate_elf(bytes(outside_load), 4096)
+
     def test_elf_rejects_relocations_to_undefined_symbols(self):
         with self.assertRaisesRegex(watchy_pkg.PackageError, "elf"):
             watchy_pkg.validate_elf(make_xtensa_so(undefined_relocation=True), 4096)
@@ -226,15 +235,51 @@ class PackageToolTests(unittest.TestCase):
         with self.assertRaisesRegex(watchy_pkg.PackageError, "manifest"):
             watchy_pkg.verify_package(package)
 
-    def test_failure_is_atomic_and_leaves_no_temporary_sibling(self):
-        output = self.dir / "kept.wpk"
-        output.write_bytes(b"keep")
+    def test_write_fsync_and_replace_failures_preserve_output_and_clean_temporary(self):
         self.write_manifest(base_manifest())
-        self.elf.write_bytes(b"not an elf")
-        with self.assertRaises(watchy_pkg.PackageError):
+
+        real_fdopen = os.fdopen
+
+        class FailingWrite:
+            def __init__(self, descriptor, mode):
+                self.stream = real_fdopen(descriptor, mode)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.stream.close()
+
+            def write(self, _content):
+                raise OSError("injected write failure")
+
+        failures = (
+            mock.patch.object(watchy_pkg.os, "fdopen", side_effect=FailingWrite),
+            mock.patch.object(watchy_pkg.os, "fsync", side_effect=OSError("injected fsync failure")),
+            mock.patch.object(watchy_pkg.os, "replace", side_effect=OSError("injected replace failure")),
+        )
+        for index, failure in enumerate(failures):
+            output = self.dir / f"kept-{index}.wpk"
+            output.write_bytes(b"keep")
+            with failure, self.assertRaisesRegex(watchy_pkg.PackageError, "atomic"):
+                self.build(output)
+            self.assertEqual(output.read_bytes(), b"keep")
+            self.assertEqual(list(self.dir.glob(f".{output.name}.*.tmp")), [])
+
+    def test_destination_symlink_is_rejected_without_touching_its_target(self):
+        self.write_manifest(base_manifest())
+        target = self.dir / "target.wpk"
+        target.write_bytes(b"keep target")
+        output = self.dir / "output.wpk"
+        try:
+            output.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        with self.assertRaisesRegex(watchy_pkg.PackageError, "symlink"):
             self.build(output)
-        self.assertEqual(output.read_bytes(), b"keep")
-        self.assertEqual(list(self.dir.glob(".kept.wpk.*.tmp")), [])
+        self.assertTrue(output.is_symlink())
+        self.assertEqual(target.read_bytes(), b"keep target")
+        self.assertEqual(list(self.dir.glob(".output.wpk.*.tmp")), [])
 
     def test_inspect_is_machine_readable_and_never_extracts(self):
         self.write_manifest(base_manifest())

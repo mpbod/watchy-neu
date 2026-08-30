@@ -48,7 +48,19 @@ void watchy_shell_begin(watchy_shell_t *shell,
                                                        : WATCHY_SHELL_WATCHFACE;
     shell->return_screen = shell->safe_mode ? WATCHY_SHELL_SAFE_MODE
                                             : WATCHY_SHELL_LAUNCHER;
-    shell->sleep_requested = wake_cause == WATCHY_WAKE_MOTION && !motion_wake_enabled;
+    shell->sleep_requested = (wake_cause == WATCHY_WAKE_MOTION && !motion_wake_enabled) ||
+                             (shell->safe_mode &&
+                              (wake_cause == WATCHY_WAKE_RTC || wake_cause == WATCHY_WAKE_TIMER ||
+                               wake_cause == WATCHY_WAKE_MOTION));
+}
+
+void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive) {
+    if (shell == NULL) {
+        return;
+    }
+    enter(shell, WATCHY_SHELL_MANUAL_TIME,
+          shell->safe_mode ? WATCHY_SHELL_SAFE_MODE : WATCHY_SHELL_SETTINGS);
+    shell->sleep_requested = !interactive;
 }
 
 void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count) {
@@ -144,7 +156,9 @@ bool watchy_shell_format_diagnostic_label(const watchy_diagnostic_entry_t *entry
         return false;
     }
     switch (entry->state) {
-    case WATCHY_DIAGNOSTIC_PASS: state = "PASS"; break;
+    case WATCHY_DIAGNOSTIC_PASS:
+        state = entry->scope == WATCHY_DIAGNOSTIC_ACTIVE_ACCEPTANCE ? "PASS" : "READY";
+        break;
     case WATCHY_DIAGNOSTIC_FAIL: state = "FAIL"; break;
     case WATCHY_DIAGNOSTIC_UNAVAILABLE: state = "N/A"; break;
     case WATCHY_DIAGNOSTIC_STOPPED: state = "OFF"; break;

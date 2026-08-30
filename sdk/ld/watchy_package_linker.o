@@ -1,4 +1,4 @@
-/* Linker script (the .o suffix allows elf_loader 1.3.x project_so to forward
+/* Linker script (the .o suffix allows elf_loader 1.3.3 project_so to forward
  * it through ELF_LIBS). Keep loader-supported allocatable sections only. */
 SECTIONS
 {

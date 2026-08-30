@@ -163,3 +163,15 @@ watchy_status_t watchy_pcf8563_encode(const watchy_time_t *utc, uint8_t register
     registers[6] = to_bcd((uint8_t)(utc->year % 100));
     return WATCHY_STATUS_OK;
 }
+
+watchy_status_t watchy_pcf8563_alarm_encode(const watchy_time_t *time, uint8_t registers[4]) {
+    if (time == NULL || registers == NULL || time->minute > 59u || time->hour > 23u ||
+        time->day < 1u || time->day > 31u || time->weekday > 6u) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    registers[0] = to_bcd(time->minute);
+    registers[1] = to_bcd(time->hour);
+    registers[2] = to_bcd(time->day);
+    registers[3] = to_bcd(time->weekday);
+    return WATCHY_STATUS_OK;
+}

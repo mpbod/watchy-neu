@@ -474,6 +474,19 @@ static int test_elf_validator_rejects_loader_consumed_hostile_structures(void) {
     return 0;
 }
 
+static int test_elf_rejects_section_offset_beyond_its_load_file_range(void) {
+    uint8_t elf[ELF_FIXTURE_SIZE + 4u];
+    memset(elf, 0, sizeof(elf));
+    make_valid_xtensa_elf(elf);
+    /* The file contains the bytes, but the PT_LOAD file range ends at 88.
+     * Subtracting file_end - sh_offset without the upper-bound check wraps. */
+    put_u32le(elf, 56u, 84u);
+    put_u32le(elf, 140u, ELF_FIXTURE_SIZE);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) ==
+          WATCHY_PACKAGE_ERR_ELF);
+    return 0;
+}
+
 #define MANY_FUNCTIONS 3000u
 #define MANY_DYNSYM_OFFSET 348u
 #define MANY_TEXT_OFFSET (MANY_DYNSYM_OFFSET + (MANY_FUNCTIONS + 1u) * 16u)
@@ -614,31 +627,81 @@ static int test_reconciliation_distinguishes_valid_new_versions_from_transaction
     return 0;
 }
 
+typedef struct {
+    unsigned executions;
+    unsigned rollbacks;
+    watchy_async_status_t observed;
+} async_probe_t;
+
 static watchy_status_t execute_async(void *context, uint32_t operation) {
-    unsigned *executions = (unsigned *)context;
-    ++*executions;
-    return operation == 7u ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
+    async_probe_t *probe = (async_probe_t *)context;
+    ++probe->executions;
+    return operation <= 8u ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
 }
 
-static int test_async_policy_pumps_once_and_preserves_cancelled_requests(void) {
+static watchy_async_status_t observe_async(void *context, uint32_t operation) {
+    (void)operation;
+    return ((async_probe_t *)context)->observed;
+}
+
+static watchy_status_t rollback_async(void *context, uint32_t operation) {
+    (void)operation;
+    ++((async_probe_t *)context)->rollbacks;
+    return WATCHY_STATUS_OK;
+}
+
+static int test_async_policy_waits_for_terminal_events_and_rolls_back_cancel_or_timeout(void) {
     watchy_package_async_slot_t slot = {0};
     watchy_request_id_t next = 0u;
     watchy_request_id_t request_id = 0u;
     watchy_async_status_t status;
-    unsigned executions = 0u;
+    async_probe_t probe = {
+        .observed = {.state = WATCHY_ASYNC_PENDING,
+                     .result = WATCHY_STATUS_INVALID_STATE},
+    };
     CHECK(watchy_package_async_begin(&slot, &next, 7u, 8u, &request_id) == WATCHY_STATUS_OK);
     CHECK(request_id == 1u);
-    CHECK(watchy_package_async_pump_slot(&slot, execute_async, &executions) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_async_pump_slot(&slot, 100u, 1000u, execute_async,
+                                         observe_async, rollback_async, &probe) ==
+          WATCHY_PACKAGE_OK);
     CHECK(watchy_package_async_status_slot(&slot, request_id, &status) == WATCHY_STATUS_OK);
-    CHECK(status.state == WATCHY_ASYNC_SUCCEEDED && status.result == WATCHY_STATUS_OK);
-    CHECK(watchy_package_async_pump_slot(&slot, execute_async, &executions) == WATCHY_PACKAGE_OK);
-    CHECK(executions == 1u);
+    CHECK(status.state == WATCHY_ASYNC_PENDING);
+    CHECK(probe.executions == 1u);
+    probe.observed = (watchy_async_status_t){.state = WATCHY_ASYNC_FAILED,
+                                             .result = WATCHY_STATUS_INVALID_STATE};
+    CHECK(watchy_package_async_pump_slot(&slot, 200u, 1000u, execute_async,
+                                         observe_async, rollback_async, &probe) ==
+          WATCHY_PACKAGE_OK);
+    watchy_package_async_slot_t completed = slot;
+    watchy_request_id_t blocked_id = 0u;
+    CHECK(watchy_package_async_begin(&completed, &next, 8u, 8u, &blocked_id) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(watchy_package_async_status_slot(&slot, request_id, &status) == WATCHY_STATUS_OK);
+    CHECK(status.state == WATCHY_ASYNC_FAILED && status.result == WATCHY_STATUS_INVALID_STATE);
+    CHECK(probe.executions == 1u);
+
+    probe.observed = (watchy_async_status_t){.state = WATCHY_ASYNC_PENDING,
+                                             .result = WATCHY_STATUS_INVALID_STATE};
     CHECK(watchy_package_async_begin(&slot, &next, 8u, 8u, &request_id) == WATCHY_STATUS_OK);
-    CHECK(watchy_package_async_cancel_slot(&slot, request_id) == WATCHY_STATUS_OK);
-    CHECK(watchy_package_async_pump_slot(&slot, execute_async, &executions) == WATCHY_PACKAGE_OK);
-    CHECK(executions == 1u);
+    CHECK(watchy_package_async_pump_slot(&slot, 300u, 1000u, execute_async,
+                                         observe_async, rollback_async, &probe) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_async_cancel_slot(&slot, request_id, rollback_async, &probe) ==
+          WATCHY_STATUS_OK);
     CHECK(watchy_package_async_status_slot(&slot, request_id, &status) == WATCHY_STATUS_OK);
     CHECK(status.state == WATCHY_ASYNC_CANCELLED);
+    CHECK(probe.rollbacks == 1u);
+
+    CHECK(watchy_package_async_begin(&slot, &next, 7u, 8u, &request_id) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_async_pump_slot(&slot, 500u, 1000u, execute_async,
+                                         observe_async, rollback_async, &probe) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_async_pump_slot(&slot, 1500u, 1000u, execute_async,
+                                         observe_async, rollback_async, &probe) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_async_status_slot(&slot, request_id, &status) == WATCHY_STATUS_OK);
+    CHECK(status.state == WATCHY_ASYNC_FAILED);
+    CHECK(probe.rollbacks == 2u);
     return 0;
 }
 
@@ -784,6 +847,36 @@ static int test_state_pointer_and_canvas_policies_fail_closed_at_boundaries(void
     changed.stride = 3u;
     CHECK(!watchy_package_canvas_binding_valid(&bound, &changed, sizeof(pixels)));
     CHECK(!watchy_package_canvas_binding_valid(&bound, &bound, sizeof(pixels) - 1u));
+    CHECK(watchy_package_upload_heap_allows(
+        WATCHY_PACKAGE_WPK_BYTES_MAX,
+        WATCHY_PACKAGE_WPK_BYTES_MAX + WATCHY_PACKAGE_UPLOAD_HEAP_RESERVE_BYTES,
+        WATCHY_PACKAGE_WPK_BYTES_MAX));
+    CHECK(!watchy_package_upload_heap_allows(
+        WATCHY_PACKAGE_WPK_BYTES_MAX,
+        WATCHY_PACKAGE_WPK_BYTES_MAX + WATCHY_PACKAGE_UPLOAD_HEAP_RESERVE_BYTES - 1u,
+        WATCHY_PACKAGE_WPK_BYTES_MAX));
+    CHECK(!watchy_package_upload_heap_allows(
+        WATCHY_PACKAGE_WPK_BYTES_MAX,
+        WATCHY_PACKAGE_WPK_BYTES_MAX + WATCHY_PACKAGE_UPLOAD_HEAP_RESERVE_BYTES,
+        WATCHY_PACKAGE_WPK_BYTES_MAX - 1u));
+
+    CHECK(watchy_package_state_temporary_name_valid(".watchy-state-0123abcd"));
+    CHECK(!watchy_package_state_temporary_name_valid(".watchy-state-0123abc"));
+    CHECK(!watchy_package_state_temporary_name_valid(".watchy-state-0123ABCD"));
+    CHECK(!watchy_package_state_temporary_name_valid("notes.watchy-state-0123abcd"));
+
+    char resolved[192];
+    CHECK(watchy_package_resolve_storage_path("/data/packages/sample/1", "/data/state/sample",
+                                               "state/presses.bin", true,
+                                               resolved, sizeof(resolved)));
+    CHECK(strcmp(resolved, "/data/state/sample/presses.bin") == 0);
+    CHECK(watchy_package_resolve_storage_path("/data/packages/sample/1", "/data/state/sample",
+                                               "assets/probe.bin", false,
+                                               resolved, sizeof(resolved)));
+    CHECK(strcmp(resolved, "/data/packages/sample/1/probe.bin") == 0);
+    CHECK(!watchy_package_resolve_storage_path("/data/packages/sample/1", "/data/state/sample",
+                                                "presses.bin", true,
+                                                resolved, sizeof(resolved)));
     return 0;
 }
 
@@ -1004,6 +1097,49 @@ static int test_unregister_removes_health_and_all_selection_references_transacti
     CHECK(snapshot->pending_watchface[0] == '\0');
     CHECK(snapshot->prior_watchface[0] == '\0');
     CHECK(snapshot->health_count == 0u);
+    return 0;
+}
+
+static int test_empty_index_pruning_and_last_version_state_decisions_are_transactional(void) {
+    fake_index_store_t store = {0};
+    watchy_package_index_store_t api = fake_store_api(&store);
+    watchy_package_index_manager_t manager;
+    const watchy_package_index_t *snapshot;
+
+    CHECK(watchy_package_index_init(&manager, &api) == WATCHY_PACKAGE_OK);
+    CHECK(store.present);
+    CHECK(watchy_package_register_installed(&manager, "clock.good@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, "clock.missing@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, "clock.good@2") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_index_has_id(&manager, "clock.good"));
+    CHECK(watchy_package_select_watchface(&manager, "clock.good@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_promote_pending(&manager, "clock.good@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, "clock.missing@1") == WATCHY_PACKAGE_OK);
+
+    store.fail_save = true;
+    CHECK(watchy_package_unregister(&manager, "clock.missing@1") == WATCHY_PACKAGE_ERR_STORE);
+    snapshot = watchy_package_index_snapshot(&manager);
+    CHECK(strcmp(snapshot->pending_watchface, "clock.missing@1") == 0);
+
+    store.fail_save = false;
+    CHECK(watchy_package_unregister(&manager, "clock.missing@1") == WATCHY_PACKAGE_OK);
+    snapshot = watchy_package_index_snapshot(&manager);
+    CHECK(strcmp(snapshot->active_watchface, "clock.good@1") == 0);
+    CHECK(snapshot->pending_watchface[0] == '\0');
+    CHECK(watchy_package_unregister(&manager, "clock.good@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_index_has_id(&manager, "clock.good"));
+    CHECK(watchy_package_unregister(&manager, "clock.good@2") == WATCHY_PACKAGE_OK);
+    CHECK(!watchy_package_index_has_id(&manager, "clock.good"));
+
+    CHECK(watchy_package_register_installed(&manager, "clock.temp@1") == WATCHY_PACKAGE_OK);
+    store.fail_save = true;
+    CHECK(watchy_package_index_clear(&manager) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(watchy_package_is_installed(&manager, "clock.temp@1", NULL));
+    store.fail_save = false;
+    CHECK(watchy_package_index_clear(&manager) == WATCHY_PACKAGE_OK);
+    snapshot = watchy_package_index_snapshot(&manager);
+    CHECK(snapshot->installed_count == 0u && snapshot->health_count == 0u);
+    CHECK(snapshot->active_watchface[0] == '\0' && snapshot->pending_watchface[0] == '\0');
     return 0;
 }
 
@@ -1302,6 +1438,45 @@ static int load_and_start_session(watchy_package_session_t *session,
     CHECK(watchy_package_session_load(session, "/data/packages/clock.test/1.0/package.so",
                                       manifest, host, false, false) == WATCHY_PACKAGE_OK);
     CHECK(watchy_package_session_start(session) == WATCHY_PACKAGE_OK);
+    return 0;
+}
+
+typedef struct {
+    unsigned before_calls;
+    unsigned after_calls;
+    bool within_budget;
+} watchdog_budget_probe_t;
+
+static void budget_before(void *context) {
+    ++((watchdog_budget_probe_t *)context)->before_calls;
+}
+
+static bool budget_after(void *context) {
+    watchdog_budget_probe_t *probe = (watchdog_budget_probe_t *)context;
+    ++probe->after_calls;
+    return probe->within_budget;
+}
+
+static int test_returning_over_budget_callback_fails_and_closes_the_session(void) {
+    watchy_package_manifest_t manifest = runtime_manifest();
+    watchy_host_caps_v1_t host = {
+        .abi = {.major = WATCHY_ABI_V1_MAJOR, .minor = WATCHY_ABI_V1_MINOR},
+        .size = sizeof(watchy_host_caps_v1_t),
+    };
+    fake_loader_t loader = {0};
+    watchy_package_loader_api_t api = fake_loader_api(&loader);
+    watchy_package_session_t session = {0};
+    watchdog_budget_probe_t probe = {.within_budget = false};
+    watchy_package_watchdog_api_t watchdog = {
+        .before_callback = budget_before,
+        .after_callback = budget_after,
+        .context = &probe,
+    };
+    CHECK(watchy_package_session_init(&session, &api, &watchdog) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_session_load(&session, "/package.so", &manifest, &host,
+                                      false, false) == WATCHY_PACKAGE_ERR_CALLBACK);
+    CHECK(probe.before_calls == 1u && probe.after_calls == 1u);
+    CHECK(!loader.live_handle && !watchy_package_session_loaded(&session));
     return 0;
 }
 
@@ -1610,7 +1785,7 @@ static watchy_package_fs_api_t fake_fs_api(fake_package_fs_t *fs) {
     };
 }
 
-static int test_install_transaction_stages_validates_unpacks_and_rolls_back_nvs_failure(void) {
+static int test_install_transaction_reuses_one_buffer_and_rolls_back_nvs_failure(void) {
     uint8_t wpk[1024];
     uint8_t normalized[1024];
     digest_probe_t probe = {.normalized = normalized};
@@ -1623,10 +1798,9 @@ static int test_install_transaction_stages_validates_unpacks_and_rolls_back_nvs_
         .transaction_collisions = 1u,
     };
     watchy_package_fs_api_t fs_api = fake_fs_api(&fs);
-    uint8_t stage_readback[1024];
     watchy_package_install_workspace_t workspace = {
-        .stage_bytes = stage_readback,
-        .stage_capacity = sizeof(stage_readback),
+        .stage_bytes = wpk,
+        .stage_capacity = sizeof(wpk),
     };
     char installed_ref[WATCHY_PACKAGE_REF_MAX + 1u];
     size_t wpk_size = make_valid_wpk(wpk, sizeof(wpk), &probe);
@@ -1759,11 +1933,12 @@ int main(void) {
     CHECK(test_elf_validator_rejects_files_larger_than_64_kib() == 0);
     CHECK(test_elf_validator_rejects_relocations_to_undefined_symbols() == 0);
     CHECK(test_elf_validator_rejects_loader_consumed_hostile_structures() == 0);
+    CHECK(test_elf_rejects_section_offset_beyond_its_load_file_range() == 0);
     CHECK(test_elf_requires_exactly_the_literal_single_export() == 0);
     CHECK(test_elf_rejects_duplicate_and_thousands_of_defined_exports() == 0);
     CHECK(test_elf_runtime_accounts_for_thousands_of_undefined_global_functions() == 0);
     CHECK(test_reconciliation_distinguishes_valid_new_versions_from_transactions() == 0);
-    CHECK(test_async_policy_pumps_once_and_preserves_cancelled_requests() == 0);
+    CHECK(test_async_policy_waits_for_terminal_events_and_rolls_back_cancel_or_timeout() == 0);
     CHECK(test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure() == 0);
     CHECK(test_watchface_cycle_requires_a_successful_render_and_refresh() == 0);
     CHECK(test_upload_finalize_distinguishes_incomplete_content_from_storage_failures() == 0);
@@ -1775,17 +1950,19 @@ int main(void) {
     CHECK(test_complete_wpk_validation_rejects_unsorted_assets() == 0);
     CHECK(test_selection_is_transactional_when_persistence_fails() == 0);
     CHECK(test_unregister_removes_health_and_all_selection_references_transactionally() == 0);
+    CHECK(test_empty_index_pruning_and_last_version_state_decisions_are_transactional() == 0);
     CHECK(test_pending_watchface_promotes_after_render_and_rolls_back_on_failure() == 0);
     CHECK(test_three_incomplete_attempts_quarantine_persistently_and_safe_mode_bypasses() == 0);
     CHECK(test_index_rejects_corrupt_persisted_counts_and_strings() == 0);
     CHECK(test_index_wire_is_fixed_width_and_rejects_corruption_or_bad_selection() == 0);
     CHECK(test_lifecycle_closes_the_handle_after_every_callback_failure() == 0);
+    CHECK(test_returning_over_budget_callback_fails_and_closes_the_session() == 0);
     CHECK(test_session_enforces_one_handle_and_bypasses_safe_or_quarantined_packages() == 0);
     CHECK(test_session_global_owner_reinit_and_pointer_policy() == 0);
-    CHECK(test_install_transaction_stages_validates_unpacks_and_rolls_back_nvs_failure() == 0);
+    CHECK(test_install_transaction_reuses_one_buffer_and_rolls_back_nvs_failure() == 0);
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 36 package tests");
+    puts("PASS 40 package tests");
     return 0;
 }

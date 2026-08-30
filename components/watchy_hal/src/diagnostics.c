@@ -21,6 +21,7 @@ static void add_entry(watchy_diagnostic_report_t *report,
     watchy_diagnostic_entry_t *entry = &report->entries[report->count++];
     entry->service = service;
     entry->state = state;
+    entry->scope = WATCHY_DIAGNOSTIC_PASSIVE;
     entry->status_code = status;
     entry->detail = detail;
 }

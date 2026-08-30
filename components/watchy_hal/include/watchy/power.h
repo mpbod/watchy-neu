@@ -24,6 +24,7 @@ typedef enum {
     WATCHY_WAKE_RTC,
     WATCHY_WAKE_BUTTON,
     WATCHY_WAKE_MOTION,
+    WATCHY_WAKE_TIMER,
     WATCHY_WAKE_OTHER,
 } watchy_wake_cause_t;
 
@@ -37,6 +38,7 @@ typedef struct {
     bool ext0_configured;
     bool ext1_configured;
     bool sources_inactive;
+    bool button_only;
 } watchy_sleep_requirements_t;
 
 typedef struct {
@@ -50,9 +52,11 @@ bool watchy_power_sleep_allowed(const watchy_sleep_requirements_t *requirements)
 bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,
                                        uint64_t active_sources);
 bool watchy_power_release_pin_for_sleep(uint8_t pin);
+bool watchy_power_safe_mode_chord_allowed(watchy_wake_cause_t wake_cause);
 watchy_status_t watchy_power_prepare_deep_sleep(bool timer_configured);
 watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configured,
                                                             bool motion_wake_enabled);
+watchy_status_t watchy_power_prepare_button_only_sleep(void);
 bool watchy_power_prepare_attempted(void);
 watchy_status_t watchy_power_last_prepare_status(void);
 void watchy_power_enter_deep_sleep(void) __attribute__((noreturn));

@@ -177,6 +177,26 @@ watchy_status_t watchy_rtc_set_minute_alarm(uint8_t minute) {
                : WATCHY_STATUS_INVALID_STATE;
 }
 
+watchy_status_t watchy_rtc_set_alarm_next_match(const watchy_time_t *time) {
+    uint8_t alarm[4];
+    uint8_t status;
+    watchy_status_t encode_status = watchy_pcf8563_alarm_encode(time, alarm);
+    if (encode_status != WATCHY_STATUS_OK) {
+        return encode_status;
+    }
+    if (!s_ready) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (watchy_bus_rtc_write(PCF8563_REG_ALARM_MINUTE, alarm, sizeof(alarm)) != ESP_OK ||
+        watchy_bus_rtc_read(PCF8563_REG_STATUS_2, &status, 1) != ESP_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    status = (uint8_t)((status | PCF8563_STATUS_2_AIE) & ~PCF8563_STATUS_2_AF);
+    return watchy_bus_rtc_write(PCF8563_REG_STATUS_2, &status, 1) == ESP_OK
+               ? WATCHY_STATUS_OK
+               : WATCHY_STATUS_INVALID_STATE;
+}
+
 watchy_status_t watchy_rtc_set_minute_timer(uint8_t minutes) {
     uint8_t status;
     const uint8_t timer_control = 0x83;

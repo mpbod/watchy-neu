@@ -3,7 +3,6 @@
 /.pio/
 /samples/*/.pio/
 /samples/*/managed_components/
-/samples/*/dependencies.lock
 /samples/*/sdkconfig.package
 /samples/*/sdkconfig
 /samples/*/sdkconfig.old
@@ -13,7 +12,6 @@
 sdkconfig
 sdkconfig.old
 managed_components/
-dependencies.lock
 __pycache__/
 *.pyc
 *.wpk

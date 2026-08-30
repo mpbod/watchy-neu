@@ -14,6 +14,7 @@ extern "C" {
 
 #define WATCHY_PORTAL_TOKEN_HEX_SIZE 32u
 #define WATCHY_PORTAL_IDLE_TIMEOUT_MS (10u * 60u * 1000u)
+#define WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS (30u * 60u * 1000u)
 #define WATCHY_PORTAL_INSTALL_RESERVE_BYTES (64u * 1024u)
 
 typedef enum {
@@ -28,6 +29,7 @@ typedef enum {
     WATCHY_PORTAL_ROUTE_STATUS,
     WATCHY_PORTAL_ROUTE_PACKAGES,
     WATCHY_PORTAL_ROUTE_UPLOAD,
+    WATCHY_PORTAL_ROUTE_PROVISION_WIFI,
     WATCHY_PORTAL_ROUTE_ACTIVATE,
     WATCHY_PORTAL_ROUTE_REMOVE,
 } watchy_portal_route_action_t;
@@ -94,6 +96,8 @@ typedef enum {
 
 bool watchy_portal_token_authorized(const char *session_token,
                                     const char *request_token);
+bool watchy_portal_basic_authorized(const char *session_token,
+                                    const char *authorization_header);
 bool watchy_portal_parse_route(watchy_portal_method_t method,
                                const char *path,
                                watchy_portal_route_t *out_route);
@@ -113,6 +117,15 @@ bool watchy_portal_fill_guaranteed_entropy(const watchy_portal_entropy_api_t *en
                                            uint8_t *out_bytes,
                                            size_t size);
 bool watchy_portal_idle_expired(uint64_t last_activity_ms, uint64_t now_ms);
+bool watchy_portal_session_accept(uint64_t started_ms,
+                                  uint64_t last_activity_ms,
+                                  uint64_t now_ms,
+                                  bool authenticated,
+                                  uint64_t *out_last_activity_ms);
+bool watchy_portal_format_watch_instructions(
+    const watchy_portal_session_info_t *info,
+    char *out,
+    size_t out_size);
 
 watchy_status_t watchy_portal_prepare_ap_password(void);
 watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,

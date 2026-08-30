@@ -89,6 +89,7 @@ void watchy_shell_begin(watchy_shell_t *shell,
                         bool motion_wake_enabled,
                         bool safe_mode_requested,
                         bool package_watchface_failed);
+void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive);
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input);
 void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count);
 void watchy_shell_set_package_catalog(watchy_shell_t *shell,

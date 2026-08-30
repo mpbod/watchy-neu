@@ -112,7 +112,8 @@ static bool section_in_load(const uint8_t *elf,
             return true;
         }
         if (add_ok(u32(ph + 4u), u32(ph + 16u), &file_end) &&
-            sh_offset >= u32(ph + 4u) && sh_size <= file_end - sh_offset) {
+            sh_offset >= u32(ph + 4u) && sh_offset <= file_end &&
+            sh_size <= file_end - sh_offset) {
             return true;
         }
     }

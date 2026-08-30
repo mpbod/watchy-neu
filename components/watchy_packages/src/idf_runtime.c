@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "esp_dlfcn.h"
+#include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include "esp_random.h"
 #include "esp_task_wdt.h"
@@ -53,6 +54,8 @@ typedef struct {
 } package_loader_context_t;
 
 static watchy_package_index_manager_t s_index;
+static watchy_package_manifest_t s_reconcile_manifest;
+static watchy_package_index_t s_empty_index;
 static watchy_package_install_workspace_t s_install_workspace;
 static package_runner_t s_runner;
 static package_loader_context_t s_loader_context;
@@ -534,13 +537,15 @@ static void watchdog_before_callback(void *context) {
     (void)esp_task_wdt_reset();
 }
 
-static void watchdog_after_callback(void *context) {
+static bool watchdog_after_callback(void *context) {
     watchy_package_host_context_t *host = (watchy_package_host_context_t *)context;
-    if (watchy_package_callback_budget_may_feed(&host->callback_budget,
-                                                (uint32_t)(esp_timer_get_time() / 1000))) {
+    const bool within_budget = watchy_package_callback_budget_may_feed(
+        &host->callback_budget, (uint32_t)(esp_timer_get_time() / 1000));
+    if (within_budget) {
         (void)esp_task_wdt_reset();
     }
     watchy_package_callback_budget_end(&host->callback_budget);
+    return within_budget;
 }
 
 static bool split_package_ref(const char *package_ref,
@@ -623,40 +628,124 @@ static bool package_index_contains_ref(const char *reference) {
     return watchy_package_is_installed(&s_index, reference, NULL);
 }
 
-static void reconcile_directory(const char *root, bool staging) {
-    DIR *first = opendir(root);
-    struct dirent *entry;
-    if (first == NULL) {
-        return;
+static bool installed_package_valid(const char *reference, watchy_package_type_t type) {
+    char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
+    char root[WATCHY_IDF_PATH_MAX];
+    char path[WATCHY_IDF_PATH_MAX];
+    struct stat info;
+    watchy_package_manifest_t *manifest = &s_reconcile_manifest;
+    memset(manifest, 0, sizeof(*manifest));
+    if (!split_package_ref(reference, identifier, version) ||
+        snprintf(root, sizeof(root), "/data/packages/%s/%s", identifier, version) >=
+            (int)sizeof(root) ||
+        stat(root, &info) != 0 || !S_ISDIR(info.st_mode) || S_ISLNK(info.st_mode) ||
+        snprintf(path, sizeof(path), "%s/manifest.json", root) >= (int)sizeof(path) ||
+        !read_manifest(path, manifest) || strcmp(manifest->id, identifier) != 0 ||
+        strcmp(manifest->version, version) != 0 || manifest->type != type ||
+        snprintf(path, sizeof(path), "%s/package.so", root) >= (int)sizeof(path) ||
+        !validate_installed_elf(path, manifest->max_runtime_bytes)) {
+        return false;
     }
-    while ((entry = readdir(first)) != NULL) {
+    for (size_t asset = 0u; asset < manifest->asset_count; ++asset) {
+        const watchy_package_asset_t *entry = &manifest->assets[asset];
+        if (snprintf(path, sizeof(path), "%s/%s", root, entry->path) >= (int)sizeof(path) ||
+            stat(path, &info) != 0 || !S_ISREG(info.st_mode) || S_ISLNK(info.st_mode) ||
+            info.st_size < 0 || (uintmax_t)info.st_size != entry->size) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static watchy_package_status_t reconcile_indexed_packages(void) {
+    size_t record = 0u;
+    while (record < watchy_package_index_snapshot(&s_index)->installed_count) {
+        const watchy_package_index_t *index = watchy_package_index_snapshot(&s_index);
+        char reference[WATCHY_PACKAGE_REF_MAX + 1u];
+        char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
+        char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
+        char package_path[WATCHY_IDF_PATH_MAX];
+        char state_path[WATCHY_IDF_PATH_MAX];
+        watchy_package_status_t status;
+        memcpy(reference, index->installed[record], sizeof(reference));
+        if (installed_package_valid(reference, index->installed_types[record])) {
+            ++record;
+            continue;
+        }
+        if (!split_package_ref(reference, identifier, version) ||
+            snprintf(package_path, sizeof(package_path), "/data/packages/%s/%s",
+                     identifier, version) >= (int)sizeof(package_path) ||
+            snprintf(state_path, sizeof(state_path), "/data/state/%s", identifier) >=
+                (int)sizeof(state_path)) {
+            return WATCHY_PACKAGE_ERR_STATE;
+        }
+        status = watchy_package_unregister(&s_index, reference);
+        if (status != WATCHY_PACKAGE_OK) {
+            return status;
+        }
+        const bool last_version = !watchy_package_index_has_id(&s_index, identifier);
+        if (!idf_remove_tree(NULL, package_path) ||
+            (last_version && !idf_remove_tree(NULL, state_path))) {
+            return WATCHY_PACKAGE_ERR_FILESYSTEM;
+        }
+    }
+    return WATCHY_PACKAGE_OK;
+}
+
+static bool reconcile_directory(const char *root, bool staging) {
+    bool result = true;
+    DIR *first = opendir(root);
+    if (first == NULL) {
+        return errno == ENOENT;
+    }
+    for (;;) {
+        struct dirent *entry;
         char first_path[WATCHY_IDF_PATH_MAX];
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
-            snprintf(first_path, sizeof(first_path), "%s/%s", root, entry->d_name) >=
-                (int)sizeof(first_path)) {
+        errno = 0;
+        entry = readdir(first);
+        if (entry == NULL) {
+            result = errno == 0 && result;
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (snprintf(first_path, sizeof(first_path), "%s/%s", root, entry->d_name) >=
+            (int)sizeof(first_path)) {
+            result = false;
             continue;
         }
         if (staging) {
-            (void)idf_remove_tree(NULL, first_path);
+            result = idf_remove_tree(NULL, first_path) && result;
             continue;
         }
         if (!watchy_package_id_valid(entry->d_name)) {
-            (void)idf_remove_tree(NULL, first_path);
+            result = idf_remove_tree(NULL, first_path) && result;
             continue;
         }
         DIR *versions = opendir(first_path);
         struct dirent *version;
         if (versions == NULL) {
-            (void)idf_remove_tree(NULL, first_path);
+            result = idf_remove_tree(NULL, first_path) && result;
             continue;
         }
-        while ((version = readdir(versions)) != NULL) {
+        for (;;) {
             char version_path[WATCHY_IDF_PATH_MAX];
             char reference[WATCHY_PACKAGE_REF_MAX + 1u];
             int reference_size;
-            if (strcmp(version->d_name, ".") == 0 || strcmp(version->d_name, "..") == 0 ||
-                snprintf(version_path, sizeof(version_path), "%s/%s", first_path,
+            errno = 0;
+            version = readdir(versions);
+            if (version == NULL) {
+                result = errno == 0 && result;
+                break;
+            }
+            if (strcmp(version->d_name, ".") == 0 || strcmp(version->d_name, "..") == 0) {
+                continue;
+            }
+            if (snprintf(version_path, sizeof(version_path), "%s/%s", first_path,
                          version->d_name) >= (int)sizeof(version_path)) {
+                result = false;
                 continue;
             }
             reference_size = snprintf(reference, sizeof(reference), "%s@%s",
@@ -666,17 +755,88 @@ static void reconcile_directory(const char *root, bool staging) {
             const bool indexed = reference_valid && package_index_contains_ref(reference);
             if (watchy_package_reconcile_version(version->d_name, indexed) !=
                 WATCHY_PACKAGE_RECONCILE_KEEP) {
-                (void)idf_remove_tree(NULL, version_path);
+                result = idf_remove_tree(NULL, version_path) && result;
             }
         }
-        (void)closedir(versions);
+        result = closedir(versions) == 0 && result;
     }
-    (void)closedir(first);
+    return closedir(first) == 0 && result;
 }
 
-static void reconcile_storage(void) {
-    reconcile_directory("/data/staging", true);
-    reconcile_directory("/data/packages", false);
+static bool scrub_state_directory_temporaries(const char *root) {
+    bool result = true;
+    DIR *directory = opendir(root);
+    if (directory == NULL) {
+        return false;
+    }
+    for (;;) {
+        struct dirent *entry;
+        char path[WATCHY_IDF_PATH_MAX];
+        errno = 0;
+        entry = readdir(directory);
+        if (entry == NULL) {
+            result = errno == 0 && result;
+            break;
+        }
+        if (!watchy_package_state_temporary_name_valid(entry->d_name)) {
+            continue;
+        }
+        if (snprintf(path, sizeof(path), "%s/%s", root, entry->d_name) >=
+            (int)sizeof(path)) {
+            result = false;
+            continue;
+        }
+        result = idf_remove_tree(NULL, path) && result;
+    }
+    return closedir(directory) == 0 && result;
+}
+
+static bool reconcile_state_directory(void) {
+    bool result = true;
+    DIR *directory = opendir("/data/state");
+    if (directory == NULL) {
+        return errno == ENOENT;
+    }
+    for (;;) {
+        struct dirent *entry;
+        char path[WATCHY_IDF_PATH_MAX];
+        struct stat info;
+        bool keep;
+        errno = 0;
+        entry = readdir(directory);
+        if (entry == NULL) {
+            result = errno == 0 && result;
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (snprintf(path, sizeof(path), "/data/state/%s", entry->d_name) >=
+            (int)sizeof(path)) {
+            result = false;
+            continue;
+        }
+        keep = watchy_package_id_valid(entry->d_name) &&
+               watchy_package_index_has_id(&s_index, entry->d_name) &&
+               stat(path, &info) == 0 && S_ISDIR(info.st_mode) && !S_ISLNK(info.st_mode);
+        if (!keep) {
+            result = idf_remove_tree(NULL, path) && result;
+        } else {
+            result = scrub_state_directory_temporaries(path) && result;
+        }
+    }
+    return closedir(directory) == 0 && result;
+}
+
+static watchy_package_status_t reconcile_storage(void) {
+    watchy_package_status_t status = reconcile_indexed_packages();
+    if (status != WATCHY_PACKAGE_OK) {
+        return status;
+    }
+    return reconcile_directory("/data/staging", true) &&
+                   reconcile_directory("/data/packages", false) &&
+                   reconcile_state_directory()
+               ? WATCHY_PACKAGE_OK : WATCHY_PACKAGE_ERR_FILESYSTEM;
 }
 
 watchy_package_status_t watchy_packages_runtime_init(void) {
@@ -697,17 +857,17 @@ watchy_package_status_t watchy_packages_runtime_init(void) {
     }
     status = watchy_package_index_init(&s_index, &store);
     if (status == WATCHY_PACKAGE_OK) {
-        reconcile_storage();
-        s_initialized = true;
+        status = reconcile_storage();
+        s_initialized = status == WATCHY_PACKAGE_OK;
     }
     atomic_flag_clear_explicit(&s_init_lock, memory_order_release);
     return status;
 }
 
-static void runner_finish(bool clean) {
-    bool stopped_cleanly = true;
+static watchy_package_status_t runner_finish(bool clean) {
+    watchy_package_status_t stop_status = WATCHY_PACKAGE_OK;
     if (watchy_package_session_loaded(&s_runner.session)) {
-        stopped_cleanly = watchy_package_session_stop(&s_runner.session) == WATCHY_PACKAGE_OK;
+        stop_status = watchy_package_session_stop(&s_runner.session);
     }
     if (s_runner.host_ready) {
         watchy_package_host_deinit(&s_runner.host);
@@ -716,7 +876,7 @@ static void runner_finish(bool clean) {
     if (s_runner.attempt_started) {
         (void)watchy_package_finish_attempt(&s_index,
                                             s_runner.reference,
-                                            clean && stopped_cleanly);
+                                            clean && stop_status == WATCHY_PACKAGE_OK);
     }
     if (s_runner.pending && (!clean || !s_runner.rendered)) {
         (void)watchy_package_rollback_pending(&s_index, s_runner.reference);
@@ -726,6 +886,7 @@ static void runner_finish(bool clean) {
     s_runner.pending = false;
     s_runner.rendered = false;
     memset(s_runner.reference, 0, sizeof(s_runner.reference));
+    return stop_status;
 }
 
 static watchy_package_status_t runner_post_callback(void) {
@@ -741,8 +902,7 @@ static watchy_package_status_t runner_post_callback(void) {
         runner_finish(false);
         return pump_ok ? WATCHY_PACKAGE_ERR_CALLBACK : WATCHY_PACKAGE_ERR_STATE;
     case WATCHY_PACKAGE_POST_CLEAN_EXIT:
-        runner_finish(true);
-        return WATCHY_PACKAGE_OK;
+        return runner_finish(true);
     case WATCHY_PACKAGE_POST_CONTINUE:
         return WATCHY_PACKAGE_OK;
     }
@@ -788,7 +948,8 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
         (void)xSemaphoreGive(s_package_mutex);
         return status;
     }
-    if (s_runner.active || !watchy_package_is_installed(&s_index, package_ref, &installed_type) ||
+    if (s_runner.active || watchy_package_session_loaded(&s_runner.session) ||
+        !watchy_package_is_installed(&s_index, package_ref, &installed_type) ||
         watchy_package_is_quarantined(&s_index, package_ref) ||
         strnlen(package_ref, sizeof(s_runner.reference)) == sizeof(s_runner.reference) ||
         !split_package_ref(package_ref, identifier, version) ||
@@ -798,13 +959,7 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
                  identifier, version) >= (int)sizeof(elf_path) ||
         snprintf(absolute_elf_path, sizeof(absolute_elf_path),
                  "/data/packages/%s/%s/package.so", identifier, version) >=
-            (int)sizeof(absolute_elf_path) ||
-        !read_manifest(manifest_path, &s_runner.manifest) ||
-        strcmp(s_runner.manifest.id, identifier) != 0 ||
-        strcmp(s_runner.manifest.version, version) != 0 ||
-        s_runner.manifest.type != installed_type ||
-        !validate_installed_elf(absolute_elf_path,
-                                s_runner.manifest.max_runtime_bytes)) {
+            (int)sizeof(absolute_elf_path)) {
         (void)xSemaphoreGive(s_package_mutex);
         return WATCHY_PACKAGE_ERR_STATE;
     }
@@ -812,10 +967,24 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
     index = watchy_package_index_snapshot(&s_index);
     s_runner.pending = strcmp(index->pending_watchface, package_ref) == 0;
     status = watchy_package_begin_attempt(&s_index, package_ref, false);
-    if (status == WATCHY_PACKAGE_OK) {
-        s_runner.attempt_started = true;
-        status = watchy_package_host_init(&s_runner.host, &s_runner.manifest);
+    if (status != WATCHY_PACKAGE_OK) {
+        s_runner.pending = false;
+        memset(s_runner.reference, 0, sizeof(s_runner.reference));
+        (void)xSemaphoreGive(s_package_mutex);
+        return status;
     }
+    s_runner.attempt_started = true;
+    if (!read_manifest(manifest_path, &s_runner.manifest) ||
+        strcmp(s_runner.manifest.id, identifier) != 0 ||
+        strcmp(s_runner.manifest.version, version) != 0 ||
+        s_runner.manifest.type != installed_type ||
+        !validate_installed_elf(absolute_elf_path,
+                                s_runner.manifest.max_runtime_bytes)) {
+        runner_finish(false);
+        (void)xSemaphoreGive(s_package_mutex);
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    status = watchy_package_host_init(&s_runner.host, &s_runner.manifest);
     if (status == WATCHY_PACKAGE_OK) {
         s_runner.host_ready = true;
         status = watchy_package_session_init(&s_runner.session, &loader, &watchdog);
@@ -919,10 +1088,9 @@ watchy_package_status_t watchy_packages_runner_stop(void) {
         (void)xSemaphoreGive(s_package_mutex);
         return WATCHY_PACKAGE_ERR_STATE;
     }
-    runner_finish(true);
+    const watchy_package_status_t status = runner_finish(true);
     (void)xSemaphoreGive(s_package_mutex);
-    return watchy_package_session_loaded(&s_runner.session) ? WATCHY_PACKAGE_ERR_LOADER
-                                                            : WATCHY_PACKAGE_OK;
+    return status;
 }
 
 bool watchy_packages_runner_active(void) {
@@ -981,7 +1149,7 @@ bool watchy_packages_run_watchface(bool safe_mode) {
 }
 
 watchy_package_status_t watchy_packages_install_blob(
-    const uint8_t *wpk,
+    uint8_t *wpk,
     size_t wpk_size,
     char out_package_ref[WATCHY_PACKAGE_REF_MAX + 1u]) {
     static const watchy_crypto_api_t crypto = {.sha256 = idf_sha256, .context = NULL};
@@ -999,7 +1167,6 @@ watchy_package_status_t watchy_packages_install_blob(
         .context = NULL,
     };
     watchy_package_status_t status = watchy_packages_runtime_init();
-    uint8_t *stage_bytes;
     if (status != WATCHY_PACKAGE_OK || wpk == NULL || out_package_ref == NULL) {
         return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_ARGUMENT;
     }
@@ -1009,25 +1176,19 @@ watchy_package_status_t watchy_packages_install_blob(
     if (xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
         return WATCHY_PACKAGE_ERR_STATE;
     }
-    /* Installation temporarily holds the caller's WPK and an immutable-stage
-     * readback. Keep it disjoint from a resident loader allocation on the
-     * no-PSRAM Watchy 2.0 memory budget. */
+    /* Installation is excluded from a resident loader and reuses the mutable
+     * upload allocation for the durable stage readback. This keeps the 80 KiB
+     * ceiling to one contiguous WPK allocation on the no-PSRAM Watchy 2.0. */
     if (s_runner.active || watchy_package_session_loaded(&s_runner.session)) {
         (void)xSemaphoreGive(s_package_mutex);
         return WATCHY_PACKAGE_ERR_STATE;
     }
-    stage_bytes = malloc(wpk_size);
-    if (stage_bytes == NULL) {
-        (void)xSemaphoreGive(s_package_mutex);
-        return WATCHY_PACKAGE_ERR_LIMIT;
-    }
-    s_install_workspace.stage_bytes = stage_bytes;
+    s_install_workspace.stage_bytes = wpk;
     s_install_workspace.stage_capacity = wpk_size;
     status = watchy_package_install(&s_index, &filesystem, &s_install_workspace,
                                     wpk, wpk_size, &crypto, out_package_ref);
     s_install_workspace.stage_bytes = NULL;
     s_install_workspace.stage_capacity = 0u;
-    free(stage_bytes);
     (void)xSemaphoreGive(s_package_mutex);
     return status;
 }
@@ -1073,11 +1234,17 @@ watchy_package_status_t watchy_packages_remove(const char *package_ref) {
     char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
     char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
     char path[WATCHY_IDF_PATH_MAX];
+    char state_path[WATCHY_IDF_PATH_MAX];
+    char identifier_path[WATCHY_IDF_PATH_MAX];
     watchy_package_status_t status = watchy_packages_runtime_init();
     if (status != WATCHY_PACKAGE_OK || package_ref == NULL ||
         !split_package_ref(package_ref, identifier, version) ||
         snprintf(path, sizeof(path), "/data/packages/%s/%s", identifier, version) >=
-            (int)sizeof(path)) {
+            (int)sizeof(path) ||
+        snprintf(state_path, sizeof(state_path), "/data/state/%s", identifier) >=
+            (int)sizeof(state_path) ||
+        snprintf(identifier_path, sizeof(identifier_path), "/data/packages/%s", identifier) >=
+            (int)sizeof(identifier_path)) {
         return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_ARGUMENT;
     }
     if (xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
@@ -1091,13 +1258,16 @@ watchy_package_status_t watchy_packages_remove(const char *package_ref) {
     if (status == WATCHY_PACKAGE_OK && !idf_remove_tree(NULL, path)) {
         status = WATCHY_PACKAGE_ERR_FILESYSTEM;
     }
+    if (status == WATCHY_PACKAGE_OK && !watchy_package_index_has_id(&s_index, identifier) &&
+        (!idf_remove_tree(NULL, state_path) || !idf_remove_tree(NULL, identifier_path))) {
+        status = WATCHY_PACKAGE_ERR_FILESYSTEM;
+    }
     (void)xSemaphoreGive(s_package_mutex);
     return status;
 }
 
 watchy_package_status_t watchy_packages_safe_mode_purge(void) {
-    nvs_handle_t handle = 0u;
-    esp_err_t error;
+    watchy_package_status_t index_status;
     bool filesystem_ok;
     if (s_package_mutex == NULL && (s_package_mutex = xSemaphoreCreateMutex()) == NULL) {
         return WATCHY_PACKAGE_ERR_STATE;
@@ -1109,25 +1279,23 @@ watchy_package_status_t watchy_packages_safe_mode_purge(void) {
         (void)xSemaphoreGive(s_package_mutex);
         return WATCHY_PACKAGE_ERR_STATE;
     }
+    memset(&s_empty_index, 0, sizeof(s_empty_index));
+    s_empty_index.magic = WATCHY_PACKAGE_INDEX_MAGIC;
+    s_empty_index.version = WATCHY_PACKAGE_INDEX_VERSION;
+    index_status = s_initialized ? watchy_package_index_clear(&s_index)
+                                 : (idf_index_save(NULL, &s_empty_index)
+                                        ? WATCHY_PACKAGE_OK : WATCHY_PACKAGE_ERR_STORE);
+    if (index_status != WATCHY_PACKAGE_OK) {
+        (void)xSemaphoreGive(s_package_mutex);
+        return index_status;
+    }
     const bool staging_ok = idf_remove_tree(NULL, "/data/staging");
     const bool packages_ok = idf_remove_tree(NULL, "/data/packages");
-    filesystem_ok = staging_ok && packages_ok;
-    error = nvs_open(WATCHY_PACKAGE_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (error == ESP_OK) {
-        error = nvs_erase_all(handle);
-    }
-    if (error == ESP_OK) {
-        error = nvs_commit(handle);
-    }
-    if (handle != 0u) {
-        nvs_close(handle);
-    }
+    const bool state_ok = idf_remove_tree(NULL, "/data/state");
+    filesystem_ok = staging_ok && packages_ok && state_ok;
     memset(&s_index, 0, sizeof(s_index));
     s_initialized = false;
     (void)xSemaphoreGive(s_package_mutex);
-    if (error != ESP_OK) {
-        return WATCHY_PACKAGE_ERR_STORE;
-    }
     if (!filesystem_ok) {
         return WATCHY_PACKAGE_ERR_FILESYSTEM;
     }
@@ -1229,7 +1397,14 @@ watchy_package_status_t watchy_packages_upload_finish(
     }
     received = s_upload.received_size;
     memcpy(path, s_upload.path, sizeof(path));
-    bytes = malloc(received);
+    const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t largest_internal =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!watchy_package_upload_heap_allows(received, free_internal, largest_internal)) {
+        watchy_packages_upload_abort();
+        return WATCHY_PACKAGE_ERR_LIMIT;
+    }
+    bytes = heap_caps_malloc(received, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (bytes == NULL) {
         watchy_packages_upload_abort();
         return WATCHY_PACKAGE_ERR_LIMIT;
@@ -1250,7 +1425,7 @@ bool watchy_packages_upload_active(void) {
 }
 
 bool watchy_packages_link_smoke(void) {
-    watchy_package_status_t (*install_fn)(const uint8_t *, size_t, char *) =
+    watchy_package_status_t (*install_fn)(uint8_t *, size_t, char *) =
         watchy_packages_install_blob;
     watchy_package_status_t (*select_fn)(const char *) = watchy_packages_select_watchface;
     watchy_package_status_t (*event_fn)(const watchy_event_t *) = watchy_packages_runner_event;

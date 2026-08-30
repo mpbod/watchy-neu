@@ -1,10 +1,9 @@
 #include "watchy/settings.h"
+#include "watchy/wifi_credentials.h"
 
 #include <string.h>
 
 #include "nvs.h"
-
-#define WATCHY_SETTINGS_NVS_NAMESPACE "watchy_cfg"
 
 static esp_err_t get_string(nvs_handle_t handle, const char *key, char *value, size_t capacity) {
     size_t size = capacity;
@@ -31,7 +30,7 @@ watchy_status_t watchy_settings_load(watchy_settings_t *out_settings) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     watchy_settings_defaults(&stored);
-    error = nvs_open(WATCHY_SETTINGS_NVS_NAMESPACE, NVS_READONLY, &handle);
+    error = nvs_open(WATCHY_WIFI_CREDENTIAL_NAMESPACE, NVS_READONLY, &handle);
     if (error == ESP_ERR_NVS_NOT_FOUND) {
         *out_settings = stored;
         return WATCHY_STATUS_OK;
@@ -55,9 +54,11 @@ watchy_status_t watchy_settings_load(watchy_settings_t *out_settings) {
     }
     if (error == ESP_OK) error = get_string(handle, "face", stored.active_watchface,
                                              sizeof(stored.active_watchface));
-    if (error == ESP_OK) error = get_string(handle, "ssid", stored.wifi_ssid,
+    if (error == ESP_OK) error = get_string(handle, WATCHY_WIFI_CREDENTIAL_SSID_KEY,
+                                             stored.wifi_ssid,
                                              sizeof(stored.wifi_ssid));
-    if (error == ESP_OK) error = get_string(handle, "wifi_pass", stored.wifi_password,
+    if (error == ESP_OK) error = get_string(handle, WATCHY_WIFI_CREDENTIAL_PASSWORD_KEY,
+                                             stored.wifi_password,
                                              sizeof(stored.wifi_password));
     field_error = nvs_get_u16(handle, "partial", &partial);
     if (field_error == ESP_OK) {
@@ -78,13 +79,18 @@ watchy_status_t watchy_settings_save(const watchy_settings_t *settings) {
     if (!watchy_settings_valid(settings)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    error = nvs_open(WATCHY_SETTINGS_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    error = nvs_open(WATCHY_WIFI_CREDENTIAL_NAMESPACE, NVS_READWRITE, &handle);
     if (error == ESP_OK) error = nvs_set_str(handle, "tz", settings->timezone);
     if (error == ESP_OK) error = nvs_set_u8(handle, "hour24", settings->time_24h ? 1u : 0u);
     if (error == ESP_OK) error = nvs_set_u8(handle, "motion", settings->motion_wake ? 1u : 0u);
     if (error == ESP_OK) error = nvs_set_str(handle, "face", settings->active_watchface);
-    if (error == ESP_OK) error = nvs_set_str(handle, "ssid", settings->wifi_ssid);
-    if (error == ESP_OK) error = nvs_set_str(handle, "wifi_pass", settings->wifi_password);
+    if (error == ESP_OK) {
+        error = nvs_set_str(handle, WATCHY_WIFI_CREDENTIAL_SSID_KEY, settings->wifi_ssid);
+    }
+    if (error == ESP_OK) {
+        error = nvs_set_str(handle, WATCHY_WIFI_CREDENTIAL_PASSWORD_KEY,
+                            settings->wifi_password);
+    }
     if (error == ESP_OK) error = nvs_set_u16(handle, "partial", settings->partial_refresh_limit);
     if (error == ESP_OK) error = nvs_set_str(handle, "ntp", settings->ntp_server);
     if (error == ESP_OK) error = nvs_commit(handle);

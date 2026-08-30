@@ -92,7 +92,11 @@ static int test_wake_cause_mapping_distinguishes_hardware_sources(void) {
           WATCHY_WAKE_OTHER);
     CHECK(watchy_power_map_wake(WATCHY_RAW_WAKE_EXT1, back | motion) == WATCHY_WAKE_BUTTON);
     CHECK(watchy_power_map_wake(WATCHY_RAW_WAKE_EXT1, 0) == WATCHY_WAKE_OTHER);
-    CHECK(watchy_power_map_wake(WATCHY_RAW_WAKE_TIMER, 0) == WATCHY_WAKE_OTHER);
+    CHECK(watchy_power_map_wake(WATCHY_RAW_WAKE_TIMER, 0) == WATCHY_WAKE_TIMER);
+    CHECK(watchy_power_safe_mode_chord_allowed(WATCHY_WAKE_COLD));
+    CHECK(watchy_power_safe_mode_chord_allowed(WATCHY_WAKE_OTHER));
+    CHECK(!watchy_power_safe_mode_chord_allowed(WATCHY_WAKE_RTC));
+    CHECK(!watchy_power_safe_mode_chord_allowed(WATCHY_WAKE_TIMER));
     return 0;
 }
 
@@ -179,6 +183,22 @@ static int test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets(vo
     return 0;
 }
 
+static int test_pcf8563_alarm_encodes_documented_next_match_fields(void) {
+    uint8_t alarm[4] = {0};
+    watchy_time_t time = {
+        .year = 2037, .month = 11, .day = 31, .hour = 23, .minute = 45,
+        .second = 59, .weekday = 2, .utc_offset_minutes = 420,
+    };
+    CHECK(watchy_pcf8563_alarm_encode(&time, alarm) == WATCHY_STATUS_OK);
+    CHECK(alarm[0] == 0x45u);
+    CHECK(alarm[1] == 0x23u);
+    CHECK(alarm[2] == 0x31u);
+    CHECK(alarm[3] == 0x02u);
+    time.weekday = 7u;
+    CHECK(watchy_pcf8563_alarm_encode(&time, alarm) == WATCHY_STATUS_INVALID_ARGUMENT);
+    return 0;
+}
+
 static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
     watchy_sleep_requirements_t requirements = {
         .timer_configured = true,
@@ -219,6 +239,18 @@ static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
     CHECK(!watchy_power_sleep_allowed(&requirements));
     requirements.ext1_configured = true;
     requirements.sources_inactive = false;
+    CHECK(!watchy_power_sleep_allowed(&requirements));
+
+    requirements = (watchy_sleep_requirements_t){
+        .radios_stopped = true,
+        .motor_off = true,
+        .display_hibernated = true,
+        .ext1_configured = true,
+        .sources_inactive = true,
+        .button_only = true,
+    };
+    CHECK(watchy_power_sleep_allowed(&requirements));
+    requirements.ext0_configured = true;
     CHECK(!watchy_power_sleep_allowed(&requirements));
 
     CHECK(!watchy_power_wake_sources_observe(&filter, UINT64_C(1) << WATCHY_PIN_BUTTON_BACK));
@@ -274,11 +306,12 @@ int main(void) {
     CHECK(test_ssd1681_busy_is_active_high_and_requires_settling() == 0);
     CHECK(test_display_retained_state_controls_boot_refresh_and_commits_only_on_success() == 0);
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
+    CHECK(test_pcf8563_alarm_encodes_documented_next_match_fields() == 0);
     CHECK(test_sleep_admission_and_wake_source_debounce_are_fail_closed() == 0);
     CHECK(test_motor_pin_is_retained_low_instead_of_generically_released() == 0);
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 13 HAL tests");
+    puts("PASS 14 HAL tests");
     return 0;
 }

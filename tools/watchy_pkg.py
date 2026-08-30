@@ -603,6 +603,8 @@ def build_package(manifest_path: Path, elf_path: Path, assets_path: Path, output
     package = bytearray(header + manifest_bytes + elf + asset_bytes)
     package[DIGEST_OFFSET:DIGEST_OFFSET + 32] = hashlib.sha256(package).digest()
     info = verify_package(bytes(package))
+    if output_path.is_symlink():
+        fail("symlink", "destination symlink is forbidden")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:

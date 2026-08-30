@@ -41,9 +41,11 @@ repeated incomplete attempts can quarantine a package.
 
 Callbacks are synchronous and must not retain kernel canvas/event pointers.
 The package task has a cumulative 4000 ms callback budget against the system
-watchdog. Avoid blocking; asynchronous Wi-Fi/BLE requests return request IDs
-whose status packages must poll through `Network::status` or
-`Bluetooth::status`. The v1 firmware does not deliver radio completion events.
+watchdog. Avoid blocking; asynchronous Wi-Fi/BLE requests remain pending until
+the underlying radio reaches a terminal state and fail on the bounded host
+deadline. Cancellation rolls back a started operation, and session teardown
+stops package-owned radios. Packages poll request IDs through `Network::status`
+or `Bluetooth::status`; ABI 1.1 does not deliver radio completion events.
 
 ## Events
 
@@ -74,6 +76,12 @@ The manifest bitmask requests only the services a package uses:
 A capability can still return `UNSUPPORTED` if unavailable in the current
 hardware/session state. Capabilities are API organization, not native-code
 isolation. Packages must never call ESP-IDF symbols directly.
+
+`Clock::set_alarm` exposes the PCF8563's available next-match alarm: the RTC
+matches the supplied minute, hour, day-of-month, and weekday fields. Year,
+month, seconds, and UTC-offset fields must still form a valid `watchy_time_t`
+but are otherwise ignored. This is not an absolute timestamp alarm; callers
+must choose four fields that describe an intentional future match.
 
 ## Canvas and refresh
 
@@ -108,7 +116,7 @@ Use fixed/static storage and explicit POD ownership. Across the ABI boundary:
 The template compiles with hidden visibility, `-fno-exceptions`, `-fno-rtti`,
 `-fno-builtin`, section garbage collection, a loader-compatible linker script,
 and Espressif `project_so`. Its post-build finalizer sets ELF `e_entry` to the
-sole exported entry point because `project_so` 1.3.x emits shared objects with
+sole exported entry point because the pinned `project_so` 1.3.3 emits shared objects with
 entry zero. The sample build also audits generated ELFs for unresolved symbols
 before packaging.
 

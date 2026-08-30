@@ -21,6 +21,52 @@ static int test_mutating_routes_require_the_exact_session_token(void) {
     return 0;
 }
 
+static int test_every_route_uses_an_out_of_band_basic_session_credential(void) {
+    static const char token[] = "00112233445566778899aabbccddeeff";
+    static const char authorization[] =
+        "Basic d2F0Y2h5OjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZm";
+    CHECK(!watchy_portal_basic_authorized(token, NULL));
+    CHECK(!watchy_portal_basic_authorized(token, "Basic"));
+    CHECK(!watchy_portal_basic_authorized(token,
+        "Basic d2F0Y2h5OjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZh"));
+    CHECK(!watchy_portal_basic_authorized(token,
+        "Bearer 00112233445566778899aabbccddeeff"));
+    CHECK(watchy_portal_basic_authorized(token, authorization));
+
+    watchy_portal_session_info_t info = {
+        .network_name = "Watchy-A1B2C3",
+        .network_secret = "temporary-pass",
+        .address = "192.168.4.1",
+        .token = "00112233445566778899aabbccddeeff",
+    };
+    char instructions[192];
+    CHECK(watchy_portal_format_watch_instructions(&info, instructions,
+                                                   sizeof(instructions)));
+    CHECK(strstr(instructions, "USER watchy\n") != NULL);
+    CHECK(strstr(instructions, "AUTH 0011223344556677\n") != NULL);
+    CHECK(strstr(instructions, "     8899aabbccddeeff\n") != NULL);
+    for (const char *line = instructions; line != NULL && *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        const size_t length = end == NULL ? strlen(line) : (size_t)(end - line);
+        CHECK(length <= 32u);
+        line = end == NULL ? NULL : end + 1u;
+    }
+    memset(info.network_name, 's', 32u);
+    info.network_name[32] = '\0';
+    info.network_secret[0] = '\0';
+    info.client_mode = true;
+    CHECK(watchy_portal_format_watch_instructions(&info, instructions,
+                                                   sizeof(instructions)));
+    CHECK(strstr(instructions, "SSID sssssssssssssssssssssssssss\n     sssss") != NULL);
+    for (const char *line = instructions; line != NULL && *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        const size_t length = end == NULL ? strlen(line) : (size_t)(end - line);
+        CHECK(length <= 32u);
+        line = end == NULL ? NULL : end + 1u;
+    }
+    return 0;
+}
+
 static int test_route_parser_accepts_only_exact_valid_components(void) {
     watchy_portal_route_t route;
 
@@ -33,6 +79,9 @@ static int test_route_parser_accepts_only_exact_valid_components(void) {
     CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
                                     "/api/v1/packages", &route));
     CHECK(route.action == WATCHY_PORTAL_ROUTE_UPLOAD);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
+                                    "/api/v1/wifi", &route));
+    CHECK(route.action == WATCHY_PORTAL_ROUTE_PROVISION_WIFI);
     CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
                                     "/api/v1/watchface/clock.simple/1.2.3/activate", &route));
     CHECK(route.action == WATCHY_PORTAL_ROUTE_ACTIVATE);
@@ -199,15 +248,31 @@ static int test_idle_deadline_is_activity_relative_and_overflow_safe(void) {
     return 0;
 }
 
+static int test_only_authenticated_activity_refreshes_idle_before_absolute_expiry(void) {
+    uint64_t last = 1000u;
+    CHECK(!watchy_portal_session_accept(1000u, last, 2000u, false, &last));
+    CHECK(last == 1000u);
+    CHECK(watchy_portal_session_accept(1000u, last, 2000u, true, &last));
+    CHECK(last == 2000u);
+    CHECK(!watchy_portal_session_accept(
+        1000u, last, 1000u + WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS, true, &last));
+    CHECK(last == 2000u);
+    CHECK(!watchy_portal_session_accept(
+        UINT64_MAX - 100u, UINT64_MAX - 50u, 25u, false, &last));
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     failures += test_mutating_routes_require_the_exact_session_token();
+    failures += test_every_route_uses_an_out_of_band_basic_session_credential();
     failures += test_route_parser_accepts_only_exact_valid_components();
     failures += test_upload_policy_enforces_content_size_battery_storage_and_exclusion();
     failures += test_package_failures_map_to_stable_public_errors();
     failures += test_ap_password_generation_brackets_a_guaranteed_entropy_source();
     failures += test_upload_transport_and_storage_failures_have_distinct_public_errors();
     failures += test_idle_deadline_is_activity_relative_and_overflow_safe();
+    failures += test_only_authenticated_activity_refreshes_idle_before_absolute_expiry();
     if (failures == 0) {
         puts("portal tests passed");
     }

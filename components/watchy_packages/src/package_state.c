@@ -268,6 +268,10 @@ watchy_package_status_t watchy_package_index_init(watchy_package_index_manager_t
         memset(&manager->index, 0, sizeof(manager->index));
         manager->index.magic = WATCHY_PACKAGE_INDEX_MAGIC;
         manager->index.version = WATCHY_PACKAGE_INDEX_VERSION;
+        if (!store->save(store->context, &manager->index)) {
+            memset(manager, 0, sizeof(*manager));
+            return WATCHY_PACKAGE_ERR_STORE;
+        }
     }
     manager->store = *store;
     manager->initialized = true;
@@ -479,4 +483,32 @@ watchy_package_status_t watchy_package_unregister(watchy_package_index_manager_t
         memset(next->prior_watchface, 0, sizeof(next->prior_watchface));
     }
     return commit_index(manager, next);
+}
+
+watchy_package_status_t watchy_package_index_clear(watchy_package_index_manager_t *manager) {
+    watchy_package_index_t *next;
+    if (check_manager(manager) != WATCHY_PACKAGE_OK) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    next = &manager->scratch;
+    memset(next, 0, sizeof(*next));
+    next->magic = WATCHY_PACKAGE_INDEX_MAGIC;
+    next->version = WATCHY_PACKAGE_INDEX_VERSION;
+    return commit_index(manager, next);
+}
+
+bool watchy_package_index_has_id(const watchy_package_index_manager_t *manager,
+                                 const char *identifier) {
+    size_t identifier_length;
+    if (manager == NULL || !manager->initialized || !watchy_package_id_valid(identifier)) {
+        return false;
+    }
+    identifier_length = strlen(identifier);
+    for (size_t record = 0u; record < manager->index.installed_count; ++record) {
+        if (strncmp(manager->index.installed[record], identifier, identifier_length) == 0 &&
+            manager->index.installed[record][identifier_length] == '@') {
+            return true;
+        }
+    }
+    return false;
 }
