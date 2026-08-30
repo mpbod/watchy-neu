@@ -35,7 +35,7 @@ The compositor owns three 200 x 200 monochrome buffers:
 
 Each buffer is 5,000 bytes at the existing 25-byte stride. Buffers are statically kernel-owned and are never allocated or owned across the WPK ABI.
 
-Source retention lasts only for an interactive wake session. RTC, timer, and motion-sensor wakes render the target directly unless a source is established during the resulting interactive session. The subsystem does not reserve RTC memory for a framebuffer.
+The compositor reuses the display driver's existing RTC-retained previous framebuffer when it is valid and adds no second RTC framebuffer. RTC, timer, and motion-sensor wakes still render the target directly unless an interactive session follows; retained state on its own does not authorize optional motion on an unattended wake.
 
 Only one transition may be active. Display completion determines cadence; the compositor adds no fixed 220 ms delay. The 220 ms value in the handoff is a browser demonstration value, not a firmware timer requirement.
 

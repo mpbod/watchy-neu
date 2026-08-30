@@ -44,7 +44,7 @@ Up and Down wrap through the current list. Menu opens or activates the selected 
 Selecting Watchface opens a list containing:
 
 1. Hairline, identified as `BUILT-IN`;
-2. every installed non-quarantined WPK whose manifest type is `watchface`.
+2. every installed WPK whose manifest type is `watchface`, including quarantined entries shown as disabled.
 
 The selector reuses the Menu's header, three-row viewport, inversion, type hierarchy, and right rail. Each WPK row uses the manifest display name as its primary label and `ACTIVE`, `PENDING`, `QUARANTINED`, or its semantic version as metadata. Quarantined packages are visible but cannot be activated. The catalog API must therefore expose validated manifest name and version fields rather than showing only package references.
 
