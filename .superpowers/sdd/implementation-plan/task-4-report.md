@@ -78,8 +78,9 @@ Production changes were preceded by focused failing host cases:
    cycles remain in safe mode until the explicit normal reboot action.
 9. The first clean guarded target build failed because `app_main` had a
    2,272-byte frame. The root cause was the automatic 16-entry package catalog;
-   moving that serialized kernel object to static storage reduced the final
-   `app_main` frame to 848 bytes.
+   moving that serialized kernel object to static storage reduced the frame at
+   that checkpoint to 848 bytes. Subsequent reviewed functionality brought the
+   final frame to 1,056 bytes, still below the 2,048-byte guard.
 10. Review regression: a package that exited during `start` first made the
     watchface cycle report success without a render. Green requires one
     successful runner render (which includes display refresh) and successful
@@ -111,8 +112,9 @@ Production changes were preceded by focused failing host cases:
     and generates each 128-bit mutation token after Wi-Fi startup.
 16. Review regression: receive and staging/write/finalize failures first
     collapsed to HTTP 400 or `invalid_package`. Green distinguishes client
-    receive 400, package validation 422, conflicts/battery 409, and storage
-    probe/stage/write/fsync/close 507 with stable public JSON codes.
+    receive 400, ordinary package validation 422, package-size limits 413,
+    conflicts/battery 409, and storage probe/stage/write/fsync/close 507 with
+    stable public JSON codes.
 
 Final host command:
 
