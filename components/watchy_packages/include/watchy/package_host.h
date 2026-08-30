@@ -51,6 +51,13 @@ typedef watchy_status_t (*watchy_package_async_execute_fn_t)(void *context,
                                                              uint32_t operation);
 typedef watchy_async_status_t (*watchy_package_async_observe_fn_t)(void *context,
                                                                    uint32_t operation);
+typedef bool (*watchy_package_readable_fn_t)(void *context,
+                                             const void *address,
+                                             size_t size);
+typedef watchy_status_t (*watchy_package_present_fn_t)(
+    void *context,
+    watchy_refresh_mode_t mode,
+    const watchy_transition_request_v1_t *request);
 
 typedef struct {
     uint32_t capabilities;
@@ -63,6 +70,8 @@ typedef struct {
     bool canvas_acquired;
     watchy_package_callback_budget_t callback_budget;
     watchy_package_transition_latch_t transition;
+    watchy_package_readable_fn_t request_readable;
+    void *request_readable_context;
     watchy_request_id_t next_request_id;
     watchy_package_async_slot_t network_request;
     watchy_package_async_slot_t bluetooth_request;
@@ -116,6 +125,15 @@ watchy_status_t watchy_package_transition_latch(
 /* A NULL output discards the occupied request for teardown. */
 bool watchy_package_transition_take(watchy_package_transition_latch_t *latch,
                                     watchy_transition_request_v1_t *out_request);
+void watchy_package_transition_bind(watchy_package_host_context_t *context,
+                                    watchy_package_readable_fn_t readable,
+                                    void *readable_context);
+watchy_status_t watchy_package_transition_present_after_render(
+    watchy_package_transition_latch_t *latch,
+    bool render_accepted,
+    watchy_refresh_mode_t mode,
+    watchy_package_present_fn_t present,
+    void *present_context);
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,
                                                         bool refresh_requested,
                                                         bool refresh_ok,

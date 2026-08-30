@@ -270,6 +270,61 @@ bool watchy_package_transition_take(watchy_package_transition_latch_t *latch,
     return true;
 }
 
+static watchy_status_t host_request_transition(
+    void *opaque, const watchy_transition_request_v1_t *request) {
+    watchy_package_host_context_t *context = opaque;
+    if (context == NULL || !context->callback_budget.active) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (context->request_readable == NULL ||
+        !context->request_readable(context->request_readable_context,
+                                   request, sizeof(*request))) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    return watchy_package_transition_latch(&context->transition, request);
+}
+
+void watchy_package_transition_bind(watchy_package_host_context_t *context,
+                                    watchy_package_readable_fn_t readable,
+                                    void *readable_context) {
+    if (context == NULL) {
+        return;
+    }
+    context->request_readable = readable;
+    context->request_readable_context = readable_context;
+    context->system.context = context;
+    context->system.request_transition = host_request_transition;
+}
+
+watchy_status_t watchy_package_transition_present_after_render(
+    watchy_package_transition_latch_t *latch,
+    bool render_accepted,
+    watchy_refresh_mode_t mode,
+    watchy_package_present_fn_t present,
+    void *present_context) {
+    watchy_transition_request_v1_t request;
+    bool requested;
+    watchy_status_t status;
+
+    if (latch == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (!render_accepted) {
+        (void)watchy_package_transition_take(latch, NULL);
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (present == NULL) {
+        (void)watchy_package_transition_take(latch, NULL);
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    requested = watchy_package_transition_take(latch, &request);
+    status = present(present_context, mode, requested ? &request : NULL);
+    if (requested && status == WATCHY_STATUS_INVALID_ARGUMENT) {
+        status = present(present_context, mode, NULL);
+    }
+    return status;
+}
+
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,
                                                         bool refresh_requested,
                                                         bool refresh_ok,

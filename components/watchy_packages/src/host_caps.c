@@ -52,6 +52,11 @@ static bool target_range(const void *address, size_t size, bool writable) {
     return true;
 }
 
+static bool host_request_readable(void *context, const void *address, size_t size) {
+    (void)context;
+    return target_range(address, size, false);
+}
+
 static bool permitted(const watchy_package_host_context_t *context, uint32_t capability) {
     return context != NULL && (context->capabilities & capability) != 0u;
 }
@@ -632,15 +637,6 @@ static watchy_status_t host_system_refresh(void *opaque, watchy_refresh_mode_t m
     return WATCHY_STATUS_OK;
 }
 
-static watchy_status_t host_request_transition(
-    void *opaque, const watchy_transition_request_v1_t *request) {
-    watchy_package_host_context_t *context = opaque;
-    if (context == NULL || !context->callback_budget.active) {
-        return WATCHY_STATUS_INVALID_STATE;
-    }
-    return watchy_package_transition_latch(&context->transition, request);
-}
-
 static void host_system_log(void *opaque, const char *message) {
     if (!permitted((watchy_package_host_context_t *)opaque, WATCHY_CAP_SYSTEM) ||
         !bounded_string(message, WATCHY_PACKAGE_LOG_MAX, NULL)) {
@@ -735,8 +731,9 @@ watchy_package_status_t watchy_package_host_init(watchy_package_host_context_t *
         .log = host_system_log,
         .request_exit = host_system_exit,
         .request_refresh = host_system_refresh,
-        .request_transition = host_request_transition,
+        .request_transition = NULL,
     };
+    watchy_package_transition_bind(context, host_request_readable, NULL);
     context->host = (watchy_host_caps_v1_t){
         .abi = {.major = WATCHY_ABI_V1_MAJOR, .minor = WATCHY_ABI_V1_MINOR},
         .size = sizeof(watchy_host_caps_v1_t),

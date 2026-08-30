@@ -877,6 +877,127 @@ static int test_transition_latch_rejects_invalid_requests_without_occupying(void
     return 0;
 }
 
+typedef struct {
+    const void *address;
+    size_t size;
+    unsigned calls;
+    bool readable;
+} transition_readable_probe_t;
+
+static bool transition_request_readable(void *opaque, const void *address, size_t size) {
+    transition_readable_probe_t *probe = opaque;
+    probe->address = address;
+    probe->size = size;
+    ++probe->calls;
+    return probe->readable;
+}
+
+static int test_transition_callback_admits_only_readable_active_requests(void) {
+    watchy_package_host_context_t context = {0};
+    watchy_transition_request_v1_t valid = valid_package_transition_request();
+    watchy_transition_request_v1_t unreadable = {.size = 0u};
+    transition_readable_probe_t probe = {0};
+
+    watchy_package_transition_bind(&context, transition_request_readable, &probe);
+    CHECK(context.system.context == &context);
+    CHECK(context.system.request_transition != NULL);
+    CHECK(context.system.request_transition(NULL, &valid) == WATCHY_STATUS_INVALID_STATE);
+    CHECK(context.system.request_transition(context.system.context, &valid) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(probe.calls == 0u);
+
+    watchy_package_callback_budget_begin(&context.callback_budget, 10u);
+    CHECK(context.system.request_transition(context.system.context, &unreadable) ==
+          WATCHY_STATUS_INVALID_ARGUMENT);
+    CHECK(probe.calls == 1u);
+    CHECK(probe.address == &unreadable && probe.size == sizeof(unreadable));
+    CHECK(!context.transition.occupied);
+
+    probe.readable = true;
+    CHECK(context.system.request_transition(context.system.context, &valid) ==
+          WATCHY_STATUS_OK);
+    CHECK(context.system.request_transition(context.system.context, &valid) ==
+          WATCHY_STATUS_BUSY);
+    CHECK(probe.calls == 3u);
+    return 0;
+}
+
+typedef struct {
+    watchy_status_t status[2];
+    const watchy_transition_request_v1_t *request[2];
+    watchy_transition_effect_t effect;
+    watchy_refresh_mode_t mode[2];
+    unsigned calls;
+} transition_present_probe_t;
+
+static watchy_status_t transition_present(void *opaque,
+                                          watchy_refresh_mode_t mode,
+                                          const watchy_transition_request_v1_t *request) {
+    transition_present_probe_t *probe = opaque;
+    const unsigned call = probe->calls++;
+    CHECK(call < 2u);
+    probe->request[call] = request;
+    probe->mode[call] = mode;
+    if (request != NULL) {
+        probe->effect = request->effect;
+    }
+    return probe->status[call];
+}
+
+static int test_transition_render_failure_discards_without_presenting(void) {
+    watchy_package_transition_latch_t latch = {0};
+    watchy_transition_request_v1_t valid = valid_package_transition_request();
+    watchy_transition_request_v1_t taken;
+    transition_present_probe_t probe = {0};
+
+    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_after_render(
+              &latch, false, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(probe.calls == 0u);
+    CHECK(!watchy_package_transition_take(&latch, &taken));
+    return 0;
+}
+
+static int test_transition_present_consumes_once_and_only_falls_back_on_rejection(void) {
+    watchy_package_transition_latch_t latch = {0};
+    const watchy_transition_request_v1_t valid = valid_package_transition_request();
+    transition_present_probe_t probe = {.status = {WATCHY_STATUS_OK, WATCHY_STATUS_OK}};
+
+    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_after_render(
+              &latch, true, WATCHY_REFRESH_FULL, transition_present, &probe) ==
+          WATCHY_STATUS_OK);
+    CHECK(probe.calls == 1u && probe.request[0] != NULL);
+    CHECK(probe.effect == valid.effect && probe.mode[0] == WATCHY_REFRESH_FULL);
+
+    probe = (transition_present_probe_t){.status = {WATCHY_STATUS_INVALID_ARGUMENT,
+                                                    WATCHY_STATUS_OK}};
+    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_after_render(
+              &latch, true, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
+          WATCHY_STATUS_OK);
+    CHECK(probe.calls == 2u);
+    CHECK(probe.request[0] != NULL && probe.request[1] == NULL);
+
+    probe = (transition_present_probe_t){.status = {WATCHY_STATUS_INVALID_STATE,
+                                                    WATCHY_STATUS_OK}};
+    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_after_render(
+              &latch, true, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(probe.calls == 1u);
+
+    probe = (transition_present_probe_t){.status = {WATCHY_STATUS_INVALID_ARGUMENT,
+                                                    WATCHY_STATUS_INVALID_STATE}};
+    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_after_render(
+              &latch, true, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(probe.calls == 2u);
+    return 0;
+}
+
 static bool ensure_watchdog(void *context) {
     return *(const bool *)context;
 }
@@ -2014,6 +2135,9 @@ int main(void) {
     CHECK(test_callback_budget_stops_repeated_sleeps_and_watchdog_feeds() == 0);
     CHECK(test_transition_latch_copies_one_request_and_consumes_it_once() == 0);
     CHECK(test_transition_latch_rejects_invalid_requests_without_occupying() == 0);
+    CHECK(test_transition_callback_admits_only_readable_active_requests() == 0);
+    CHECK(test_transition_render_failure_discards_without_presenting() == 0);
+    CHECK(test_transition_present_consumes_once_and_only_falls_back_on_rejection() == 0);
     CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
@@ -2034,6 +2158,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 42 package tests");
+    puts("PASS 45 package tests");
     return 0;
 }

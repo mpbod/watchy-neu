@@ -1031,10 +1031,18 @@ watchy_package_status_t watchy_packages_runner_event(const watchy_event_t *event
     return status;
 }
 
+static watchy_status_t runner_display_present(
+    void *context,
+    watchy_refresh_mode_t mode,
+    const watchy_transition_request_v1_t *request) {
+    (void)context;
+    return watchy_display_present(mode, request);
+}
+
 watchy_package_status_t watchy_packages_runner_render(void) {
     watchy_canvas_t canvas;
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
-    watchy_transition_request_v1_t transition;
+    watchy_status_t display_status;
     watchy_package_status_t status;
     if (watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
         xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
@@ -1055,16 +1063,10 @@ watchy_package_status_t watchy_packages_runner_render(void) {
     if (status == WATCHY_PACKAGE_OK && s_runner.host.canvas_acquired) {
         status = WATCHY_PACKAGE_ERR_CALLBACK;
     }
+    display_status = watchy_package_transition_present_after_render(
+        &s_runner.host.transition, status == WATCHY_PACKAGE_OK, mode,
+        runner_display_present, NULL);
     if (status == WATCHY_PACKAGE_OK) {
-        const bool transition_requested =
-            watchy_package_transition_take(&s_runner.host.transition, &transition);
-        watchy_status_t display_status = watchy_display_present(
-            mode, transition_requested ? &transition : NULL);
-        /* Presentation policy may reject an otherwise valid optional request.
-         * The rendered target still receives the kernel-owned Cut path. */
-        if (transition_requested && display_status == WATCHY_STATUS_INVALID_ARGUMENT) {
-            display_status = watchy_display_present(mode, NULL);
-        }
         if (display_status == WATCHY_STATUS_OK) {
             s_runner.rendered = true;
             if (s_runner.pending) {
