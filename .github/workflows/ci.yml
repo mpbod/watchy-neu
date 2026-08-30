@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure host tests
+        run: cmake -S . -B build/host -G Ninja
+      - name: Build host tests
+        run: cmake --build build/host
+      - name: Run C and C++ tests
+        run: ctest --test-dir build/host --output-on-failure
+      - name: Run Python tooling tests
+        run: python3 -m unittest discover -s tests/python -v
+
+  esp-idf-5-5:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Watchy 2.0 firmware
+        shell: bash
+        run: idf.py set-target esp32 && idf.py build
+      - name: Build and package SDK samples
+        shell: bash
+        run: python3 tools/build_samples.py --output-dir build/sample-wpk

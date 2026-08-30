@@ -1,0 +1,16 @@
+{
+  "abi_major": 1,
+  "abi_minor": 1,
+  "assets": [
+    {
+      "path": "probe.bin",
+      "size": 5
+    }
+  ],
+  "capabilities": 1023,
+  "id": "sample.hardware",
+  "max_runtime_bytes": 24576,
+  "name": "Hardware Demo",
+  "type": "app",
+  "version": "1.0.0"
+}

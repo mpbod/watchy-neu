@@ -1,6 +1,12 @@
 /build/
 /build-host/
 /.pio/
+/samples/*/.pio/
+/samples/*/managed_components/
+/samples/*/dependencies.lock
+/samples/*/sdkconfig.package
+/samples/*/sdkconfig
+/samples/*/sdkconfig.old
 /sdkconfig.watchy_v2
 /.cache/
 /.superpowers/
@@ -12,3 +18,4 @@ __pycache__/
 *.pyc
 *.wpk
 *.elf
+!sdk/ld/*.o

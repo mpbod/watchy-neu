@@ -1,0 +1,11 @@
+{
+  "abi_major": 1,
+  "abi_minor": 1,
+  "assets": [],
+  "capabilities": 1,
+  "id": "example.package",
+  "max_runtime_bytes": 8192,
+  "name": "Example package",
+  "type": "watchface",
+  "version": "1.0.0"
+}

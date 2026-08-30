@@ -123,3 +123,20 @@ target_include_directories(watchy_elf_fixture_validator PRIVATE
 )
 target_compile_features(watchy_elf_fixture_validator PRIVATE c_std_11)
 target_compile_options(watchy_elf_fixture_validator PRIVATE -Wall -Wextra -Werror)
+
+add_executable(watchy_wpk_fixture_validator
+  validate_wpk_fixture.c
+  ../../components/watchy_packages/src/package_format.c
+  ../../components/watchy_packages/src/elf_validate.c
+  ../../components/watchy_packages/src/package_validate.c
+  ../../components/watchy_packages/src/sha256.c
+  ../../components/watchy_core/src/wpk.c
+  ../../components/watchy_core/src/runtime.c
+)
+target_include_directories(watchy_wpk_fixture_validator PRIVATE
+  ../../components/watchy_packages/include
+  ../../components/watchy_core/include
+  ../../sdk/include
+)
+target_compile_features(watchy_wpk_fixture_validator PRIVATE c_std_11)
+target_compile_options(watchy_wpk_fixture_validator PRIVATE -Wall -Wextra -Werror)
