@@ -44,11 +44,15 @@ static watchy_event_t pressed(watchy_button_t button) {
     return value;
 }
 
-static int exercise_sample(uint16_t abi_minor, Probe *probe, bool expect_requests) {
+static int exercise_sample(uint16_t abi_minor,
+                           Probe *probe,
+                           bool expect_requests,
+                           bool transition_callback_available) {
     watchy_clock_api_v1_t clock = {probe, probe_clock, nullptr};
     watchy_battery_api_v1_t battery = {nullptr, unavailable_battery};
     watchy_system_api_v1_t system = {
-        probe, nullptr, nullptr, nullptr, nullptr, nullptr, capture_transition,
+        probe, nullptr, nullptr, nullptr, nullptr, nullptr,
+        transition_callback_available ? capture_transition : nullptr,
     };
     watchy_host_caps_v1_t host{};
     unsigned char pixels[200u * 25u]{};
@@ -128,14 +132,18 @@ static int exercise_service_failure() {
 
 int main() {
     Probe supported;
-    CHECK(exercise_sample(WATCHY_ABI_V1_MINOR, &supported, true) == 0);
+    CHECK(exercise_sample(WATCHY_ABI_V1_MINOR, &supported, true, true) == 0);
 
     Probe unsupported;
     unsupported.request_status = WATCHY_STATUS_UNSUPPORTED;
-    CHECK(exercise_sample(WATCHY_ABI_V1_MINOR, &unsupported, true) == 0);
+    CHECK(exercise_sample(WATCHY_ABI_V1_MINOR, &unsupported, true, true) == 0);
 
     Probe abi_v11;
-    CHECK(exercise_sample(1u, &abi_v11, false) == 0);
+    CHECK(exercise_sample(1u, &abi_v11, false, true) == 0);
+
+    Probe abi_v12_without_transition_callback;
+    CHECK(exercise_sample(WATCHY_ABI_V1_MINOR, &abi_v12_without_transition_callback,
+                          false, false) == 0);
     CHECK(exercise_service_failure() == 0);
 
     std::puts("PASS digital sample optional attended transition request");

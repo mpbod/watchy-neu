@@ -8,7 +8,7 @@
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
-        std::fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #expr); \
+        std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
         return 1; \
     } \
 } while (0)
@@ -44,15 +44,27 @@ struct SystemV10Prefix {
     void (*log)(void *context, const char *message);
 };
 
+struct SystemV11Prefix {
+    void *context;
+    std::uint32_t (*millis)(void *context);
+    void (*sleep_ms)(void *context, std::uint32_t duration_ms);
+    void (*log)(void *context, const char *message);
+    watchy_status_t (*request_exit)(void *context);
+    watchy_status_t (*request_refresh)(void *context, watchy_refresh_mode_t mode);
+};
+
 static_assert(offsetof(watchy_network_api_v1_t, request) == sizeof(NetworkV10Prefix),
               "ABI 1.0 C++ network prefix changed");
 static_assert(offsetof(watchy_bluetooth_api_v1_t, request) == sizeof(BluetoothV10Prefix),
               "ABI 1.0 C++ Bluetooth prefix changed");
 static_assert(offsetof(watchy_system_api_v1_t, request_exit) == sizeof(SystemV10Prefix),
               "ABI 1.0 C++ system prefix changed");
+static_assert(offsetof(watchy_system_api_v1_t, request_transition) == sizeof(SystemV11Prefix),
+              "ABI 1.1 C++ system prefix changed");
 static_assert(WATCHY_ABI_V1_MINOR == 2u, "ABI minor must be 1.2");
 static_assert(WATCHY_TRANSITION_CUT == 0, "stable effect value");
 static_assert(WATCHY_STATUS_BUSY == -5, "stable busy status value");
+static_assert(WATCHY_STATUS_CANCELLED == -6, "stable cancelled status value");
 static_assert(sizeof(((watchy_system_api_v1_t *)0)->request_transition) == sizeof(void *),
               "system API exposes transition request");
 

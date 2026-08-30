@@ -32,15 +32,28 @@ typedef struct {
     void (*log)(void *context, const char *message);
 } system_v1_0_prefix_t;
 
+typedef struct {
+    void *context;
+    uint32_t (*millis)(void *context);
+    void (*sleep_ms)(void *context, uint32_t duration_ms);
+    void (*log)(void *context, const char *message);
+    watchy_status_t (*request_exit)(void *context);
+    watchy_status_t (*request_refresh)(void *context, watchy_refresh_mode_t mode);
+} system_v1_1_prefix_t;
+
 _Static_assert(offsetof(watchy_network_api_v1_t, request) == sizeof(network_v1_0_prefix_t),
                "ABI 1.0 network prefix changed");
 _Static_assert(offsetof(watchy_bluetooth_api_v1_t, request) == sizeof(bluetooth_v1_0_prefix_t),
                "ABI 1.0 Bluetooth prefix changed");
 _Static_assert(offsetof(watchy_system_api_v1_t, request_exit) == sizeof(system_v1_0_prefix_t),
                "ABI 1.0 system prefix changed");
+_Static_assert(offsetof(watchy_system_api_v1_t, request_transition) ==
+                   sizeof(system_v1_1_prefix_t),
+               "ABI 1.1 system prefix changed");
 _Static_assert(WATCHY_ABI_V1_MINOR == 2u, "ABI minor must be 1.2");
 _Static_assert(WATCHY_TRANSITION_CUT == 0, "stable effect value");
 _Static_assert(WATCHY_STATUS_BUSY == -5, "stable busy status value");
+_Static_assert(WATCHY_STATUS_CANCELLED == -6, "stable cancelled status value");
 _Static_assert(sizeof(((watchy_system_api_v1_t *)0)->request_transition) == sizeof(void *),
                "system API exposes transition request");
 

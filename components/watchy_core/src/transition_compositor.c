@@ -77,6 +77,9 @@ static bool valid_plan(const watchy_transition_plan_t *plan, clipped_rect_t *rec
                plan->rect.width == WATCHY_TRANSITION_CANVAS_WIDTH &&
                plan->rect.height == WATCHY_TRANSITION_CANVAS_HEIGHT;
     }
+    if (plan->effect == WATCHY_TRANSITION_FILL) {
+        return plan->write_count == 4u || plan->write_count == 5u;
+    }
     return plan->write_count == count;
 }
 
@@ -364,6 +367,36 @@ watchy_status_t watchy_transition_compose_frame(const watchy_transition_plan_t *
     case WATCHY_TRANSITION_SHUTTER:
         compose_shutter(frame_index, out, rect);
         break;
+    }
+    return WATCHY_STATUS_OK;
+}
+
+watchy_status_t watchy_transition_resolve_plan(const watchy_transition_plan_t *plan,
+                                              const uint8_t *source,
+                                              const uint8_t *target,
+                                              uint8_t *scratch,
+                                              size_t size,
+                                              watchy_transition_plan_t *out_plan) {
+    watchy_transition_plan_t fill_plan;
+
+    if (plan == NULL || out_plan == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_plan = *plan;
+    if (plan->effect != WATCHY_TRANSITION_FILL) {
+        return WATCHY_STATUS_OK;
+    }
+
+    fill_plan = *plan;
+    fill_plan.write_count = 5u;
+    if (watchy_transition_compose_frame(&fill_plan, 3u, source, target, scratch, size) !=
+        WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    out_plan->write_count =
+        memcmp(scratch, target, WATCHY_TRANSITION_FRAME_BYTES) == 0 ? 4u : 5u;
+    if (plan->write_count == 4u && out_plan->write_count != 4u) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     return WATCHY_STATUS_OK;
 }

@@ -246,6 +246,17 @@ static void select_settings(watchy_shell_t *shell) {
     }
 }
 
+watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection) {
+    if (selection >= 8u) {
+        return (watchy_transition_rect_t){0};
+    }
+    return (watchy_transition_rect_t){4, (int16_t)(30 + selection * 21), 192, 15};
+}
+
+watchy_transition_rect_t watchy_shell_sync_progress_rect(void) {
+    return (watchy_transition_rect_t){4, 75, 192, 19};
+}
+
 bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t *change,
                                         watchy_transition_request_v1_t *out_request) {
     if (change == NULL || out_request == NULL) {
@@ -259,9 +270,18 @@ bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t 
     };
     if (change->safe_mode || change->from == WATCHY_SHELL_SAFE_MODE ||
         change->to == WATCHY_SHELL_SAFE_MODE) {
-        return true;
+        return watchy_transition_validate(out_request) == WATCHY_STATUS_OK;
     }
-    if (change->saved) {
+    if (change->sync_progress || change->saved) {
+        if (!change->has_rect) {
+            return false;
+        }
+        out_request->flags = WATCHY_TRANSITION_HAS_RECT;
+        out_request->rect = change->rect;
+    }
+    if (change->sync_progress) {
+        out_request->effect = WATCHY_TRANSITION_FILL;
+    } else if (change->saved) {
         out_request->effect = WATCHY_TRANSITION_FLASH;
     } else if (change->sleep_requested && change->input == WATCHY_SHELL_INPUT_BACK) {
         out_request->effect = WATCHY_TRANSITION_SPLIT;
@@ -275,24 +295,47 @@ bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t 
         out_request->effect = WATCHY_TRANSITION_PUSH;
         out_request->direction = WATCHY_TRANSITION_DIRECTION_LEFT;
     }
-    return true;
+    return watchy_transition_validate(out_request) == WATCHY_STATUS_OK;
 }
 
 void watchy_shell_presentation_observe(watchy_shell_presentation_state_t *state,
                                        watchy_shell_t *shell,
-                                       watchy_shell_presentation_outcome_t outcome) {
+                                       watchy_shell_presentation_outcome_t outcome,
+                                       watchy_button_mask_t cancelled_buttons) {
     const bool target_presented = outcome == WATCHY_SHELL_PRESENT_TARGET;
     if (state != NULL) {
         state->sleep_deferred = !target_presented;
+        if (outcome == WATCHY_SHELL_PRESENT_CANCELLED) {
+            const watchy_button_mask_t allowed =
+                WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_BACK |
+                WATCHY_BUTTON_MASK_DOWN | WATCHY_BUTTON_MASK_UP;
+            state->pending_buttons |= cancelled_buttons & allowed;
+        }
     }
     if (!target_presented && shell != NULL) {
         shell->sleep_requested = false;
     }
 }
 
+watchy_button_mask_t watchy_shell_presentation_take_cancelled_buttons(
+    watchy_shell_presentation_state_t *state) {
+    watchy_button_mask_t buttons;
+    if (state == NULL) {
+        return 0u;
+    }
+    buttons = state->pending_buttons;
+    state->pending_buttons = 0u;
+    return buttons;
+}
+
+bool watchy_shell_presentation_has_pending_input(
+    const watchy_shell_presentation_state_t *state) {
+    return state != NULL && state->pending_buttons != 0u;
+}
+
 bool watchy_shell_presentation_allows_sleep(
     const watchy_shell_presentation_state_t *state) {
-    return state != NULL && !state->sleep_deferred;
+    return state != NULL && !state->sleep_deferred && state->pending_buttons == 0u;
 }
 
 bool watchy_shell_presentation_needs_post_action(

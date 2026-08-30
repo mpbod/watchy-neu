@@ -76,6 +76,69 @@ void watchy_display_commit_refresh(watchy_display_retained_state_t *state,
     state->checksum = retained_checksum(state);
 }
 
+bool watchy_display_plan_requires_clear(const watchy_display_retained_state_t *state,
+                                        const watchy_transition_plan_t *plan,
+                                        watchy_refresh_mode_t target_requested,
+                                        uint16_t partial_limit) {
+    uint32_t partial_count;
+
+    if (!watchy_display_retained_valid(state) || plan == NULL || plan->write_count == 0u ||
+        plan->write_count > 5u || plan->mandatory_clear || partial_limit == 0u ||
+        (target_requested != WATCHY_REFRESH_PARTIAL &&
+         target_requested != WATCHY_REFRESH_FULL)) {
+        return false;
+    }
+    partial_count = state->partial_count;
+    for (uint8_t write = 0u; write < plan->write_count; ++write) {
+        const bool target_write = write + 1u == plan->write_count;
+        const bool full = target_write &&
+                          (plan->target_full || target_requested == WATCHY_REFRESH_FULL);
+
+        if (full) {
+            partial_count = 0u;
+        } else if (partial_count + 1u >= partial_limit) {
+            return true;
+        } else {
+            ++partial_count;
+        }
+    }
+    return false;
+}
+
+watchy_status_t watchy_display_execution_status(watchy_status_t execution_status,
+                                                const watchy_transition_result_t *result,
+                                                bool watchdog_feed_failed) {
+    if (watchdog_feed_failed || result == NULL) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (execution_status != WATCHY_STATUS_OK) {
+        return execution_status;
+    }
+    if (result->cancelled && result->source_valid) {
+        return WATCHY_STATUS_CANCELLED;
+    }
+    return result->completed && result->source_valid && result->last_frame_is_target
+               ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
+}
+
+watchy_button_mask_t watchy_display_new_button_mask(watchy_button_mask_t baseline,
+                                                    watchy_button_mask_t current) {
+    const watchy_button_mask_t allowed = WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_BACK |
+                                        WATCHY_BUTTON_MASK_DOWN | WATCHY_BUTTON_MASK_UP;
+    return (current & ~baseline) & allowed;
+}
+
+static watchy_transition_plan_t mandatory_clear_plan(void) {
+    return (watchy_transition_plan_t){
+        .effect = WATCHY_TRANSITION_CUT,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {0, 0, WATCHY_DISPLAY_WIDTH, WATCHY_DISPLAY_HEIGHT},
+        .write_count = 2u,
+        .target_full = true,
+        .mandatory_clear = true,
+    };
+}
+
 static watchy_status_t execute_physical_write(void *context,
                                               const uint8_t *frame,
                                               watchy_refresh_mode_t requested) {
@@ -127,6 +190,7 @@ watchy_status_t watchy_display_execute_plan(const watchy_transition_plan_t *plan
                                             const watchy_display_transition_io_t *io,
                                             watchy_transition_result_t *out_result) {
     display_plan_execution_t execution;
+    watchy_transition_plan_t execution_plan;
     const uint8_t *source;
 
     if (out_result == NULL) {
@@ -148,11 +212,24 @@ watchy_status_t watchy_display_execute_plan(const watchy_transition_plan_t *plan
     if (source != source_snapshot) {
         memcpy(source_snapshot, source, WATCHY_DISPLAY_FRAMEBUFFER_SIZE);
     }
+    execution_plan = *plan;
+    if (io->target_requested == WATCHY_REFRESH_FULL) {
+        execution_plan.target_full = true;
+    }
+    if (watchy_transition_resolve_plan(&execution_plan, source_snapshot, target, scratch, size,
+                                       &execution_plan) != WATCHY_STATUS_OK) {
+        out_result->failure_cause = WATCHY_TRANSITION_FAILURE_COMPOSE;
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (watchy_display_plan_requires_clear(io->retained, &execution_plan,
+                                           io->target_requested, io->partial_limit)) {
+        execution_plan = mandatory_clear_plan();
+    }
     execution = (display_plan_execution_t){
         .io = io,
-        .write_count = plan->write_count,
+        .write_count = execution_plan.write_count,
     };
-    return watchy_transition_execute(plan, source_snapshot, target, scratch, size,
+    return watchy_transition_execute(&execution_plan, source_snapshot, target, scratch, size,
                                      execute_physical_write, execute_cancel, execute_feed,
                                      &execution, out_result);
 }

@@ -61,21 +61,63 @@ static int test_shell_transition_mapping_returns_complete_safe_requests(void) {
         watchy_shell_transition_context_t change;
         watchy_transition_effect_t effect;
         watchy_transition_direction_t direction;
+        uint32_t flags;
+        watchy_transition_rect_t rect;
     } cases[] = {
-        {{WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER, WATCHY_SHELL_INPUT_MENU,
-          false, false, false}, WATCHY_TRANSITION_WIPE, WATCHY_TRANSITION_DIRECTION_NONE},
-        {{WATCHY_SHELL_LAUNCHER, WATCHY_SHELL_SETTINGS, WATCHY_SHELL_INPUT_MENU,
-          false, false, false}, WATCHY_TRANSITION_PUSH, WATCHY_TRANSITION_DIRECTION_RIGHT},
-        {{WATCHY_SHELL_SETTINGS, WATCHY_SHELL_LAUNCHER, WATCHY_SHELL_INPUT_BACK,
-          false, false, false}, WATCHY_TRANSITION_PUSH, WATCHY_TRANSITION_DIRECTION_LEFT},
-        {{WATCHY_SHELL_SETTINGS, WATCHY_SHELL_SETTINGS, WATCHY_SHELL_INPUT_MENU,
-          true, false, false}, WATCHY_TRANSITION_FLASH, WATCHY_TRANSITION_DIRECTION_NONE},
-        {{WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_INPUT_BACK,
-          false, true, false}, WATCHY_TRANSITION_SPLIT, WATCHY_TRANSITION_DIRECTION_NONE},
-        {{WATCHY_SHELL_SETTINGS, WATCHY_SHELL_SETTINGS, WATCHY_SHELL_INPUT_DOWN,
-          false, false, false}, WATCHY_TRANSITION_CUT, WATCHY_TRANSITION_DIRECTION_NONE},
-        {{WATCHY_SHELL_SAFE_MODE, WATCHY_SHELL_DIAGNOSTICS, WATCHY_SHELL_INPUT_MENU,
-          false, false, true}, WATCHY_TRANSITION_CUT, WATCHY_TRANSITION_DIRECTION_NONE},
+        {
+            .change = {.from = WATCHY_SHELL_WATCHFACE, .to = WATCHY_SHELL_LAUNCHER,
+                       .input = WATCHY_SHELL_INPUT_MENU},
+            .effect = WATCHY_TRANSITION_WIPE,
+            .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        },
+        {
+            .change = {.from = WATCHY_SHELL_LAUNCHER, .to = WATCHY_SHELL_SETTINGS,
+                       .input = WATCHY_SHELL_INPUT_MENU},
+            .effect = WATCHY_TRANSITION_PUSH,
+            .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+        },
+        {
+            .change = {.from = WATCHY_SHELL_SETTINGS, .to = WATCHY_SHELL_LAUNCHER,
+                       .input = WATCHY_SHELL_INPUT_BACK},
+            .effect = WATCHY_TRANSITION_PUSH,
+            .direction = WATCHY_TRANSITION_DIRECTION_LEFT,
+        },
+        {
+            .change = {.from = WATCHY_SHELL_SETTINGS, .to = WATCHY_SHELL_SETTINGS,
+                       .input = WATCHY_SHELL_INPUT_MENU, .saved = true,
+                       .has_rect = true, .rect = {4, 30, 192, 15}},
+            .effect = WATCHY_TRANSITION_FLASH,
+            .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+            .flags = WATCHY_TRANSITION_HAS_RECT,
+            .rect = {4, 30, 192, 15},
+        },
+        {
+            .change = {.from = WATCHY_SHELL_SETTINGS, .to = WATCHY_SHELL_NTP_SYNC,
+                       .input = WATCHY_SHELL_INPUT_MENU, .sync_progress = true,
+                       .has_rect = true, .rect = {4, 75, 192, 19}},
+            .effect = WATCHY_TRANSITION_FILL,
+            .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+            .flags = WATCHY_TRANSITION_HAS_RECT,
+            .rect = {4, 75, 192, 19},
+        },
+        {
+            .change = {.from = WATCHY_SHELL_WATCHFACE, .to = WATCHY_SHELL_WATCHFACE,
+                       .input = WATCHY_SHELL_INPUT_BACK, .sleep_requested = true},
+            .effect = WATCHY_TRANSITION_SPLIT,
+            .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        },
+        {
+            .change = {.from = WATCHY_SHELL_SETTINGS, .to = WATCHY_SHELL_SETTINGS,
+                       .input = WATCHY_SHELL_INPUT_DOWN},
+            .effect = WATCHY_TRANSITION_CUT,
+            .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        },
+        {
+            .change = {.from = WATCHY_SHELL_SAFE_MODE, .to = WATCHY_SHELL_DIAGNOSTICS,
+                       .input = WATCHY_SHELL_INPUT_MENU, .safe_mode = true},
+            .effect = WATCHY_TRANSITION_CUT,
+            .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        },
     };
 
     for (size_t index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -86,11 +128,28 @@ static int test_shell_transition_mapping_returns_complete_safe_requests(void) {
         CHECK(request.size == sizeof(request));
         CHECK(request.effect == cases[index].effect);
         CHECK(request.direction == cases[index].direction);
-        CHECK(request.flags == 0u);
-        CHECK(request.rect.x == 0 && request.rect.y == 0 && request.rect.width == 0 &&
-              request.rect.height == 0);
+        CHECK(request.flags == cases[index].flags);
+        CHECK(memcmp(&request.rect, &cases[index].rect, sizeof(request.rect)) == 0);
         CHECK(request.reserved[0] == 0u && request.reserved[1] == 0u);
+        CHECK(watchy_transition_validate(&request) == WATCHY_STATUS_OK);
     }
+
+    watchy_shell_transition_context_t missing_rect = {
+        .from = WATCHY_SHELL_SETTINGS,
+        .to = WATCHY_SHELL_SETTINGS,
+        .input = WATCHY_SHELL_INPUT_MENU,
+        .saved = true,
+    };
+    watchy_transition_request_v1_t request;
+    CHECK(!watchy_shell_transition_for_change(&missing_rect, &request));
+
+    const watchy_transition_rect_t confirmation =
+        watchy_shell_settings_confirmation_rect(7u);
+    const watchy_transition_rect_t progress = watchy_shell_sync_progress_rect();
+    CHECK(confirmation.x == 4 && confirmation.y == 177 &&
+          confirmation.width == 192 && confirmation.height == 15);
+    CHECK(progress.x == 4 && progress.y == 75 && progress.width == 192 &&
+          progress.height == 19);
     return 0;
 }
 
@@ -105,28 +164,42 @@ static int test_presentation_outcomes_gate_sleep_and_post_action_refresh(void) {
 
     shell.sleep_requested = true;
     watchy_shell_presentation_observe(&presentation, &shell,
-                                      WATCHY_SHELL_PRESENT_TARGET);
+                                      WATCHY_SHELL_PRESENT_TARGET, 0u);
     CHECK(shell.sleep_requested);
     CHECK(watchy_shell_presentation_allows_sleep(&presentation));
 
     watchy_shell_presentation_observe(&presentation, &shell,
-                                      WATCHY_SHELL_PRESENT_RECOVERY);
+                                      WATCHY_SHELL_PRESENT_RECOVERY, 0u);
     CHECK(!shell.sleep_requested);
     CHECK(!watchy_shell_presentation_allows_sleep(&presentation));
     CHECK(!watchy_shell_presentation_needs_post_action(
         WATCHY_SHELL_PRESENT_RECOVERY));
 
     watchy_shell_presentation_observe(&presentation, &shell,
-                                      WATCHY_SHELL_PRESENT_TARGET);
+                                      WATCHY_SHELL_PRESENT_TARGET, 0u);
     CHECK(watchy_shell_presentation_allows_sleep(&presentation));
 
     shell.sleep_requested = true;
     watchy_shell_presentation_observe(&presentation, &shell,
-                                      WATCHY_SHELL_PRESENT_FAILED);
+                                      WATCHY_SHELL_PRESENT_FAILED, 0u);
     CHECK(!shell.sleep_requested);
     CHECK(!watchy_shell_presentation_allows_sleep(&presentation));
     CHECK(!watchy_shell_presentation_needs_post_action(
         WATCHY_SHELL_PRESENT_FAILED));
+
+    shell.sleep_requested = true;
+    watchy_shell_presentation_observe(&presentation, &shell,
+                                      WATCHY_SHELL_PRESENT_CANCELLED,
+                                      WATCHY_BUTTON_MASK_DOWN);
+    CHECK(!shell.sleep_requested);
+    CHECK(watchy_shell_presentation_has_pending_input(&presentation));
+    CHECK(!watchy_shell_presentation_allows_sleep(&presentation));
+    CHECK(!watchy_shell_presentation_needs_post_action(
+        WATCHY_SHELL_PRESENT_CANCELLED));
+    CHECK(watchy_shell_presentation_take_cancelled_buttons(&presentation) ==
+          WATCHY_BUTTON_MASK_DOWN);
+    CHECK(!watchy_shell_presentation_has_pending_input(&presentation));
+    CHECK(watchy_shell_presentation_take_cancelled_buttons(&presentation) == 0u);
     return 0;
 }
 

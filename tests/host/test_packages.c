@@ -706,12 +706,15 @@ static int test_async_policy_waits_for_terminal_events_and_rolls_back_cancel_or_
 }
 
 static int test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure(void) {
-    CHECK(watchy_package_post_action(true, false, true, false) == WATCHY_PACKAGE_POST_CONTINUE);
-    CHECK(watchy_package_post_action(true, false, true, true) ==
+    CHECK(watchy_package_post_action(true, false, WATCHY_PACKAGE_PRESENT_TARGET, false) ==
+          WATCHY_PACKAGE_POST_CONTINUE);
+    CHECK(watchy_package_post_action(true, false, WATCHY_PACKAGE_PRESENT_TARGET, true) ==
           WATCHY_PACKAGE_POST_CLEAN_EXIT);
-    CHECK(watchy_package_post_action(true, true, false, false) ==
+    CHECK(watchy_package_post_action(true, true, WATCHY_PACKAGE_PRESENT_CANCELLED, false) ==
+          WATCHY_PACKAGE_POST_CONTINUE);
+    CHECK(watchy_package_post_action(true, true, WATCHY_PACKAGE_PRESENT_FAILED, false) ==
           WATCHY_PACKAGE_POST_FAIL_CLEANUP);
-    CHECK(watchy_package_post_action(false, false, true, false) ==
+    CHECK(watchy_package_post_action(false, false, WATCHY_PACKAGE_PRESENT_TARGET, false) ==
           WATCHY_PACKAGE_POST_FAIL_CLEANUP);
     return 0;
 }
@@ -896,6 +899,8 @@ static int test_transition_callback_admits_only_readable_active_requests(void) {
     watchy_package_host_context_t context = {0};
     watchy_transition_request_v1_t valid = valid_package_transition_request();
     watchy_transition_request_v1_t unreadable = {.size = 0u};
+    _Alignas(watchy_transition_request_v1_t)
+        uint8_t unaligned_storage[sizeof(watchy_transition_request_v1_t) + 1u];
     transition_readable_probe_t probe = {0};
 
     watchy_package_transition_bind(&context, transition_request_readable, &probe);
@@ -919,6 +924,18 @@ static int test_transition_callback_admits_only_readable_active_requests(void) {
     CHECK(context.system.request_transition(context.system.context, &valid) ==
           WATCHY_STATUS_BUSY);
     CHECK(probe.calls == 3u);
+    CHECK(watchy_package_transition_take(&context.transition, NULL));
+
+    memcpy(unaligned_storage + 1u, &valid, sizeof(valid));
+    const watchy_transition_request_v1_t *unaligned =
+        (const watchy_transition_request_v1_t *)(const void *)(unaligned_storage + 1u);
+    CHECK(((uintptr_t)unaligned % _Alignof(watchy_transition_request_v1_t)) != 0u);
+    CHECK(context.system.request_transition(context.system.context, unaligned) ==
+          WATCHY_STATUS_OK);
+    watchy_transition_request_v1_t taken = {0};
+    CHECK(watchy_package_transition_take(&context.transition, &taken));
+    CHECK(memcmp(&taken, &valid, sizeof(taken)) == 0);
+    CHECK(probe.calls == 4u && probe.address == unaligned && probe.size == sizeof(valid));
     return 0;
 }
 
@@ -1003,6 +1020,24 @@ static int test_transition_present_consumes_once_and_only_falls_back_on_rejectio
               &latch, true, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
           WATCHY_STATUS_INVALID_STATE);
     CHECK(probe.calls == 2u);
+
+    probe = (transition_present_probe_t){.status = {WATCHY_STATUS_CANCELLED,
+                                                    WATCHY_STATUS_OK}};
+    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_after_render(
+              &latch, true, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
+          WATCHY_STATUS_CANCELLED);
+    CHECK(probe.calls == 1u);
+    return 0;
+}
+
+static int test_package_presentation_classification_defers_promotion_on_cancellation(void) {
+    CHECK(watchy_package_classify_presentation(WATCHY_STATUS_OK) ==
+          WATCHY_PACKAGE_PRESENT_TARGET);
+    CHECK(watchy_package_classify_presentation(WATCHY_STATUS_CANCELLED) ==
+          WATCHY_PACKAGE_PRESENT_CANCELLED);
+    CHECK(watchy_package_classify_presentation(WATCHY_STATUS_INVALID_STATE) ==
+          WATCHY_PACKAGE_PRESENT_FAILED);
     return 0;
 }
 
@@ -2146,6 +2181,7 @@ int main(void) {
     CHECK(test_transition_callback_admits_only_readable_active_requests() == 0);
     CHECK(test_transition_failed_runner_and_deinit_cleanup_is_idempotent() == 0);
     CHECK(test_transition_present_consumes_once_and_only_falls_back_on_rejection() == 0);
+    CHECK(test_package_presentation_classification_defers_promotion_on_cancellation() == 0);
     CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);

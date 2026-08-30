@@ -5,6 +5,7 @@
 
 #include "watchy/runtime.h"
 #include "watchy/transition.h"
+#include "watchy/watchdog.h"
 #include "watchy/wpk.h"
 
 #include "transition_golden.h"
@@ -771,6 +772,159 @@ static int test_transition_executor_writes_bounded_sequence_and_target(void) {
     return 0;
 }
 
+static int test_transition_fill_omits_only_a_redundant_target_write(void) {
+    static uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    static uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    static uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    const watchy_transition_plan_t plan = {
+        .effect = WATCHY_TRANSITION_FILL,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {0, 0, WATCHY_TRANSITION_CANVAS_WIDTH, WATCHY_TRANSITION_CANVAS_HEIGHT},
+        .write_count = 5u,
+        .target_full = true,
+    };
+    watchy_transition_result_t result;
+
+    memset(source, 0xff, sizeof(source));
+    memset(target, 0x00, sizeof(target));
+    fake_writer_t writer = {
+        .target = target,
+        .fail_at = SIZE_MAX,
+        .cancel_at = SIZE_MAX,
+    };
+    CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
+                                    fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
+    CHECK(writer.write_count == 4u && writer.feed_count == 4u && writer.cancel_count == 3u);
+    CHECK(!writer.frames_are_target[0] && !writer.frames_are_target[1] &&
+          !writer.frames_are_target[2] && writer.frames_are_target[3]);
+    CHECK(writer.modes[0] == WATCHY_REFRESH_PARTIAL &&
+          writer.modes[1] == WATCHY_REFRESH_PARTIAL &&
+          writer.modes[2] == WATCHY_REFRESH_PARTIAL &&
+          writer.modes[3] == WATCHY_REFRESH_FULL);
+    CHECK(result.completed && !result.cancelled && result.writes_completed == 4u &&
+          result.last_frame_is_target);
+
+    target[0] = 0x80u;
+    writer = (fake_writer_t){
+        .target = target,
+        .fail_at = SIZE_MAX,
+        .cancel_at = SIZE_MAX,
+    };
+    CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
+                                    fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
+    CHECK(writer.write_count == 5u && writer.feed_count == 5u && writer.cancel_count == 4u);
+    CHECK(!writer.frames_are_target[3] && writer.frames_are_target[4]);
+    CHECK(writer.modes[3] == WATCHY_REFRESH_PARTIAL &&
+          writer.modes[4] == WATCHY_REFRESH_FULL);
+    CHECK(result.completed && !result.cancelled && result.writes_completed == 5u &&
+          result.last_frame_is_target);
+    return 0;
+}
+
+typedef struct {
+    watchy_watchdog_membership_t membership;
+    bool fail_enroll;
+    bool fail_feed;
+    bool fail_unenroll;
+    unsigned status_calls;
+    unsigned enroll_calls;
+    unsigned feed_calls;
+    unsigned unenroll_calls;
+} watchdog_probe_t;
+
+static watchy_watchdog_membership_t watchdog_status(void *context) {
+    watchdog_probe_t *probe = context;
+    ++probe->status_calls;
+    return probe->membership;
+}
+
+static bool watchdog_enroll(void *context) {
+    watchdog_probe_t *probe = context;
+    ++probe->enroll_calls;
+    if (probe->fail_enroll) {
+        return false;
+    }
+    probe->membership = WATCHY_WATCHDOG_ENROLLED;
+    return true;
+}
+
+static bool watchdog_feed(void *context) {
+    watchdog_probe_t *probe = context;
+    ++probe->feed_calls;
+    return !probe->fail_feed && probe->membership == WATCHY_WATCHDOG_ENROLLED;
+}
+
+static bool watchdog_unenroll(void *context) {
+    watchdog_probe_t *probe = context;
+    ++probe->unenroll_calls;
+    if (probe->fail_unenroll) {
+        return false;
+    }
+    probe->membership = WATCHY_WATCHDOG_NOT_ENROLLED;
+    return true;
+}
+
+static int test_nested_display_and_package_watchdog_scopes_leave_idle_shell_unenrolled(void) {
+    watchdog_probe_t probe = {.membership = WATCHY_WATCHDOG_NOT_ENROLLED};
+    const watchy_watchdog_ops_t ops = {
+        .status = watchdog_status,
+        .enroll = watchdog_enroll,
+        .feed = watchdog_feed,
+        .unenroll = watchdog_unenroll,
+        .context = &probe,
+    };
+    watchy_watchdog_scope_t package_scope = {0};
+    watchy_watchdog_scope_t display_scope = {0};
+
+    CHECK(watchy_watchdog_scope_begin(&package_scope, &ops) == WATCHY_STATUS_OK);
+    CHECK(package_scope.owns_enrollment);
+    CHECK(watchy_watchdog_scope_begin(&display_scope, &ops) == WATCHY_STATUS_OK);
+    CHECK(!display_scope.owns_enrollment);
+    CHECK(watchy_watchdog_scope_feed(&display_scope) == WATCHY_STATUS_OK);
+    CHECK(watchy_watchdog_scope_end(&display_scope) == WATCHY_STATUS_OK);
+    CHECK(probe.membership == WATCHY_WATCHDOG_ENROLLED);
+    CHECK(probe.unenroll_calls == 0u);
+    CHECK(watchy_watchdog_scope_end(&package_scope) == WATCHY_STATUS_OK);
+
+    /* The subsequent 30-second interactive wait owns no watchdog enrollment. */
+    CHECK(probe.membership == WATCHY_WATCHDOG_NOT_ENROLLED);
+    CHECK(probe.enroll_calls == 1u && probe.unenroll_calls == 1u);
+
+    probe.membership = WATCHY_WATCHDOG_ENROLLED;
+    CHECK(watchy_watchdog_scope_begin(&display_scope, &ops) == WATCHY_STATUS_OK);
+    CHECK(!display_scope.owns_enrollment);
+    CHECK(watchy_watchdog_scope_end(&display_scope) == WATCHY_STATUS_OK);
+    CHECK(probe.membership == WATCHY_WATCHDOG_ENROLLED);
+    CHECK(probe.enroll_calls == 1u && probe.unenroll_calls == 1u);
+
+    probe = (watchdog_probe_t){
+        .membership = WATCHY_WATCHDOG_NOT_ENROLLED,
+        .fail_enroll = true,
+    };
+    CHECK(watchy_watchdog_scope_begin(&package_scope, &ops) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(!package_scope.active && probe.enroll_calls == 1u && probe.unenroll_calls == 0u);
+
+    probe = (watchdog_probe_t){
+        .membership = WATCHY_WATCHDOG_NOT_ENROLLED,
+        .fail_feed = true,
+    };
+    CHECK(watchy_watchdog_scope_begin(&package_scope, &ops) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(!package_scope.active && probe.membership == WATCHY_WATCHDOG_NOT_ENROLLED);
+    CHECK(probe.enroll_calls == 1u && probe.feed_calls == 1u &&
+          probe.unenroll_calls == 1u);
+
+    probe = (watchdog_probe_t){
+        .membership = WATCHY_WATCHDOG_NOT_ENROLLED,
+        .fail_unenroll = true,
+    };
+    CHECK(watchy_watchdog_scope_begin(&package_scope, &ops) == WATCHY_STATUS_OK);
+    CHECK(watchy_watchdog_scope_end(&package_scope) == WATCHY_STATUS_INVALID_STATE);
+    CHECK(!package_scope.active && probe.unenroll_calls == 1u);
+    return 0;
+}
+
 static int test_transition_executor_cancels_optional_sequence_at_write_boundaries(void) {
     uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
     uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
@@ -925,11 +1079,13 @@ int main(void) {
         test_transition_effects_match_frozen_frames,
         test_transition_mandatory_clear_inverts_then_targets,
         test_transition_executor_writes_bounded_sequence_and_target,
+        test_transition_fill_omits_only_a_redundant_target_write,
         test_transition_executor_cancels_optional_sequence_at_write_boundaries,
         test_transition_executor_completes_mandatory_clear_without_cancellation,
         test_transition_executor_invalidates_source_for_each_failed_write,
         test_transition_executor_reports_composition_failure_before_write,
         test_transition_executor_rejects_empty_plan_without_callbacks,
+        test_nested_display_and_package_watchdog_scopes_leave_idle_shell_unenrolled,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {

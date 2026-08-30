@@ -90,9 +90,9 @@ static void render_settings(watchy_canvas_t *canvas,
     title(canvas, "SETTINGS");
     snprintf(label, sizeof(label), "CLOCK %s", settings->time_24h ? "24H" : "12H");
     compact_row(canvas, 0, label, shell->selection == 0u);
-    snprintf(label, sizeof(label), "MOTION %s", settings->motion_wake ? "ON" : "OFF");
+    snprintf(label, sizeof(label), "MOTION WAKE %s", settings->motion_wake ? "ON" : "OFF");
     compact_row(canvas, 1, label, shell->selection == 1u);
-    snprintf(label, sizeof(label), "MOTION %s",
+    snprintf(label, sizeof(label), "DISPLAY FX %s",
              settings->transition_level == WATCHY_TRANSITION_LEVEL_FULL ? "FULL"
              : settings->transition_level == WATCHY_TRANSITION_LEVEL_REDUCED ? "REDUCED"
                                                                        : "OFF");

@@ -52,6 +52,12 @@ class ReproducibilityContracts(unittest.TestCase):
                         portal.index("static esp_err_t mutate_package")]
         self.assertIn("watchy_portal_timed_out()", upload)
 
+    def test_settings_labels_distinguish_motion_wake_from_display_effects(self) -> None:
+        rendering = self.read("components/watchy_shell/src/shell_render.c")
+        self.assertIn('"MOTION WAKE %s"', rendering)
+        self.assertIn('"DISPLAY FX %s"', rendering)
+        self.assertNotIn('"MOTION %s"', rendering)
+
     def test_runner_stop_propagates_callback_cleanup_failure(self) -> None:
         runtime = self.read("components/watchy_packages/src/idf_runtime.c")
         finish_start = runtime.index("static watchy_package_status_t runner_finish")
@@ -64,6 +70,27 @@ class ReproducibilityContracts(unittest.TestCase):
         stop = runtime[stop_start:stop_end]
         self.assertIn("status = runner_finish(true);", stop)
         self.assertIn("return status;", stop)
+
+    def test_runner_watchdog_failure_closes_the_active_session(self) -> None:
+        runtime = self.read("components/watchy_packages/src/idf_runtime.c")
+        boundaries = (
+            ("watchy_package_status_t watchy_packages_runner_event",
+             "static watchy_status_t runner_display_present"),
+            ("watchy_package_status_t watchy_packages_runner_render",
+             "watchy_package_status_t watchy_packages_runner_stop"),
+            ("watchy_package_status_t watchy_packages_runner_stop",
+             "bool watchy_packages_runner_active"),
+        )
+        for start_marker, end_marker in boundaries:
+            start = runtime.index(start_marker)
+            body = runtime[start:runtime.index(end_marker, start)]
+            watchdog_failure = body[
+                body.index("watchy_watchdog_scope_begin"):
+                body.index("watchy_package_session_", body.index("watchy_watchdog_scope_begin"))
+                if "watchy_package_session_" in body[body.index("watchy_watchdog_scope_begin"):]
+                else len(body)
+            ]
+            self.assertIn("runner_finish(false);", watchdog_failure, start_marker)
 
 
 if __name__ == "__main__":

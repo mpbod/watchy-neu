@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "watchy/sdk.h"
+#include "watchy/buttons.h"
 #include "watchy/transition.h"
 
 #ifdef __cplusplus
@@ -41,6 +42,7 @@ watchy_status_t watchy_display_set_transition_policy(watchy_transition_level_t l
 watchy_canvas_t watchy_display_acquire(void);
 watchy_status_t watchy_display_present(watchy_refresh_mode_t requested,
                                        const watchy_transition_request_v1_t *request);
+bool watchy_display_take_cancelled_buttons(watchy_button_mask_t *out_buttons);
 watchy_status_t watchy_display_refresh(watchy_refresh_mode_t requested);
 void watchy_display_invalidate_previous(void);
 watchy_status_t watchy_display_power_off(void);

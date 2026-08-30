@@ -10,6 +10,7 @@ add_executable(watchy_core_tests
   ../../components/watchy_core/src/transition_compositor.c
   ../../components/watchy_core/src/transition_executor.c
   ../../components/watchy_core/src/transition_policy.c
+  ../../components/watchy_core/src/watchdog.c
 )
 target_include_directories(watchy_core_tests PRIVATE
   ../../components/watchy_core/include
@@ -117,6 +118,7 @@ add_executable(watchy_shell_tests
   ../../components/watchy_shell/src/settings_policy.c
   ../../components/watchy_shell/src/shell_policy.c
   ../../components/watchy_shell/src/ui.c
+  ../../components/watchy_core/src/transition_policy.c
   ../../components/watchy_hal/src/framebuffer.c
   ../../components/watchy_packages/src/package_format.c
 )

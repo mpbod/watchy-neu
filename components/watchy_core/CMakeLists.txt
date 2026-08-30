@@ -5,6 +5,7 @@ idf_component_register(
         "src/transition_compositor.c"
         "src/transition_executor.c"
         "src/transition_policy.c"
+        "src/watchdog.c"
         "src/wpk.c"
     INCLUDE_DIRS
         "include"

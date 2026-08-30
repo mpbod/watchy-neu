@@ -70,6 +70,12 @@ watchy_status_t watchy_transition_compose_frame(const watchy_transition_plan_t *
                                                 const uint8_t *target,
                                                 uint8_t *out,
                                                 size_t size);
+watchy_status_t watchy_transition_resolve_plan(const watchy_transition_plan_t *plan,
+                                              const uint8_t *source,
+                                              const uint8_t *target,
+                                              uint8_t *scratch,
+                                              size_t size,
+                                              watchy_transition_plan_t *out_plan);
 watchy_status_t watchy_transition_execute(const watchy_transition_plan_t *plan,
                                           const uint8_t *source,
                                           const uint8_t *target,

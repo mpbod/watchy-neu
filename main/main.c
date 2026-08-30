@@ -37,6 +37,17 @@
 static const char *TAG = "watchy";
 static RTC_DATA_ATTR bool s_safe_mode_latched;
 
+typedef struct {
+    watchy_shell_presentation_outcome_t outcome;
+    watchy_button_mask_t cancelled_buttons;
+} shell_presentation_result_t;
+
+static shell_presentation_result_t shell_presentation(
+    watchy_shell_presentation_outcome_t outcome,
+    watchy_button_mask_t cancelled_buttons) {
+    return (shell_presentation_result_t){outcome, cancelled_buttons};
+}
+
 static uint64_t milliseconds(void) {
     return (uint64_t)(esp_timer_get_time() / 1000);
 }
@@ -51,7 +62,7 @@ static void collect_and_log_diagnostics(watchy_diagnostic_report_t *report) {
     }
 }
 
-static watchy_shell_presentation_outcome_t refresh_shell(
+static shell_presentation_result_t refresh_shell(
     watchy_shell_t *shell,
     const watchy_settings_t *settings,
     const watchy_time_t *time,
@@ -65,10 +76,20 @@ static watchy_shell_presentation_outcome_t refresh_shell(
     if (canvas.pixels == NULL) {
         watchy_display_invalidate_previous();
         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
-        return WATCHY_SHELL_PRESENT_FAILED;
+        return shell_presentation(WATCHY_SHELL_PRESENT_FAILED, 0u);
     }
     watchy_shell_render(&canvas, shell, settings, time, battery, catalog, diagnostics, detail);
     const watchy_status_t status = watchy_display_present(mode, request);
+    if (status == WATCHY_STATUS_CANCELLED) {
+        watchy_button_mask_t cancelled_buttons = 0u;
+        if (watchy_display_take_cancelled_buttons(&cancelled_buttons)) {
+            return shell_presentation(WATCHY_SHELL_PRESENT_CANCELLED,
+                                      cancelled_buttons);
+        }
+        ESP_LOGE(TAG, "cancelled shell presentation had no sampled button");
+        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
+        return shell_presentation(WATCHY_SHELL_PRESENT_FAILED, 0u);
+    }
     if (status == WATCHY_STATUS_INVALID_STATE) {
         ESP_LOGE(TAG, "shell display presentation failed; attempting full error target");
         watchy_display_invalidate_previous();
@@ -78,18 +99,18 @@ static watchy_shell_presentation_outcome_t refresh_shell(
             watchy_shell_render(&canvas, shell, settings, time, battery, catalog,
                                 diagnostics, NULL);
             if (watchy_display_present(WATCHY_REFRESH_FULL, NULL) == WATCHY_STATUS_OK) {
-                return WATCHY_SHELL_PRESENT_RECOVERY;
+                return shell_presentation(WATCHY_SHELL_PRESENT_RECOVERY, 0u);
             }
         }
         ESP_LOGE(TAG, "shell display error target failed");
-        return WATCHY_SHELL_PRESENT_FAILED;
+        return shell_presentation(WATCHY_SHELL_PRESENT_FAILED, 0u);
     }
     if (status != WATCHY_STATUS_OK) {
         ESP_LOGE(TAG, "shell display refresh failed");
         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
-        return WATCHY_SHELL_PRESENT_FAILED;
+        return shell_presentation(WATCHY_SHELL_PRESENT_FAILED, 0u);
     }
-    return WATCHY_SHELL_PRESENT_TARGET;
+    return shell_presentation(WATCHY_SHELL_PRESENT_TARGET, 0u);
 }
 
 static watchy_shell_input_t input_from_mask(watchy_button_mask_t mask) {
@@ -136,16 +157,22 @@ static bool run_package_app(const char *package_ref) {
         .context = NULL,
     };
     watchy_button_mask_t previous;
+    watchy_button_mask_t pending_buttons = 0u;
     uint64_t last_activity;
     watchy_package_status_t status = watchy_packages_runner_start(package_ref, false);
     if (status != WATCHY_PACKAGE_OK) return false;
     if (!watchy_packages_runner_active()) return true;
     status = watchy_packages_runner_render();
+    (void)watchy_display_take_cancelled_buttons(&pending_buttons);
     previous = watchy_buttons_sample();
     last_activity = milliseconds();
     while (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
         const watchy_button_mask_t current = watchy_buttons_sample();
-        const watchy_button_mask_t pressed = current & ~previous;
+        watchy_button_mask_t pressed = pending_buttons;
+        pending_buttons = 0u;
+        if (pressed == 0u) {
+            pressed = current & ~previous;
+        }
         previous = current;
         if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
             status = watchy_packages_runner_stop();
@@ -155,6 +182,10 @@ static bool run_package_app(const char *package_ref) {
             last_activity = milliseconds();
             status = watchy_package_dispatch_app_button(
                 &runner, package_button_from_mask(pressed));
+            watchy_button_mask_t cancelled_buttons = 0u;
+            if (watchy_display_take_cancelled_buttons(&cancelled_buttons)) {
+                pending_buttons |= cancelled_buttons;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
     }
@@ -293,7 +324,11 @@ static void run_shell(watchy_shell_t *shell,
     if (shell->safe_mode && safe_reason != NULL) snprintf(detail, sizeof(detail), "%s", safe_reason);
     while (!shell->sleep_requested) {
         const watchy_button_mask_t current = watchy_buttons_sample();
-        const watchy_button_mask_t pressed = current & ~previous;
+        watchy_button_mask_t pressed =
+            watchy_shell_presentation_take_cancelled_buttons(presentation);
+        if (pressed == 0u) {
+            pressed = current & ~previous;
+        }
         previous = current;
         if (watchy_portal_active()) {
             if ((pressed & WATCHY_BUTTON_MASK_BACK) != 0u || watchy_portal_timed_out()) {
@@ -348,10 +383,11 @@ static void run_shell(watchy_shell_t *shell,
                     watchy_display_invalidate_previous();
                     refresh_mode = WATCHY_REFRESH_FULL;
                 }
-                const watchy_shell_presentation_outcome_t outcome =
+                const shell_presentation_result_t result =
                     refresh_shell(shell, settings, time, battery, catalog, diagnostics,
                                   NULL, refresh_mode, has_request ? &request : NULL);
-                watchy_shell_presentation_observe(presentation, shell, outcome);
+                watchy_shell_presentation_observe(presentation, shell, result.outcome,
+                                                  result.cancelled_buttons);
                 last_activity = milliseconds();
             }
             vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
@@ -411,25 +447,30 @@ static void run_shell(watchy_shell_t *shell,
                     .to = shell->screen,
                     .input = shell_input,
                     .saved = false,
+                    .sync_progress = true,
                     .sleep_requested = shell->sleep_requested,
                     .safe_mode = shell->safe_mode,
+                    .has_rect = true,
+                    .rect = watchy_shell_sync_progress_rect(),
                 };
                 const bool has_sync_request =
                     watchy_shell_transition_for_change(&sync_change, &sync_request);
-                const watchy_shell_presentation_outcome_t sync_outcome =
+                const shell_presentation_result_t sync_result =
                     refresh_shell(shell, settings, time, battery, catalog, diagnostics,
                                   detail, WATCHY_REFRESH_PARTIAL,
                                   has_sync_request ? &sync_request : NULL);
-                watchy_shell_presentation_observe(presentation, shell, sync_outcome);
+                watchy_shell_presentation_observe(presentation, shell, sync_result.outcome,
+                                                  sync_result.cancelled_buttons);
                 const bool sync_visible = watchy_shell_presentation_needs_post_action(
-                    sync_outcome);
+                    sync_result.outcome);
                 post_action_presentation_needed = sync_visible;
-                if (sync_visible &&
-                    sync_time_ntp(settings) == WATCHY_STATUS_OK &&
-                    watchy_rtc_read_local(time) == WATCHY_STATUS_OK) {
-                    snprintf(detail, sizeof(detail), "TIME UPDATED");
-                } else if (shell->screen != WATCHY_SHELL_ERROR) {
-                    watchy_shell_fail(shell, WATCHY_SHELL_ERROR_NTP);
+                if (sync_visible) {
+                    if (sync_time_ntp(settings) == WATCHY_STATUS_OK &&
+                        watchy_rtc_read_local(time) == WATCHY_STATUS_OK) {
+                        snprintf(detail, sizeof(detail), "TIME UPDATED");
+                    } else if (shell->screen != WATCHY_SHELL_ERROR) {
+                        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_NTP);
+                    }
                 }
                 transition_from = sync_visible ? WATCHY_SHELL_NTP_SYNC : shell->screen;
                 last_activity = milliseconds();
@@ -505,6 +546,10 @@ static void run_shell(watchy_shell_t *shell,
                     .saved = saved,
                     .sleep_requested = shell->sleep_requested,
                     .safe_mode = shell->safe_mode,
+                    .has_rect = saved,
+                    .rect = saved
+                                ? watchy_shell_settings_confirmation_rect(shell->selection)
+                                : (watchy_transition_rect_t){0},
                 };
                 const bool has_request = watchy_shell_transition_for_change(&change, &request);
                 watchy_refresh_mode_t refresh_mode = WATCHY_REFRESH_PARTIAL;
@@ -513,11 +558,12 @@ static void run_shell(watchy_shell_t *shell,
                     watchy_display_invalidate_previous();
                     refresh_mode = WATCHY_REFRESH_FULL;
                 }
-                const watchy_shell_presentation_outcome_t outcome =
+                const shell_presentation_result_t result =
                     refresh_shell(shell, settings, time, battery, catalog, diagnostics,
                                   detail[0] == '\0' ? NULL : detail, refresh_mode,
                                   has_request ? &request : NULL);
-                watchy_shell_presentation_observe(presentation, shell, outcome);
+                watchy_shell_presentation_observe(presentation, shell, result.outcome,
+                                                  result.cancelled_buttons);
             }
         } else if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
             const watchy_shell_screen_t before_screen = shell->screen;
@@ -532,11 +578,12 @@ static void run_shell(watchy_shell_t *shell,
                 .safe_mode = shell->safe_mode,
             };
             const bool has_request = watchy_shell_transition_for_change(&change, &request);
-            const watchy_shell_presentation_outcome_t outcome =
+            const shell_presentation_result_t result =
                 refresh_shell(shell, settings, time, battery, catalog, diagnostics,
                               NULL, WATCHY_REFRESH_PARTIAL,
                               has_request ? &request : NULL);
-            watchy_shell_presentation_observe(presentation, shell, outcome);
+            watchy_shell_presentation_observe(presentation, shell, result.outcome,
+                                              result.cancelled_buttons);
             last_activity = milliseconds();
         }
         vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
@@ -558,6 +605,7 @@ void app_main(void) {
     bool package_selected = false;
     bool package_rendered = false;
     bool package_failed = false;
+    watchy_button_mask_t boot_cancelled_buttons = 0u;
     bool package_index_readable;
     bool settings_load_failed = false;
     bool settings_save_failed = false;
@@ -619,9 +667,17 @@ void app_main(void) {
                               !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake);
     if (rtc_valid && !safe_mode && package_wake && package_selected) {
         package_rendered = watchy_packages_run_watchface(false);
-        package_failed = !package_rendered;
+        if (watchy_display_take_cancelled_buttons(&boot_cancelled_buttons)) {
+            package_rendered = false;
+        }
+        package_failed = !package_rendered && boot_cancelled_buttons == 0u;
     }
     watchy_shell_begin(&shell, wake_cause, settings.motion_wake, safe_mode, package_failed);
+    if (boot_cancelled_buttons != 0u) {
+        watchy_shell_presentation_observe(&presentation, &shell,
+                                          WATCHY_SHELL_PRESENT_CANCELLED,
+                                          boot_cancelled_buttons);
+    }
     if (!rtc_valid && !safe_mode) {
         const bool interactive_time_recovery = wake_cause == WATCHY_WAKE_BUTTON ||
                                                wake_cause == WATCHY_WAKE_COLD ||
@@ -639,7 +695,9 @@ void app_main(void) {
     } else if (display_failed) {
         watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_DISPLAY);
     }
-    if (!package_rendered && !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake)) {
+    if (!package_rendered &&
+        !watchy_shell_presentation_has_pending_input(&presentation) &&
+        !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake)) {
         watchy_transition_request_v1_t request;
         const watchy_transition_request_v1_t *request_ptr = NULL;
         if (wake_cause == WATCHY_WAKE_BUTTON) {
@@ -662,10 +720,11 @@ void app_main(void) {
             watchy_display_invalidate_previous();
             refresh_mode = WATCHY_REFRESH_FULL;
         }
-        const watchy_shell_presentation_outcome_t outcome =
+        const shell_presentation_result_t result =
             refresh_shell(&shell, &settings, &time, &battery, &catalog, &diagnostics,
                           safe_mode ? safe_reason : NULL, refresh_mode, request_ptr);
-        watchy_shell_presentation_observe(&presentation, &shell, outcome);
+        watchy_shell_presentation_observe(&presentation, &shell, result.outcome,
+                                          result.cancelled_buttons);
     }
     if (!shell.sleep_requested &&
         (wake_cause == WATCHY_WAKE_BUTTON || safe_mode || !rtc_valid ||

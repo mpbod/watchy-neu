@@ -269,6 +269,51 @@ static watchy_transition_plan_t push_right_plan(void) {
     };
 }
 
+static watchy_transition_plan_t plan_for_write_count(uint8_t write_count) {
+    static const watchy_transition_effect_t effects[] = {
+        WATCHY_TRANSITION_CUT,
+        WATCHY_TRANSITION_CUT,
+        WATCHY_TRANSITION_FLASH,
+        WATCHY_TRANSITION_PUSH,
+        WATCHY_TRANSITION_WIPE,
+        WATCHY_TRANSITION_SHUTTER,
+    };
+    return (watchy_transition_plan_t){
+        .effect = effects[write_count],
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {0, 0, WATCHY_DISPLAY_WIDTH, WATCHY_DISPLAY_HEIGHT},
+        .write_count = write_count,
+    };
+}
+
+static int test_display_forecasts_every_optional_write_and_actual_target_mode(void) {
+    for (uint8_t write_count = 1u; write_count <= 5u; ++write_count) {
+        const watchy_transition_plan_t plan = plan_for_write_count(write_count);
+        watchy_display_retained_state_t retained =
+            valid_retained_state((uint16_t)(20u - write_count - 1u));
+
+        CHECK(!watchy_display_plan_requires_clear(&retained, &plan,
+                                                  WATCHY_REFRESH_PARTIAL, 20u));
+        retained = valid_retained_state((uint16_t)(20u - write_count));
+        CHECK(watchy_display_plan_requires_clear(&retained, &plan,
+                                                 WATCHY_REFRESH_PARTIAL, 20u));
+
+        if (write_count == 1u) {
+            retained = valid_retained_state(19u);
+            CHECK(!watchy_display_plan_requires_clear(&retained, &plan,
+                                                      WATCHY_REFRESH_FULL, 20u));
+        } else {
+            retained = valid_retained_state((uint16_t)(20u - write_count));
+            CHECK(!watchy_display_plan_requires_clear(&retained, &plan,
+                                                      WATCHY_REFRESH_FULL, 20u));
+            retained = valid_retained_state((uint16_t)(21u - write_count));
+            CHECK(watchy_display_plan_requires_clear(&retained, &plan,
+                                                     WATCHY_REFRESH_FULL, 20u));
+        }
+    }
+    return 0;
+}
+
 static watchy_display_retained_state_t retained_with_frame(const uint8_t *frame,
                                                            uint16_t partial_count) {
     watchy_display_retained_state_t retained = {0};
@@ -282,7 +327,7 @@ static watchy_display_retained_state_t retained_with_frame(const uint8_t *frame,
     return retained;
 }
 
-static int test_display_transition_adapter_freezes_source_and_orders_each_write(void) {
+static int test_display_transition_adapter_clears_before_plan_wide_threshold(void) {
     static uint8_t original_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
     static uint8_t fallback_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
     static uint8_t source_snapshot[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
@@ -314,17 +359,39 @@ static int test_display_transition_adapter_freezes_source_and_orders_each_write(
 
     CHECK(watchy_display_execute_plan(&plan, fallback_source, target, source_snapshot, scratch,
                                       sizeof(scratch), &io, &result) == WATCHY_STATUS_OK);
-    CHECK(result.completed && result.writes_completed == 3u);
-    CHECK(fake.write_calls == 3u && fake.feed_calls == 3u);
-    CHECK(fake.event_count == 8u && memcmp(fake.events, "WFCWFCWF", 8u) == 0);
-    CHECK(fake.modes[0] == WATCHY_REFRESH_PARTIAL);
+    CHECK(result.completed && result.writes_completed == 2u);
+    CHECK(fake.write_calls == 2u && fake.feed_calls == 2u);
+    CHECK(fake.event_count == 4u && memcmp(fake.events, "WFWF", 4u) == 0);
+    CHECK(fake.modes[0] == WATCHY_REFRESH_FULL);
     CHECK(fake.modes[1] == WATCHY_REFRESH_FULL);
-    CHECK(fake.modes[2] == WATCHY_REFRESH_PARTIAL);
-    CHECK(!fake.sampled_black[1]);
+    CHECK(!fake.sampled_black[0] && fake.sampled_black[1]);
     CHECK(memcmp(source_snapshot, original_source, sizeof(original_source)) == 0);
     CHECK(watchy_display_retained_valid(&retained));
-    CHECK(retained.partial_count == 1u);
+    CHECK(retained.partial_count == 0u);
     CHECK(memcmp(retained.previous_frame, target, sizeof(target)) == 0);
+    return 0;
+}
+
+static int test_display_cancellation_maps_to_distinct_status_and_button_edges(void) {
+    watchy_transition_result_t result = {
+        .writes_completed = 1u,
+        .cancelled = true,
+        .source_valid = true,
+    };
+
+    CHECK(watchy_display_execution_status(WATCHY_STATUS_OK, &result, false) ==
+          WATCHY_STATUS_CANCELLED);
+    CHECK(watchy_display_execution_status(WATCHY_STATUS_OK, &result, true) ==
+          WATCHY_STATUS_INVALID_STATE);
+    result.cancelled = false;
+    result.completed = true;
+    result.last_frame_is_target = true;
+    CHECK(watchy_display_execution_status(WATCHY_STATUS_OK, &result, false) ==
+          WATCHY_STATUS_OK);
+    CHECK(watchy_display_new_button_mask(WATCHY_BUTTON_MASK_MENU,
+                                         WATCHY_BUTTON_MASK_MENU |
+                                             WATCHY_BUTTON_MASK_DOWN) ==
+          WATCHY_BUTTON_MASK_DOWN);
     return 0;
 }
 
@@ -579,8 +646,10 @@ int main(void) {
     CHECK(test_display_retained_state_controls_boot_refresh_and_commits_only_on_success() == 0);
     CHECK(test_display_refresh_policy_promotes_and_counts_each_physical_write() == 0);
     CHECK(test_display_multi_write_tracks_each_frame_and_invalidates_on_failure() == 0);
-    CHECK(test_display_transition_adapter_freezes_source_and_orders_each_write() == 0);
+    CHECK(test_display_forecasts_every_optional_write_and_actual_target_mode() == 0);
+    CHECK(test_display_transition_adapter_clears_before_plan_wide_threshold() == 0);
     CHECK(test_display_transition_adapter_cancellation_retains_last_successful_frame() == 0);
+    CHECK(test_display_cancellation_maps_to_distinct_status_and_button_edges() == 0);
     CHECK(test_display_transition_adapter_write_failure_invalidates_retained_source() == 0);
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
     CHECK(test_pcf8563_alarm_encodes_documented_next_match_fields() == 0);
@@ -589,6 +658,6 @@ int main(void) {
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 19 HAL tests");
+    puts("PASS 21 HAL tests");
     return 0;
 }

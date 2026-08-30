@@ -279,6 +279,7 @@ void watchy_package_transition_cleanup(watchy_package_host_context_t *context) {
 static watchy_status_t host_request_transition(
     void *opaque, const watchy_transition_request_v1_t *request) {
     watchy_package_host_context_t *context = opaque;
+    watchy_transition_request_v1_t aligned_request;
     if (context == NULL || !context->callback_budget.active) {
         return WATCHY_STATUS_INVALID_STATE;
     }
@@ -287,7 +288,8 @@ static watchy_status_t host_request_transition(
                                    request, sizeof(*request))) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    return watchy_package_transition_latch(&context->transition, request);
+    memcpy(&aligned_request, request, sizeof(aligned_request));
+    return watchy_package_transition_latch(&context->transition, &aligned_request);
 }
 
 void watchy_package_transition_bind(watchy_package_host_context_t *context,
@@ -331,11 +333,22 @@ watchy_status_t watchy_package_transition_present_after_render(
     return status;
 }
 
+watchy_package_presentation_outcome_t watchy_package_classify_presentation(
+    watchy_status_t status) {
+    if (status == WATCHY_STATUS_OK) {
+        return WATCHY_PACKAGE_PRESENT_TARGET;
+    }
+    return status == WATCHY_STATUS_CANCELLED ? WATCHY_PACKAGE_PRESENT_CANCELLED
+                                             : WATCHY_PACKAGE_PRESENT_FAILED;
+}
+
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,
                                                         bool refresh_requested,
-                                                        bool refresh_ok,
+                                                        watchy_package_presentation_outcome_t
+                                                            refresh_outcome,
                                                         bool exit_requested) {
-    if (!pump_ok || (refresh_requested && !refresh_ok)) {
+    if (!pump_ok ||
+        (refresh_requested && refresh_outcome == WATCHY_PACKAGE_PRESENT_FAILED)) {
         return WATCHY_PACKAGE_POST_FAIL_CLEANUP;
     }
     return exit_requested ? WATCHY_PACKAGE_POST_CLEAN_EXIT

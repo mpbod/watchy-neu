@@ -17,7 +17,8 @@ typedef enum {
     WATCHY_STATUS_INVALID_STATE = -2,
     WATCHY_STATUS_INCOMPATIBLE_ABI = -3,
     WATCHY_STATUS_UNSUPPORTED = -4,
-    WATCHY_STATUS_BUSY = -5
+    WATCHY_STATUS_BUSY = -5,
+    WATCHY_STATUS_CANCELLED = -6
 } watchy_status_t;
 
 typedef enum {

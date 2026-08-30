@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "watchy/power.h"
+#include "watchy/buttons.h"
 #include "watchy/package_runtime.h"
 #include "watchy/diagnostics.h"
 #include "watchy/transition.h"
@@ -48,18 +49,23 @@ typedef struct {
     watchy_shell_screen_t to;
     watchy_shell_input_t input;
     bool saved;
+    bool sync_progress;
     bool sleep_requested;
     bool safe_mode;
+    bool has_rect;
+    watchy_transition_rect_t rect;
 } watchy_shell_transition_context_t;
 
 typedef enum {
     WATCHY_SHELL_PRESENT_TARGET = 0,
     WATCHY_SHELL_PRESENT_RECOVERY,
     WATCHY_SHELL_PRESENT_FAILED,
+    WATCHY_SHELL_PRESENT_CANCELLED,
 } watchy_shell_presentation_outcome_t;
 
 typedef struct {
     bool sleep_deferred;
+    watchy_button_mask_t pending_buttons;
 } watchy_shell_presentation_state_t;
 
 typedef enum {
@@ -113,9 +119,16 @@ void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive);
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input);
 bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t *change,
                                         watchy_transition_request_v1_t *out_request);
+watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection);
+watchy_transition_rect_t watchy_shell_sync_progress_rect(void);
 void watchy_shell_presentation_observe(watchy_shell_presentation_state_t *state,
                                        watchy_shell_t *shell,
-                                       watchy_shell_presentation_outcome_t outcome);
+                                       watchy_shell_presentation_outcome_t outcome,
+                                       watchy_button_mask_t cancelled_buttons);
+watchy_button_mask_t watchy_shell_presentation_take_cancelled_buttons(
+    watchy_shell_presentation_state_t *state);
+bool watchy_shell_presentation_has_pending_input(
+    const watchy_shell_presentation_state_t *state);
 bool watchy_shell_presentation_allows_sleep(
     const watchy_shell_presentation_state_t *state);
 bool watchy_shell_presentation_needs_post_action(

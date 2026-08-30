@@ -41,6 +41,12 @@ typedef enum {
 } watchy_package_post_action_t;
 
 typedef enum {
+    WATCHY_PACKAGE_PRESENT_TARGET = 0,
+    WATCHY_PACKAGE_PRESENT_CANCELLED,
+    WATCHY_PACKAGE_PRESENT_FAILED,
+} watchy_package_presentation_outcome_t;
+
+typedef enum {
     WATCHY_PACKAGE_STORAGE_REGULAR = 0,
     WATCHY_PACKAGE_STORAGE_DIRECTORY = 1,
     WATCHY_PACKAGE_STORAGE_LINK = 2,
@@ -135,9 +141,12 @@ watchy_status_t watchy_package_transition_present_after_render(
     watchy_refresh_mode_t mode,
     watchy_package_present_fn_t present,
     void *present_context);
+watchy_package_presentation_outcome_t watchy_package_classify_presentation(
+    watchy_status_t status);
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,
                                                         bool refresh_requested,
-                                                        bool refresh_ok,
+                                                        watchy_package_presentation_outcome_t
+                                                            refresh_outcome,
                                                         bool exit_requested);
 bool watchy_package_state_quota_allows(size_t current_bytes, size_t incoming_bytes);
 bool watchy_package_storage_node_allowed(watchy_package_storage_node_t node,

@@ -45,6 +45,15 @@ void watchy_display_commit_refresh(watchy_display_retained_state_t *state,
                                    watchy_refresh_mode_t completed,
                                    const uint8_t *framebuffer,
                                    size_t size);
+bool watchy_display_plan_requires_clear(const watchy_display_retained_state_t *state,
+                                        const watchy_transition_plan_t *plan,
+                                        watchy_refresh_mode_t target_requested,
+                                        uint16_t partial_limit);
+watchy_status_t watchy_display_execution_status(watchy_status_t execution_status,
+                                                const watchy_transition_result_t *result,
+                                                bool watchdog_feed_failed);
+watchy_button_mask_t watchy_display_new_button_mask(watchy_button_mask_t baseline,
+                                                    watchy_button_mask_t current);
 watchy_status_t watchy_display_execute_plan(const watchy_transition_plan_t *plan,
                                             const uint8_t *fallback_source,
                                             const uint8_t *target,
