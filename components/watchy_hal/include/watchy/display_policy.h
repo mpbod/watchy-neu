@@ -25,6 +25,16 @@ typedef struct {
     uint8_t previous_frame[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
 } watchy_display_retained_state_t;
 
+typedef struct {
+    watchy_display_retained_state_t *retained;
+    uint16_t partial_limit;
+    watchy_refresh_mode_t target_requested;
+    watchy_transition_write_fn physical_write;
+    watchy_transition_cancel_fn cancel;
+    watchy_transition_feed_fn feed;
+    void *context;
+} watchy_display_transition_io_t;
+
 bool watchy_display_busy_observe(watchy_display_busy_filter_t *filter, bool busy_high);
 bool watchy_display_retained_valid(const watchy_display_retained_state_t *state);
 void watchy_display_invalidate_retained(watchy_display_retained_state_t *state);
@@ -35,6 +45,14 @@ void watchy_display_commit_refresh(watchy_display_retained_state_t *state,
                                    watchy_refresh_mode_t completed,
                                    const uint8_t *framebuffer,
                                    size_t size);
+watchy_status_t watchy_display_execute_plan(const watchy_transition_plan_t *plan,
+                                            const uint8_t *fallback_source,
+                                            const uint8_t *target,
+                                            uint8_t *source_snapshot,
+                                            uint8_t *scratch,
+                                            size_t size,
+                                            const watchy_display_transition_io_t *io,
+                                            watchy_transition_result_t *out_result);
 
 #ifdef __cplusplus
 }

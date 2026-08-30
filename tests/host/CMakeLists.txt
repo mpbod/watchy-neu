@@ -68,6 +68,8 @@ add_test(NAME watchy_hardware_sample_tests COMMAND watchy_hardware_sample_tests)
 
 add_executable(watchy_hal_tests
   test_hal.c
+  ../../components/watchy_core/src/transition_compositor.c
+  ../../components/watchy_core/src/transition_executor.c
   ../../components/watchy_hal/src/framebuffer.c
   ../../components/watchy_hal/src/buttons_policy.c
   ../../components/watchy_hal/src/battery_policy.c

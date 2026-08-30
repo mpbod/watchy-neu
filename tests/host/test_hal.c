@@ -212,6 +212,205 @@ static int test_display_multi_write_tracks_each_frame_and_invalidates_on_failure
     return 0;
 }
 
+typedef struct {
+    char events[16];
+    size_t event_count;
+    size_t write_calls;
+    size_t feed_calls;
+    size_t fail_at;
+    size_t cancel_after;
+    watchy_refresh_mode_t modes[5];
+    bool sampled_black[5];
+    uint8_t *last_successful_frame;
+} display_transition_fake_t;
+
+static void record_display_event(display_transition_fake_t *fake, char event) {
+    if (fake->event_count < sizeof(fake->events)) {
+        fake->events[fake->event_count++] = event;
+    }
+}
+
+static watchy_status_t fake_physical_write(void *context,
+                                           const uint8_t *frame,
+                                           watchy_refresh_mode_t mode) {
+    display_transition_fake_t *fake = (display_transition_fake_t *)context;
+    const size_t write = fake->write_calls++;
+
+    record_display_event(fake, 'W');
+    fake->modes[write] = mode;
+    fake->sampled_black[write] = pixel_is_black(frame, 150, 100);
+    if (write == fake->fail_at) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    memcpy(fake->last_successful_frame, frame, WATCHY_DISPLAY_FRAMEBUFFER_SIZE);
+    return WATCHY_STATUS_OK;
+}
+
+static bool fake_transition_cancel(void *context) {
+    display_transition_fake_t *fake = (display_transition_fake_t *)context;
+
+    record_display_event(fake, 'C');
+    return fake->write_calls >= fake->cancel_after;
+}
+
+static void fake_transition_feed(void *context) {
+    display_transition_fake_t *fake = (display_transition_fake_t *)context;
+
+    record_display_event(fake, 'F');
+    ++fake->feed_calls;
+}
+
+static watchy_transition_plan_t push_right_plan(void) {
+    return (watchy_transition_plan_t){
+        .effect = WATCHY_TRANSITION_PUSH,
+        .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+        .rect = {0, 0, WATCHY_DISPLAY_WIDTH, WATCHY_DISPLAY_HEIGHT},
+        .write_count = 3u,
+    };
+}
+
+static watchy_display_retained_state_t retained_with_frame(const uint8_t *frame,
+                                                           uint16_t partial_count) {
+    watchy_display_retained_state_t retained = {0};
+
+    watchy_display_commit_refresh(&retained, WATCHY_REFRESH_FULL, frame,
+                                  WATCHY_DISPLAY_FRAMEBUFFER_SIZE);
+    for (uint16_t write = 0u; write < partial_count; ++write) {
+        watchy_display_commit_refresh(&retained, WATCHY_REFRESH_PARTIAL, frame,
+                                      WATCHY_DISPLAY_FRAMEBUFFER_SIZE);
+    }
+    return retained;
+}
+
+static int test_display_transition_adapter_freezes_source_and_orders_each_write(void) {
+    static uint8_t original_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t fallback_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t source_snapshot[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t target[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t scratch[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t last_successful[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_display_retained_state_t retained;
+    watchy_transition_plan_t plan = push_right_plan();
+    watchy_transition_result_t result;
+    display_transition_fake_t fake = {
+        .fail_at = SIZE_MAX,
+        .cancel_after = SIZE_MAX,
+        .last_successful_frame = last_successful,
+    };
+    watchy_display_transition_io_t io = {
+        .retained = &retained,
+        .partial_limit = 20u,
+        .target_requested = WATCHY_REFRESH_PARTIAL,
+        .physical_write = fake_physical_write,
+        .cancel = fake_transition_cancel,
+        .feed = fake_transition_feed,
+        .context = &fake,
+    };
+
+    memset(original_source, 0xff, sizeof(original_source));
+    memset(fallback_source, 0x55, sizeof(fallback_source));
+    memset(target, 0x00, sizeof(target));
+    retained = retained_with_frame(original_source, 18u);
+
+    CHECK(watchy_display_execute_plan(&plan, fallback_source, target, source_snapshot, scratch,
+                                      sizeof(scratch), &io, &result) == WATCHY_STATUS_OK);
+    CHECK(result.completed && result.writes_completed == 3u);
+    CHECK(fake.write_calls == 3u && fake.feed_calls == 3u);
+    CHECK(fake.event_count == 8u && memcmp(fake.events, "WFCWFCWF", 8u) == 0);
+    CHECK(fake.modes[0] == WATCHY_REFRESH_PARTIAL);
+    CHECK(fake.modes[1] == WATCHY_REFRESH_FULL);
+    CHECK(fake.modes[2] == WATCHY_REFRESH_PARTIAL);
+    CHECK(!fake.sampled_black[1]);
+    CHECK(memcmp(source_snapshot, original_source, sizeof(original_source)) == 0);
+    CHECK(watchy_display_retained_valid(&retained));
+    CHECK(retained.partial_count == 1u);
+    CHECK(memcmp(retained.previous_frame, target, sizeof(target)) == 0);
+    return 0;
+}
+
+static int test_display_transition_adapter_cancellation_retains_last_successful_frame(void) {
+    static uint8_t original_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t fallback_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t source_snapshot[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t target[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t scratch[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t last_successful[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_display_retained_state_t retained;
+    watchy_transition_plan_t plan = push_right_plan();
+    watchy_transition_result_t result;
+    display_transition_fake_t fake = {
+        .fail_at = SIZE_MAX,
+        .cancel_after = 1u,
+        .last_successful_frame = last_successful,
+    };
+    watchy_display_transition_io_t io = {
+        .retained = &retained,
+        .partial_limit = 20u,
+        .target_requested = WATCHY_REFRESH_PARTIAL,
+        .physical_write = fake_physical_write,
+        .cancel = fake_transition_cancel,
+        .feed = fake_transition_feed,
+        .context = &fake,
+    };
+
+    memset(original_source, 0xff, sizeof(original_source));
+    memset(fallback_source, 0x55, sizeof(fallback_source));
+    memset(target, 0x00, sizeof(target));
+    retained = retained_with_frame(original_source, 0u);
+
+    CHECK(watchy_display_execute_plan(&plan, fallback_source, target, source_snapshot, scratch,
+                                      sizeof(scratch), &io, &result) == WATCHY_STATUS_OK);
+    CHECK(result.cancelled && !result.completed && result.writes_completed == 1u);
+    CHECK(fake.write_calls == 1u && fake.feed_calls == 1u);
+    CHECK(fake.event_count == 3u && memcmp(fake.events, "WFC", 3u) == 0);
+    CHECK(watchy_display_retained_valid(&retained));
+    CHECK(retained.partial_count == 1u);
+    CHECK(memcmp(retained.previous_frame, last_successful, sizeof(last_successful)) == 0);
+    return 0;
+}
+
+static int test_display_transition_adapter_write_failure_invalidates_retained_source(void) {
+    static uint8_t original_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t fallback_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t source_snapshot[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t target[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t scratch[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    static uint8_t last_successful[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_display_retained_state_t retained;
+    watchy_transition_plan_t plan = push_right_plan();
+    watchy_transition_result_t result;
+    display_transition_fake_t fake = {
+        .fail_at = 1u,
+        .cancel_after = SIZE_MAX,
+        .last_successful_frame = last_successful,
+    };
+    watchy_display_transition_io_t io = {
+        .retained = &retained,
+        .partial_limit = 20u,
+        .target_requested = WATCHY_REFRESH_PARTIAL,
+        .physical_write = fake_physical_write,
+        .cancel = fake_transition_cancel,
+        .feed = fake_transition_feed,
+        .context = &fake,
+    };
+
+    memset(original_source, 0xff, sizeof(original_source));
+    memset(fallback_source, 0x55, sizeof(fallback_source));
+    memset(target, 0x00, sizeof(target));
+    retained = retained_with_frame(original_source, 0u);
+
+    CHECK(watchy_display_execute_plan(&plan, fallback_source, target, source_snapshot, scratch,
+                                      sizeof(scratch), &io, &result) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_WRITE);
+    CHECK(result.writes_completed == 1u);
+    CHECK(fake.write_calls == 2u && fake.feed_calls == 1u);
+    CHECK(fake.event_count == 4u && memcmp(fake.events, "WFCW", 4u) == 0);
+    CHECK(!watchy_display_retained_valid(&retained));
+    CHECK(memcmp(retained.previous_frame, last_successful, sizeof(last_successful)) == 0);
+    return 0;
+}
+
 static int test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets(void) {
     uint8_t registers[7] = {0x56, 0x34, 0x12, 0x29, 0x04, 0x02, 0x24};
     watchy_time_t time;
@@ -380,6 +579,9 @@ int main(void) {
     CHECK(test_display_retained_state_controls_boot_refresh_and_commits_only_on_success() == 0);
     CHECK(test_display_refresh_policy_promotes_and_counts_each_physical_write() == 0);
     CHECK(test_display_multi_write_tracks_each_frame_and_invalidates_on_failure() == 0);
+    CHECK(test_display_transition_adapter_freezes_source_and_orders_each_write() == 0);
+    CHECK(test_display_transition_adapter_cancellation_retains_last_successful_frame() == 0);
+    CHECK(test_display_transition_adapter_write_failure_invalidates_retained_source() == 0);
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
     CHECK(test_pcf8563_alarm_encodes_documented_next_match_fields() == 0);
     CHECK(test_sleep_admission_and_wake_source_debounce_are_fail_closed() == 0);
@@ -387,6 +589,6 @@ int main(void) {
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 16 HAL tests");
+    puts("PASS 19 HAL tests");
     return 0;
 }
