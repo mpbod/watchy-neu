@@ -18,6 +18,14 @@ static void row(watchy_canvas_t *canvas, int index, const char *text, bool selec
     watchy_ui_draw_text(canvas, 9, y, text, 2u, !selected);
 }
 
+static void compact_row(watchy_canvas_t *canvas, int index, const char *text, bool selected) {
+    const int16_t y = (int16_t)(33 + index * 21);
+    if (selected) {
+        watchy_ui_rect(canvas, 4, (int16_t)(y - 3), 192, 15, true);
+    }
+    watchy_ui_draw_text(canvas, 8, y, text, 1u, !selected);
+}
+
 static void detail_lines(watchy_canvas_t *canvas, int16_t y, const char *detail) {
     char line[48];
     while (detail != NULL && *detail != '\0' && y < 193) {
@@ -94,18 +102,46 @@ static void render_settings(watchy_canvas_t *canvas,
 
 static void render_packages(watchy_canvas_t *canvas,
                             const watchy_shell_t *shell,
-                            const watchy_package_catalog_t *catalog) {
+                            const watchy_package_catalog_t *catalog,
+                            const char *detail) {
     title(canvas, shell->safe_mode ? "REMOVE" : "PACKAGES");
-    if (catalog == NULL || catalog->count == 0u) {
+    if (catalog == NULL || catalog->count == 0u || shell->package_count == 0u) {
         row(canvas, 0, "NO PACKAGES", true);
+    } else {
+        const size_t page_start = watchy_shell_package_page_start(shell);
+        for (size_t position = page_start; position < shell->package_count &&
+                                             position < page_start + WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
+             ++position) {
+            char label[WATCHY_SHELL_PACKAGE_LABEL_SIZE];
+            const size_t catalog_index = shell->package_indices[position];
+            if (catalog_index >= catalog->count ||
+                !watchy_shell_format_package_label(&catalog->packages[catalog_index], position,
+                                                   shell->package_count, label, sizeof(label))) {
+                continue;
+            }
+            compact_row(canvas, (int)(position - page_start), label, shell->selection == position);
+        }
+    }
+    if (detail != NULL) watchy_ui_draw_text(canvas, 8, 184, detail, 1u, true);
+}
+
+static void render_diagnostics(watchy_canvas_t *canvas,
+                               const watchy_shell_t *shell,
+                               const watchy_diagnostic_report_t *diagnostics) {
+    title(canvas, "DIAGNOSTICS");
+    if (diagnostics == NULL || diagnostics->count == 0u) {
+        row(canvas, 2, "UNAVAILABLE", false);
         return;
     }
-    for (size_t index = 0u; index < catalog->count && index < 7u; ++index) {
-        char label[48];
-        const watchy_package_info_t *package = &catalog->packages[index];
-        snprintf(label, sizeof(label), "%c%s", package->quarantined ? '!' :
-                 (package->active || package->pending ? '*' : ' '), package->package_ref);
-        row(canvas, (int)index, label, shell->selection == index);
+    const size_t page_start = watchy_shell_diagnostic_page_start(shell);
+    for (size_t index = page_start; index < diagnostics->count &&
+                                      index < page_start + WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
+         ++index) {
+        char label[WATCHY_SHELL_DIAGNOSTIC_LABEL_SIZE];
+        if (watchy_shell_format_diagnostic_label(&diagnostics->entries[index], label,
+                                                 sizeof(label))) {
+            compact_row(canvas, (int)(index - page_start), label, shell->selection == index);
+        }
     }
 }
 
@@ -115,6 +151,7 @@ void watchy_shell_render(watchy_canvas_t *canvas,
                          const watchy_time_t *time,
                          const watchy_battery_state_t *battery,
                          const watchy_package_catalog_t *catalog,
+                         const watchy_diagnostic_report_t *diagnostics,
                          const char *detail) {
     if (canvas == NULL || shell == NULL || settings == NULL) {
         return;
@@ -128,7 +165,7 @@ void watchy_shell_render(watchy_canvas_t *canvas,
         render_launcher(canvas, shell);
         break;
     case WATCHY_SHELL_PACKAGE_APPS:
-        render_packages(canvas, shell, catalog);
+        render_packages(canvas, shell, catalog, detail);
         break;
     case WATCHY_SHELL_SETTINGS:
         render_settings(canvas, shell, settings);
@@ -153,8 +190,7 @@ void watchy_shell_render(watchy_canvas_t *canvas,
         detail_lines(canvas, 114, detail);
         break;
     case WATCHY_SHELL_DIAGNOSTICS:
-        title(canvas, "DIAGNOSTICS");
-        row(canvas, 2, detail == NULL ? "SEE SERIAL" : detail, false);
+        render_diagnostics(canvas, shell, diagnostics);
         break;
     case WATCHY_SHELL_ABOUT:
         title(canvas, "ABOUT");
@@ -163,13 +199,14 @@ void watchy_shell_render(watchy_canvas_t *canvas,
         break;
     case WATCHY_SHELL_ERROR:
         title(canvas, "ERROR");
-        row(canvas, 2, detail == NULL ? "OPERATION FAILED" : detail, false);
+        compact_row(canvas, 3, watchy_shell_error_message(shell), false);
         break;
     case WATCHY_SHELL_SAFE_MODE:
         title(canvas, "SAFE MODE");
         row(canvas, 0, detail == NULL ? "RECOVERY" : detail, false);
         row(canvas, 2, "DIAGNOSTICS", shell->selection == 0u);
-        row(canvas, 3, "REMOVE ALL", shell->selection == 1u);
+        row(canvas, 3, shell->package_index_readable ? "REMOVE PACKAGE" : "REMOVE ALL",
+            shell->selection == 1u);
         row(canvas, 4, "NORMAL REBOOT", shell->selection == 2u);
         break;
     }

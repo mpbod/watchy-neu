@@ -16,6 +16,7 @@ void watchy_shell_render(watchy_canvas_t *canvas,
                          const watchy_time_t *time,
                          const watchy_battery_state_t *battery,
                          const watchy_package_catalog_t *catalog,
+                         const watchy_diagnostic_report_t *diagnostics,
                          const char *detail);
 
 #ifdef __cplusplus

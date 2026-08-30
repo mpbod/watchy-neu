@@ -1,4 +1,5 @@
 #include "watchy/package_host.h"
+#include "watchy/package_runtime.h"
 
 #include <string.h>
 
@@ -15,6 +16,38 @@ bool watchy_package_transaction_name_valid(const char *name) {
         }
     }
     return true;
+}
+
+bool watchy_package_run_watchface_cycle(const watchy_package_watchface_runner_t *runner) {
+    watchy_package_status_t status;
+    bool rendered = false;
+    if (runner == NULL || runner->start == NULL || runner->active == NULL ||
+        runner->render == NULL || runner->stop == NULL) {
+        return false;
+    }
+    status = runner->start(runner->context);
+    if (status == WATCHY_PACKAGE_OK && runner->active(runner->context)) {
+        status = runner->render(runner->context);
+        rendered = status == WATCHY_PACKAGE_OK;
+    }
+    if (runner->active(runner->context)) {
+        const watchy_package_status_t stop_status = runner->stop(runner->context);
+        if (status == WATCHY_PACKAGE_OK) {
+            status = stop_status;
+        }
+    }
+    return rendered && status == WATCHY_PACKAGE_OK;
+}
+
+watchy_package_status_t watchy_package_upload_finalize_status(bool active,
+                                                              bool output_valid,
+                                                              bool content_complete,
+                                                              bool sync_ok,
+                                                              bool close_ok) {
+    if (!active || !output_valid) return WATCHY_PACKAGE_ERR_ARGUMENT;
+    if (!content_complete) return WATCHY_PACKAGE_ERR_WPK;
+    if (!sync_ok || !close_ok) return WATCHY_PACKAGE_ERR_FILESYSTEM;
+    return WATCHY_PACKAGE_OK;
 }
 
 watchy_package_reconcile_action_t watchy_package_reconcile_version(const char *name,

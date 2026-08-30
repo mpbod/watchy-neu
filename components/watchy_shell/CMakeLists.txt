@@ -16,6 +16,8 @@ idf_component_register(
         esp_http_server
         esp_netif
         esp_wifi
+        bootloader_support
+        mbedtls
         nvs_flash
 )
 

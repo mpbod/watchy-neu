@@ -929,10 +929,33 @@ bool watchy_packages_runner_active(void) {
     return s_runner.active;
 }
 
+typedef struct {
+    const char *reference;
+} watchface_cycle_context_t;
+
+static watchy_package_status_t watchface_cycle_start(void *context) {
+    const watchface_cycle_context_t *cycle = context;
+    return watchy_packages_runner_start(cycle->reference, false);
+}
+
+static bool watchface_cycle_active(void *context) {
+    (void)context;
+    return watchy_packages_runner_active();
+}
+
+static watchy_package_status_t watchface_cycle_render(void *context) {
+    (void)context;
+    return watchy_packages_runner_render();
+}
+
+static watchy_package_status_t watchface_cycle_stop(void *context) {
+    (void)context;
+    return watchy_packages_runner_stop();
+}
+
 bool watchy_packages_run_watchface(bool safe_mode) {
     const watchy_package_index_t *index;
     char reference[WATCHY_PACKAGE_REF_MAX + 1u];
-    watchy_package_status_t status;
     if (safe_mode || watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
         xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
         return false;
@@ -946,14 +969,15 @@ bool watchy_packages_run_watchface(bool safe_mode) {
     }
     memcpy(reference, selected, strlen(selected) + 1u);
     (void)xSemaphoreGive(s_package_mutex);
-    status = watchy_packages_runner_start(reference, false);
-    if (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
-        status = watchy_packages_runner_render();
-    }
-    if (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
-        status = watchy_packages_runner_stop();
-    }
-    return status == WATCHY_PACKAGE_OK;
+    watchface_cycle_context_t cycle = {.reference = reference};
+    const watchy_package_watchface_runner_t runner = {
+        .start = watchface_cycle_start,
+        .active = watchface_cycle_active,
+        .render = watchface_cycle_render,
+        .stop = watchface_cycle_stop,
+        .context = &cycle,
+    };
+    return watchy_package_run_watchface_cycle(&runner);
 }
 
 watchy_package_status_t watchy_packages_install_blob(
@@ -1111,12 +1135,16 @@ watchy_package_status_t watchy_packages_safe_mode_purge(void) {
 }
 
 watchy_package_status_t watchy_packages_upload_begin(size_t expected_size) {
+    watchy_package_status_t status;
     if (expected_size == 0u || expected_size > WATCHY_PACKAGE_WPK_BYTES_MAX) {
         return expected_size > WATCHY_PACKAGE_WPK_BYTES_MAX ? WATCHY_PACKAGE_ERR_LIMIT
                                                             : WATCHY_PACKAGE_ERR_ARGUMENT;
     }
-    if (watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
-        atomic_flag_test_and_set_explicit(&s_upload_lock, memory_order_acquire)) {
+    status = watchy_packages_runtime_init();
+    if (status != WATCHY_PACKAGE_OK) {
+        return status;
+    }
+    if (atomic_flag_test_and_set_explicit(&s_upload_lock, memory_order_acquire)) {
         return WATCHY_PACKAGE_ERR_STATE;
     }
     memset(&s_upload, 0, sizeof(s_upload));
@@ -1183,13 +1211,22 @@ watchy_package_status_t watchy_packages_upload_finish(
     size_t received;
     char path[WATCHY_IDF_PATH_MAX];
     watchy_package_status_t status;
-    if (!s_upload.active || out_package_ref == NULL ||
-        s_upload.received_size != s_upload.expected_size ||
-        fsync(s_upload.descriptor) != 0 || close(s_upload.descriptor) != 0) {
+    if (!s_upload.active || out_package_ref == NULL) {
+        watchy_packages_upload_abort();
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    if (s_upload.received_size != s_upload.expected_size) {
         watchy_packages_upload_abort();
         return WATCHY_PACKAGE_ERR_WPK;
     }
+    const bool sync_ok = fsync(s_upload.descriptor) == 0;
+    const bool close_ok = close(s_upload.descriptor) == 0;
     s_upload.descriptor = -1;
+    status = watchy_package_upload_finalize_status(true, true, true, sync_ok, close_ok);
+    if (status != WATCHY_PACKAGE_OK) {
+        watchy_packages_upload_abort();
+        return status;
+    }
     received = s_upload.received_size;
     memcpy(path, s_upload.path, sizeof(path));
     bytes = malloc(received);

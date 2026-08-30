@@ -45,6 +45,7 @@ typedef enum {
     WATCHY_PORTAL_ERR_LENGTH_REQUIRED,
     WATCHY_PORTAL_ERR_TOO_LARGE,
     WATCHY_PORTAL_ERR_LOW_BATTERY,
+    WATCHY_PORTAL_ERR_STORAGE,
     WATCHY_PORTAL_ERR_STORAGE_SPACE,
     WATCHY_PORTAL_ERR_UPLOAD_BUSY,
     WATCHY_PORTAL_ERR_INVALID_ROUTE,
@@ -56,6 +57,7 @@ typedef struct {
     bool content_length_known;
     bool chunked;
     uint16_t battery_mv;
+    bool storage_available;
     size_t free_bytes;
     bool upload_in_progress;
 } watchy_portal_upload_request_t;
@@ -78,6 +80,18 @@ typedef struct {
     bool client_mode;
 } watchy_portal_session_info_t;
 
+typedef struct {
+    bool (*enable)(void *context);
+    bool (*fill)(void *context, uint8_t *bytes, size_t size);
+    void (*disable)(void *context);
+    void *context;
+} watchy_portal_entropy_api_t;
+
+typedef enum {
+    WATCHY_PORTAL_UPLOAD_IO_CLIENT = 0,
+    WATCHY_PORTAL_UPLOAD_IO_PACKAGE,
+} watchy_portal_upload_io_failure_t;
+
 bool watchy_portal_token_authorized(const char *session_token,
                                     const char *request_token);
 bool watchy_portal_parse_route(watchy_portal_method_t method,
@@ -89,8 +103,18 @@ watchy_portal_error_response_t watchy_portal_error_from_policy(
     watchy_portal_policy_status_t status);
 watchy_portal_error_response_t watchy_portal_map_package_error(
     watchy_package_status_t status);
+watchy_portal_error_response_t watchy_portal_map_upload_io_error(
+    watchy_portal_upload_io_failure_t failure,
+    watchy_package_status_t package_status);
+bool watchy_portal_generate_ap_password(const watchy_portal_entropy_api_t *entropy,
+                                        char *out_password,
+                                        size_t out_size);
+bool watchy_portal_fill_guaranteed_entropy(const watchy_portal_entropy_api_t *entropy,
+                                           uint8_t *out_bytes,
+                                           size_t size);
 bool watchy_portal_idle_expired(uint64_t last_activity_ms, uint64_t now_ms);
 
+watchy_status_t watchy_portal_prepare_ap_password(void);
 watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
                                     const watchy_settings_t *settings,
                                     watchy_portal_session_info_t *out_info);

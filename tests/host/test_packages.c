@@ -5,6 +5,7 @@
 
 #include "watchy/packages.h"
 #include "watchy/package_host.h"
+#include "watchy/package_runtime.h"
 #include "watchy/package_crypto.h"
 #include "watchy/wpk.h"
 
@@ -614,6 +615,84 @@ static int test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure(
           WATCHY_PACKAGE_POST_FAIL_CLEANUP);
     CHECK(watchy_package_post_action(false, false, true, false) ==
           WATCHY_PACKAGE_POST_FAIL_CLEANUP);
+    return 0;
+}
+
+typedef struct {
+    watchy_package_status_t start_status;
+    watchy_package_status_t render_status;
+    watchy_package_status_t stop_status;
+    bool active_after_start;
+    bool active;
+    unsigned render_calls;
+    unsigned stop_calls;
+} watchface_cycle_probe_t;
+
+static watchy_package_status_t cycle_start(void *context) {
+    watchface_cycle_probe_t *probe = context;
+    probe->active = probe->active_after_start;
+    return probe->start_status;
+}
+
+static bool cycle_active(void *context) {
+    return ((watchface_cycle_probe_t *)context)->active;
+}
+
+static watchy_package_status_t cycle_render(void *context) {
+    watchface_cycle_probe_t *probe = context;
+    ++probe->render_calls;
+    return probe->render_status;
+}
+
+static watchy_package_status_t cycle_stop(void *context) {
+    watchface_cycle_probe_t *probe = context;
+    ++probe->stop_calls;
+    probe->active = false;
+    return probe->stop_status;
+}
+
+static int test_watchface_cycle_requires_a_successful_render_and_refresh(void) {
+    watchface_cycle_probe_t probe = {
+        .start_status = WATCHY_PACKAGE_OK,
+        .render_status = WATCHY_PACKAGE_OK,
+        .stop_status = WATCHY_PACKAGE_OK,
+        .active_after_start = false,
+    };
+    const watchy_package_watchface_runner_t runner = {
+        .start = cycle_start,
+        .active = cycle_active,
+        .render = cycle_render,
+        .stop = cycle_stop,
+        .context = &probe,
+    };
+
+    CHECK(!watchy_package_run_watchface_cycle(&runner));
+    CHECK(probe.render_calls == 0u);
+    CHECK(probe.stop_calls == 0u);
+
+    probe.active_after_start = true;
+    probe.active = false;
+    CHECK(watchy_package_run_watchface_cycle(&runner));
+    CHECK(probe.render_calls == 1u);
+    CHECK(probe.stop_calls == 1u);
+
+    probe.active = false;
+    probe.render_status = WATCHY_PACKAGE_ERR_CALLBACK;
+    CHECK(!watchy_package_run_watchface_cycle(&runner));
+    CHECK(probe.render_calls == 2u);
+    CHECK(probe.stop_calls == 2u);
+    return 0;
+}
+
+static int test_upload_finalize_distinguishes_incomplete_content_from_storage_failures(void) {
+    CHECK(watchy_package_upload_finalize_status(true, true, false, true, true) ==
+          WATCHY_PACKAGE_ERR_WPK);
+    CHECK(watchy_package_upload_finalize_status(true, true, true, false, true) ==
+          WATCHY_PACKAGE_ERR_FILESYSTEM);
+    CHECK(watchy_package_upload_finalize_status(true, true, true, true, false) ==
+          WATCHY_PACKAGE_ERR_FILESYSTEM);
+    CHECK(watchy_package_upload_finalize_status(true, true, true, true, true) ==
+          WATCHY_PACKAGE_OK);
     return 0;
 }
 
@@ -1608,6 +1687,8 @@ int main(void) {
     CHECK(test_reconciliation_distinguishes_valid_new_versions_from_transactions() == 0);
     CHECK(test_async_policy_pumps_once_and_preserves_cancelled_requests() == 0);
     CHECK(test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure() == 0);
+    CHECK(test_watchface_cycle_requires_a_successful_render_and_refresh() == 0);
+    CHECK(test_upload_finalize_distinguishes_incomplete_content_from_storage_failures() == 0);
     CHECK(test_callback_budget_stops_repeated_sleeps_and_watchdog_feeds() == 0);
     CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
@@ -1626,6 +1707,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 32 package tests");
+    puts("PASS 34 package tests");
     return 0;
 }

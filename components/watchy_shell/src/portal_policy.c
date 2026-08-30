@@ -25,17 +25,24 @@ static bool url_component_safe(const char *component) {
 
 bool watchy_portal_token_authorized(const char *session_token,
                                     const char *request_token) {
-    size_t session_length;
-    size_t request_length;
     unsigned char difference = 0u;
     if (session_token == NULL || request_token == NULL ||
-        (session_length = strnlen(session_token, WATCHY_PORTAL_TOKEN_HEX_SIZE + 1u)) == 0u ||
-        session_length > WATCHY_PORTAL_TOKEN_HEX_SIZE ||
-        (request_length = strnlen(request_token, WATCHY_PORTAL_TOKEN_HEX_SIZE + 1u)) !=
-            session_length) {
+        strnlen(session_token, WATCHY_PORTAL_TOKEN_HEX_SIZE + 1u) !=
+            WATCHY_PORTAL_TOKEN_HEX_SIZE ||
+        strnlen(request_token, WATCHY_PORTAL_TOKEN_HEX_SIZE + 1u) !=
+            WATCHY_PORTAL_TOKEN_HEX_SIZE) {
         return false;
     }
-    for (size_t index = 0u; index < session_length; ++index) {
+    for (size_t index = 0u; index < WATCHY_PORTAL_TOKEN_HEX_SIZE; ++index) {
+        const char session = session_token[index];
+        const char request = request_token[index];
+        const bool session_hex = (session >= '0' && session <= '9') ||
+                                 (session >= 'a' && session <= 'f') ||
+                                 (session >= 'A' && session <= 'F');
+        const bool request_hex = (request >= '0' && request <= '9') ||
+                                 (request >= 'a' && request <= 'f') ||
+                                 (request >= 'A' && request <= 'F');
+        if (!session_hex || !request_hex) return false;
         difference |= (unsigned char)session_token[index] ^ (unsigned char)request_token[index];
     }
     return difference == 0u;
@@ -135,6 +142,9 @@ watchy_portal_policy_status_t watchy_portal_check_upload(
     if (request->battery_mv < 3550u) {
         return WATCHY_PORTAL_ERR_LOW_BATTERY;
     }
+    if (!request->storage_available) {
+        return WATCHY_PORTAL_ERR_STORAGE;
+    }
     if (request->free_bytes < request->content_length ||
         request->free_bytes - request->content_length < WATCHY_PORTAL_INSTALL_RESERVE_BYTES) {
         return WATCHY_PORTAL_ERR_STORAGE_SPACE;
@@ -155,6 +165,8 @@ watchy_portal_error_response_t watchy_portal_error_from_policy(
         return (watchy_portal_error_response_t){413u, "package_too_large"};
     case WATCHY_PORTAL_ERR_LOW_BATTERY:
         return (watchy_portal_error_response_t){409u, "low_battery"};
+    case WATCHY_PORTAL_ERR_STORAGE:
+        return (watchy_portal_error_response_t){507u, "storage_error"};
     case WATCHY_PORTAL_ERR_STORAGE_SPACE:
         return (watchy_portal_error_response_t){507u, "insufficient_storage"};
     case WATCHY_PORTAL_ERR_UPLOAD_BUSY:
@@ -165,6 +177,46 @@ watchy_portal_error_response_t watchy_portal_error_from_policy(
         break;
     }
     return (watchy_portal_error_response_t){500u, "internal_error"};
+}
+
+watchy_portal_error_response_t watchy_portal_map_upload_io_error(
+    watchy_portal_upload_io_failure_t failure,
+    watchy_package_status_t package_status) {
+    if (failure == WATCHY_PORTAL_UPLOAD_IO_CLIENT) {
+        return (watchy_portal_error_response_t){400u, "upload_incomplete"};
+    }
+    return watchy_portal_map_package_error(package_status);
+}
+
+bool watchy_portal_fill_guaranteed_entropy(const watchy_portal_entropy_api_t *entropy,
+                                           uint8_t *out_bytes,
+                                           size_t size) {
+    bool filled;
+    if (out_bytes == NULL || size == 0u || entropy == NULL || entropy->enable == NULL ||
+        entropy->fill == NULL || entropy->disable == NULL ||
+        !entropy->enable(entropy->context)) {
+        return false;
+    }
+    filled = entropy->fill(entropy->context, out_bytes, size);
+    entropy->disable(entropy->context);
+    if (!filled) memset(out_bytes, 0, size);
+    return filled;
+}
+
+bool watchy_portal_generate_ap_password(const watchy_portal_entropy_api_t *entropy,
+                                        char *out_password,
+                                        size_t out_size) {
+    static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    uint8_t bytes[16];
+    if (out_password == NULL || out_size < sizeof(bytes) + 1u) return false;
+    out_password[0] = '\0';
+    if (!watchy_portal_fill_guaranteed_entropy(entropy, bytes, sizeof(bytes))) return false;
+    for (size_t index = 0u; index < sizeof(bytes); ++index) {
+        out_password[index] = alphabet[bytes[index] % (sizeof(alphabet) - 1u)];
+    }
+    out_password[sizeof(bytes)] = '\0';
+    memset(bytes, 0, sizeof(bytes));
+    return true;
 }
 
 watchy_portal_error_response_t watchy_portal_map_package_error(

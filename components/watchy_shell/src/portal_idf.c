@@ -11,12 +11,14 @@
 #include <string.h>
 
 #include "esp_http_server.h"
+#include "bootloader_random.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "mbedtls/sha256.h"
 
 #define WATCHY_PORTAL_RECEIVE_CHUNK 1024u
 #define WATCHY_PORTAL_CLIENT_TIMEOUT_MS 15000u
@@ -29,6 +31,9 @@ typedef struct {
 } portal_state_t;
 
 static portal_state_t s_portal;
+static uint8_t s_ap_entropy_seed[32];
+static uint32_t s_ap_session_counter;
+static bool s_ap_entropy_ready;
 static portMUX_TYPE s_portal_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static const char PAGE_HEAD[] =
@@ -249,6 +254,7 @@ static esp_err_t receive_upload(httpd_req_t *request) {
     watchy_battery_state_t battery = {0};
     size_t total = 0u;
     size_t free_bytes = 0u;
+    const watchy_status_t storage_status = watchy_storage_space(&total, &free_bytes);
     watchy_portal_upload_request_t policy = {
         .content_type = NULL,
         .content_length = request->content_len,
@@ -257,8 +263,8 @@ static esp_err_t receive_upload(httpd_req_t *request) {
                                sizeof(transfer_encoding)),
         .battery_mv = watchy_battery_read(&battery) == WATCHY_STATUS_OK
                           ? battery.millivolts : 0u,
-        .free_bytes = watchy_storage_space(&total, &free_bytes) == WATCHY_STATUS_OK
-                          ? free_bytes : 0u,
+        .storage_available = storage_status == WATCHY_STATUS_OK,
+        .free_bytes = free_bytes,
         .upload_in_progress = watchy_packages_upload_active(),
     };
     watchy_portal_policy_status_t policy_status;
@@ -280,11 +286,16 @@ static esp_err_t receive_upload(httpd_req_t *request) {
     while (remaining != 0u) {
         const size_t wanted = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
         const int received = httpd_req_recv(request, (char *)chunk, wanted);
-        if (received <= 0 ||
-            watchy_packages_upload_write(chunk, (size_t)received) != WATCHY_PACKAGE_OK) {
+        if (received <= 0) {
             watchy_packages_upload_abort();
-            return send_public_error(request,
-                (watchy_portal_error_response_t){400u, "upload_incomplete"});
+            return send_public_error(request, watchy_portal_map_upload_io_error(
+                WATCHY_PORTAL_UPLOAD_IO_CLIENT, WATCHY_PACKAGE_OK));
+        }
+        package_status = watchy_packages_upload_write(chunk, (size_t)received);
+        if (package_status != WATCHY_PACKAGE_OK) {
+            watchy_packages_upload_abort();
+            return send_public_error(request, watchy_portal_map_upload_io_error(
+                WATCHY_PORTAL_UPLOAD_IO_PACKAGE, package_status));
         }
         remaining -= (size_t)received;
         mark_activity();
@@ -347,20 +358,73 @@ static esp_err_t request_handler(httpd_req_t *request) {
 
 static void random_hex(char *out, size_t byte_count) {
     static const char digits[] = "0123456789abcdef";
+    uint8_t bytes[WATCHY_PORTAL_TOKEN_HEX_SIZE / 2u];
+    esp_fill_random(bytes, byte_count);
     for (size_t index = 0u; index < byte_count; ++index) {
-        const uint8_t value = (uint8_t)esp_random();
+        const uint8_t value = bytes[index];
         out[index * 2u] = digits[value >> 4u];
         out[index * 2u + 1u] = digits[value & 15u];
     }
     out[byte_count * 2u] = '\0';
+    memset(bytes, 0, sizeof(bytes));
 }
 
-static void random_password(char out[65]) {
+static bool entropy_enable(void *context) {
+    (void)context;
+    bootloader_random_enable();
+    return true;
+}
+
+static bool entropy_fill(void *context, uint8_t *bytes, size_t size) {
+    (void)context;
+    if (bytes == NULL || size == 0u) return false;
+    esp_fill_random(bytes, size);
+    return true;
+}
+
+static void entropy_disable(void *context) {
+    (void)context;
+    bootloader_random_disable();
+}
+
+watchy_status_t watchy_portal_prepare_ap_password(void) {
+    const watchy_portal_entropy_api_t entropy = {
+        .enable = entropy_enable,
+        .fill = entropy_fill,
+        .disable = entropy_disable,
+        .context = NULL,
+    };
+    if (s_ap_entropy_ready) return WATCHY_STATUS_OK;
+    s_ap_entropy_ready = watchy_portal_fill_guaranteed_entropy(
+        &entropy, s_ap_entropy_seed, sizeof(s_ap_entropy_seed));
+    return s_ap_entropy_ready ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
+}
+
+static bool derive_ap_password(char *out_password, size_t out_size) {
     static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    for (size_t index = 0u; index < 16u; ++index) {
-        out[index] = alphabet[esp_random() % (sizeof(alphabet) - 1u)];
+    uint8_t material[sizeof(s_ap_entropy_seed) + sizeof(s_ap_session_counter)];
+    uint8_t digest[32];
+    if (!s_ap_entropy_ready || out_password == NULL || out_size < 17u ||
+        s_ap_session_counter == UINT32_MAX) {
+        return false;
     }
-    out[16] = '\0';
+    memcpy(material, s_ap_entropy_seed, sizeof(s_ap_entropy_seed));
+    const uint32_t counter = ++s_ap_session_counter;
+    material[32] = (uint8_t)(counter >> 24u);
+    material[33] = (uint8_t)(counter >> 16u);
+    material[34] = (uint8_t)(counter >> 8u);
+    material[35] = (uint8_t)counter;
+    if (mbedtls_sha256(material, sizeof(material), digest, 0) != 0) {
+        memset(material, 0, sizeof(material));
+        return false;
+    }
+    for (size_t index = 0u; index < 16u; ++index) {
+        out_password[index] = alphabet[digest[index] % (sizeof(alphabet) - 1u)];
+    }
+    out_password[16] = '\0';
+    memset(material, 0, sizeof(material));
+    memset(digest, 0, sizeof(digest));
+    return true;
 }
 
 static watchy_status_t start_network(watchy_portal_network_mode_t mode,
@@ -373,13 +437,17 @@ static watchy_status_t start_network(watchy_portal_network_mode_t mode,
         }
         snprintf(config.ssid, sizeof(config.ssid), "Watchy-%02X%02X%02X",
                  mac[3], mac[4], mac[5]);
-        random_password(config.password);
+        if (!derive_ap_password(config.password, sizeof(config.password))) {
+            return WATCHY_STATUS_INVALID_STATE;
+        }
         if (watchy_wifi_start_ap(&config) != WATCHY_STATUS_OK) {
+            memset(config.password, 0, sizeof(config.password));
             return WATCHY_STATUS_INVALID_STATE;
         }
         memcpy(s_portal.info.network_name, config.ssid, sizeof(s_portal.info.network_name));
         memcpy(s_portal.info.network_secret, config.password,
                sizeof(s_portal.info.network_secret));
+        memset(config.password, 0, sizeof(config.password));
         memcpy(s_portal.info.address, "192.168.4.1", sizeof("192.168.4.1"));
         return WATCHY_STATUS_OK;
     }
@@ -425,11 +493,13 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     memset(&s_portal, 0, sizeof(s_portal));
-    random_hex(s_portal.info.token, WATCHY_PORTAL_TOKEN_HEX_SIZE / 2u);
     if (start_network(mode, settings) != WATCHY_STATUS_OK) {
         memset(&s_portal, 0, sizeof(s_portal));
         return WATCHY_STATUS_INVALID_STATE;
     }
+    /* The Wi-Fi radio is now an initialized true-entropy source. Keep the
+     * mutation token at the full 128 bits and generate it only after startup. */
+    random_hex(s_portal.info.token, WATCHY_PORTAL_TOKEN_HEX_SIZE / 2u);
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 4u;
     config.stack_size = 8192u;

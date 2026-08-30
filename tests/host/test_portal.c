@@ -11,11 +11,13 @@
 } while (0)
 
 static int test_mutating_routes_require_the_exact_session_token(void) {
-    CHECK(!watchy_portal_token_authorized("abc123", NULL));
-    CHECK(!watchy_portal_token_authorized("abc123", "abc12"));
-    CHECK(!watchy_portal_token_authorized("abc123", "abc1234"));
-    CHECK(!watchy_portal_token_authorized("abc123", "ABC123"));
-    CHECK(watchy_portal_token_authorized("abc123", "abc123"));
+    static const char token[] = "00112233445566778899aabbccddeeff";
+    CHECK(!watchy_portal_token_authorized(token, NULL));
+    CHECK(!watchy_portal_token_authorized(token, "00112233445566778899aabbccddee"));
+    CHECK(!watchy_portal_token_authorized(token, "00112233445566778899aabbccddeeff0"));
+    CHECK(!watchy_portal_token_authorized(token, "00112233445566778899aabbccddeefg"));
+    CHECK(!watchy_portal_token_authorized("short", "short"));
+    CHECK(watchy_portal_token_authorized(token, token));
     return 0;
 }
 
@@ -68,6 +70,7 @@ static watchy_portal_upload_request_t valid_upload(void) {
         .content_length_known = true,
         .chunked = false,
         .battery_mv = 3550u,
+        .storage_available = true,
         .free_bytes = 1024u + WATCHY_PORTAL_INSTALL_RESERVE_BYTES,
         .upload_in_progress = false,
     };
@@ -96,11 +99,77 @@ static int test_upload_policy_enforces_content_size_battery_storage_and_exclusio
     request.battery_mv = 3549u;
     CHECK(watchy_portal_check_upload(&request) == WATCHY_PORTAL_ERR_LOW_BATTERY);
     request = valid_upload();
+    request.storage_available = false;
+    CHECK(watchy_portal_check_upload(&request) == WATCHY_PORTAL_ERR_STORAGE);
+    CHECK(watchy_portal_error_from_policy(WATCHY_PORTAL_ERR_STORAGE).http_status == 507u);
+    CHECK(strcmp(watchy_portal_error_from_policy(WATCHY_PORTAL_ERR_STORAGE).code,
+                 "storage_error") == 0);
+    request = valid_upload();
     request.free_bytes--;
     CHECK(watchy_portal_check_upload(&request) == WATCHY_PORTAL_ERR_STORAGE_SPACE);
     request = valid_upload();
     request.upload_in_progress = true;
     CHECK(watchy_portal_check_upload(&request) == WATCHY_PORTAL_ERR_UPLOAD_BUSY);
+    return 0;
+}
+
+typedef struct {
+    bool enable_ok;
+    bool fill_ok;
+    unsigned enable_calls;
+    unsigned fill_calls;
+    unsigned disable_calls;
+} entropy_probe_t;
+
+static bool entropy_enable(void *context) {
+    entropy_probe_t *probe = context;
+    ++probe->enable_calls;
+    return probe->enable_ok;
+}
+
+static bool entropy_fill(void *context, uint8_t *bytes, size_t size) {
+    entropy_probe_t *probe = context;
+    ++probe->fill_calls;
+    if (!probe->fill_ok) return false;
+    for (size_t index = 0u; index < size; ++index) bytes[index] = (uint8_t)(index + 1u);
+    return true;
+}
+
+static void entropy_disable(void *context) {
+    ++((entropy_probe_t *)context)->disable_calls;
+}
+
+static int test_ap_password_generation_brackets_a_guaranteed_entropy_source(void) {
+    entropy_probe_t probe = {.enable_ok = true, .fill_ok = true};
+    const watchy_portal_entropy_api_t entropy = {
+        .enable = entropy_enable, .fill = entropy_fill, .disable = entropy_disable,
+        .context = &probe,
+    };
+    char password[65];
+    CHECK(watchy_portal_generate_ap_password(&entropy, password, sizeof(password)));
+    CHECK(strlen(password) == 16u);
+    CHECK(probe.enable_calls == 1u && probe.fill_calls == 1u && probe.disable_calls == 1u);
+
+    probe = (entropy_probe_t){.enable_ok = false, .fill_ok = true};
+    CHECK(!watchy_portal_generate_ap_password(&entropy, password, sizeof(password)));
+    CHECK(probe.enable_calls == 1u && probe.fill_calls == 0u && probe.disable_calls == 0u);
+    probe = (entropy_probe_t){.enable_ok = true, .fill_ok = false};
+    CHECK(!watchy_portal_generate_ap_password(&entropy, password, sizeof(password)));
+    CHECK(probe.enable_calls == 1u && probe.fill_calls == 1u && probe.disable_calls == 1u);
+    CHECK(password[0] == '\0');
+    return 0;
+}
+
+static int test_upload_transport_and_storage_failures_have_distinct_public_errors(void) {
+    watchy_portal_error_response_t response =
+        watchy_portal_map_upload_io_error(WATCHY_PORTAL_UPLOAD_IO_CLIENT,
+                                          WATCHY_PACKAGE_OK);
+    CHECK(response.http_status == 400u);
+    CHECK(strcmp(response.code, "upload_incomplete") == 0);
+    response = watchy_portal_map_upload_io_error(WATCHY_PORTAL_UPLOAD_IO_PACKAGE,
+                                                 WATCHY_PACKAGE_ERR_FILESYSTEM);
+    CHECK(response.http_status == 507u);
+    CHECK(strcmp(response.code, "storage_error") == 0);
     return 0;
 }
 
@@ -136,6 +205,8 @@ int main(void) {
     failures += test_route_parser_accepts_only_exact_valid_components();
     failures += test_upload_policy_enforces_content_size_battery_storage_and_exclusion();
     failures += test_package_failures_map_to_stable_public_errors();
+    failures += test_ap_password_generation_brackets_a_guaranteed_entropy_source();
+    failures += test_upload_transport_and_storage_failures_have_distinct_public_errors();
     failures += test_idle_deadline_is_activity_relative_and_overflow_safe();
     if (failures == 0) {
         puts("portal tests passed");

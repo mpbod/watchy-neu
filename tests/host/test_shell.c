@@ -48,6 +48,59 @@ static int test_wifi_settings_accept_only_open_or_valid_psk_credentials(void) {
     return 0;
 }
 
+static int test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict(void) {
+    static const char *const valid_timezones[] = {
+        "UTC0", "EST5EDT,M3.2.0,M11.1.0", "<+07>-7",
+    };
+    static const char *const invalid_timezones[] = {
+        "UTC", "UTC+", "UTC0/evil", "UTC0DST", "UTC0DST,M3.2.0",
+        "UTC0DST,M13.2.0,M11.1.0", "UTC0DST,M3.0.0,M11.1.0",
+        "UTC0DST,M3.2.7,M11.1.0", "UTC25", "UT0",
+    };
+    static const char *const invalid_hosts[] = {
+        "-pool.ntp.org", "pool-.ntp.org", "pool..ntp.org", ".pool.ntp.org",
+        "pool.ntp.org.", "pool_ntp.org",
+    };
+    watchy_settings_t settings;
+    for (size_t index = 0u; index < sizeof(valid_timezones) / sizeof(valid_timezones[0]); ++index) {
+        watchy_settings_defaults(&settings);
+        strcpy(settings.timezone, valid_timezones[index]);
+        CHECK(watchy_settings_valid(&settings));
+    }
+    for (size_t index = 0u; index < sizeof(invalid_timezones) / sizeof(invalid_timezones[0]); ++index) {
+        watchy_settings_defaults(&settings);
+        strcpy(settings.timezone, invalid_timezones[index]);
+        CHECK(!watchy_settings_valid(&settings));
+    }
+    for (size_t index = 0u; index < sizeof(invalid_hosts) / sizeof(invalid_hosts[0]); ++index) {
+        watchy_settings_defaults(&settings);
+        strcpy(settings.ntp_server, invalid_hosts[index]);
+        CHECK(!watchy_settings_valid(&settings));
+    }
+    watchy_settings_defaults(&settings);
+    memset(settings.ntp_server, 'a', sizeof(settings.ntp_server));
+    settings.ntp_server[63] = '\0';
+    CHECK(watchy_settings_valid(&settings));
+    settings.ntp_server[0] = '-';
+    CHECK(!watchy_settings_valid(&settings));
+
+    watchy_settings_defaults(&settings);
+    strcpy(settings.wifi_ssid, "home");
+    strcpy(settings.wifi_password, "printable password");
+    CHECK(watchy_settings_valid(&settings));
+    settings.wifi_password[3] = '\n';
+    CHECK(!watchy_settings_valid(&settings));
+    memset(settings.wifi_password, 'a', 64u);
+    settings.wifi_password[64] = '\0';
+    CHECK(watchy_settings_valid(&settings));
+    settings.wifi_password[63] = 'g';
+    CHECK(!watchy_settings_valid(&settings));
+    settings.wifi_ssid[0] = '\0';
+    strcpy(settings.wifi_password, "must-be-empty");
+    CHECK(!watchy_settings_valid(&settings));
+    return 0;
+}
+
 static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void) {
     watchy_shell_t shell;
 
@@ -157,14 +210,171 @@ static int test_manual_time_editor_and_portal_modes_require_explicit_selection(v
 
 static int test_package_list_selects_an_installed_app_for_execution(void) {
     watchy_shell_t shell;
+    watchy_package_catalog_t catalog = {0};
+    catalog.count = 3u;
+    strcpy(catalog.packages[0].package_ref, "face.clock@1");
+    catalog.packages[0].type = WATCHY_PACKAGE_TYPE_WATCHFACE;
+    strcpy(catalog.packages[1].package_ref, "app.timer@1");
+    catalog.packages[1].type = WATCHY_PACKAGE_TYPE_APP;
+    strcpy(catalog.packages[2].package_ref, "app.weather@2");
+    catalog.packages[2].type = WATCHY_PACKAGE_TYPE_APP;
     watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_PACKAGE_APPS);
-    watchy_shell_set_package_count(&shell, 2u);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    CHECK(shell.package_count == 2u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    size_t catalog_index = 0u;
+    CHECK(watchy_shell_selected_package(&shell, &catalog_index));
+    CHECK(catalog_index == 2u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_RUN_PACKAGE);
+    return 0;
+}
+
+static void populate_apps(watchy_package_catalog_t *catalog, size_t count) {
+    memset(catalog, 0, sizeof(*catalog));
+    catalog->count = count;
+    for (size_t index = 0u; index < count; ++index) {
+        snprintf(catalog->packages[index].package_ref,
+                 sizeof(catalog->packages[index].package_ref), "app.%02u@1", (unsigned)index);
+        catalog->packages[index].type = WATCHY_PACKAGE_TYPE_APP;
+    }
+}
+
+static int test_app_launcher_pages_and_maps_zero_seven_eight_and_sixteen_apps(void) {
+    static const size_t counts[] = {0u, 7u, 8u, 16u};
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+    for (size_t case_index = 0u; case_index < sizeof(counts) / sizeof(counts[0]); ++case_index) {
+        populate_apps(&catalog, counts[case_index]);
+        watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+        watchy_shell_set_package_catalog(&shell, &catalog, true);
+        shell.screen = WATCHY_SHELL_PACKAGE_APPS;
+        CHECK(shell.package_count == counts[case_index]);
+        CHECK(watchy_shell_package_page_start(&shell) == 0u);
+        if (counts[case_index] == 0u) {
+            CHECK(!watchy_shell_selected_package(&shell, NULL));
+            watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+            CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_NONE);
+            continue;
+        }
+        for (size_t index = 0u; index < counts[case_index] - 1u; ++index) {
+            watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+        }
+        size_t catalog_index = SIZE_MAX;
+        CHECK(watchy_shell_selected_package(&shell, &catalog_index));
+        CHECK(catalog_index == counts[case_index] - 1u);
+        CHECK(watchy_shell_package_page_start(&shell) ==
+              ((counts[case_index] - 1u) / WATCHY_SHELL_PACKAGE_PAGE_ITEMS) *
+                  WATCHY_SHELL_PACKAGE_PAGE_ITEMS);
+    }
+    return 0;
+}
+
+static int test_package_labels_are_bounded_and_disambiguated(void) {
+    watchy_package_info_t first = {0};
+    watchy_package_info_t second = {0};
+    char first_label[WATCHY_SHELL_PACKAGE_LABEL_SIZE];
+    char second_label[WATCHY_SHELL_PACKAGE_LABEL_SIZE];
+    strcpy(first.package_ref, "app.really.long.shared.prefix.alpha@123456789");
+    strcpy(second.package_ref, "app.really.long.shared.prefix.bravo@123456789");
+    CHECK(watchy_shell_format_package_label(&first, 7u, 16u, first_label,
+                                            sizeof(first_label)));
+    CHECK(watchy_shell_format_package_label(&second, 8u, 16u, second_label,
+                                            sizeof(second_label)));
+    CHECK(strnlen(first_label, sizeof(first_label)) < sizeof(first_label));
+    CHECK(strnlen(second_label, sizeof(second_label)) < sizeof(second_label));
+    CHECK(strcmp(first_label, second_label) != 0);
+    CHECK(strstr(first_label, "08/16") != NULL);
+    CHECK(strstr(second_label, "09/16") != NULL);
+    return 0;
+}
+
+static int test_safe_mode_uses_readable_metadata_for_individual_removal(void) {
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+    populate_apps(&catalog, 2u);
+    strcpy(catalog.packages[0].package_ref, "face.clock@1");
+    catalog.packages[0].type = WATCHY_PACKAGE_TYPE_WATCHFACE;
+    watchy_shell_begin(&shell, WATCHY_WAKE_COLD, true, true, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_PACKAGE_APPS);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_REMOVE_PACKAGE);
+    size_t catalog_index = SIZE_MAX;
+    CHECK(watchy_shell_selected_package(&shell, &catalog_index));
+    CHECK(catalog_index == 1u);
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_COLD, true, true, false);
+    watchy_shell_set_package_catalog(&shell, NULL, false);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_PURGE_PACKAGES);
+    return 0;
+}
+
+static int test_all_operation_failures_enter_a_bounded_safe_error_screen(void) {
+    static const watchy_shell_error_t failures[] = {
+        WATCHY_SHELL_ERROR_SETTINGS_LOAD,
+        WATCHY_SHELL_ERROR_SETTINGS_SAVE,
+        WATCHY_SHELL_ERROR_MANUAL_TIME,
+        WATCHY_SHELL_ERROR_NTP,
+        WATCHY_SHELL_ERROR_PORTAL,
+        WATCHY_SHELL_ERROR_DISPLAY,
+        WATCHY_SHELL_ERROR_PACKAGE,
+    };
+    watchy_shell_t shell;
+    for (size_t index = 0u; index < sizeof(failures) / sizeof(failures[0]); ++index) {
+        watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+        shell.screen = WATCHY_SHELL_SETTINGS;
+        shell.pending_action = WATCHY_SHELL_ACTION_SAVE_SETTINGS;
+        watchy_shell_fail(&shell, failures[index]);
+        const char *message = watchy_shell_error_message(&shell);
+        CHECK(shell.screen == WATCHY_SHELL_ERROR);
+        CHECK(shell.pending_action == WATCHY_SHELL_ACTION_NONE);
+        CHECK(message != NULL && message[0] != '\0');
+        CHECK(strlen(message) <= WATCHY_SHELL_ERROR_MESSAGE_MAX);
+        CHECK(strchr(message, '/') == NULL);
+        CHECK(strchr(message, '\\') == NULL);
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+        CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
+    }
+    return 0;
+}
+
+static int test_diagnostics_have_structured_visible_service_states_and_pages(void) {
+    static const watchy_diagnostic_state_t states[] = {
+        WATCHY_DIAGNOSTIC_PASS,
+        WATCHY_DIAGNOSTIC_FAIL,
+        WATCHY_DIAGNOSTIC_UNAVAILABLE,
+        WATCHY_DIAGNOSTIC_STOPPED,
+    };
+    static const char *const expected[] = {"PASS", "FAIL", "N/A", "OFF"};
+    watchy_shell_t shell;
+    char label[WATCHY_SHELL_DIAGNOSTIC_LABEL_SIZE];
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    shell.screen = WATCHY_SHELL_DIAGNOSTICS;
+    watchy_shell_set_diagnostic_count(&shell, WATCHY_DIAGNOSTIC_ENTRY_COUNT);
+    for (size_t index = 0u; index < sizeof(states) / sizeof(states[0]); ++index) {
+        const watchy_diagnostic_entry_t entry = {
+            .service = "storage", .state = states[index], .status_code = -123,
+            .detail = "must not be displayed",
+        };
+        CHECK(watchy_shell_format_diagnostic_label(&entry, label, sizeof(label)));
+        CHECK(strstr(label, "STORAGE") != NULL);
+        CHECK(strstr(label, expected[index]) != NULL);
+        CHECK(strstr(label, "must") == NULL);
+    }
+    for (size_t index = 0u; index < WATCHY_SHELL_PACKAGE_PAGE_ITEMS; ++index) {
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    }
+    CHECK(shell.selection == WATCHY_SHELL_PACKAGE_PAGE_ITEMS);
+    CHECK(watchy_shell_diagnostic_page_start(&shell) == WATCHY_SHELL_PACKAGE_PAGE_ITEMS);
     return 0;
 }
 
@@ -198,12 +408,18 @@ int main(void) {
     int failures = 0;
     failures += test_invalid_persisted_settings_fall_back_field_by_field();
     failures += test_wifi_settings_accept_only_open_or_valid_psk_credentials();
+    failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();
     failures += test_button_wake_enters_launcher_and_navigation_is_deterministic();
     failures += test_safe_mode_cold_boot_bypasses_normal_routes();
     failures += test_wake_and_idle_policy_return_to_builtin_watchface_before_sleep();
     failures += test_failed_package_render_keeps_builtin_watchface_with_warning();
     failures += test_manual_time_editor_and_portal_modes_require_explicit_selection();
     failures += test_package_list_selects_an_installed_app_for_execution();
+    failures += test_app_launcher_pages_and_maps_zero_seven_eight_and_sixteen_apps();
+    failures += test_package_labels_are_bounded_and_disambiguated();
+    failures += test_safe_mode_uses_readable_metadata_for_individual_removal();
+    failures += test_all_operation_failures_enter_a_bounded_safe_error_screen();
+    failures += test_diagnostics_have_structured_visible_service_states_and_pages();
     failures += test_compact_font_draws_and_clips_real_framebuffer_pixels();
     if (failures == 0) {
         puts("shell tests passed");

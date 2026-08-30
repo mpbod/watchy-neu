@@ -2,7 +2,10 @@
 
 ## Result
 
-Task 4 is implemented on the committed HAL/package runtime through `8a13e2c`.
+Task 4 was built on the approved HAL/package-runtime base commit `8a13e2c`.
+The initial Task 4 implementation head was `b523279`; this report includes the
+subsequent review-fix commit that contains the report itself (the exact final
+HEAD is returned in the handoff).
 The firmware now has filesystem-independent built-in rendering and navigation,
 validated field-by-field NVS settings, latched safe-mode recovery, package app
 launch/fallback behavior, manual and NTP time flows, and an actual ESP-IDF HTTP
@@ -20,9 +23,11 @@ the complete request body in the transport layer.
   field-wise NVS persistence; embedded mobile HTML/CSS/JS; and real
   `esp_http_server`/Wi-Fi adapters.
 - `components/watchy_packages/include/watchy/package_runtime.h` and
-  `src/idf_runtime.c`: public catalog snapshot, removal, safe-mode purge, and
-  serialized streamed-upload staging APIs. Portal code uses these APIs instead
-  of package index or package filesystem internals.
+  `src/idf_runtime.c`/`src/package_policy.c`: public catalog snapshot, removal,
+  safe-mode purge, serialized streamed-upload staging APIs, a tested watchface
+  render/refresh completion contract, and distinct upload finalization errors.
+  Portal code uses these APIs instead of package index or package filesystem
+  internals.
 - `components/watchy_packages/include/watchy/packages.h` and
   `src/package_state.c`: transactional package unregister that compacts health
   and installed records and preserves valid active/pending/prior invariants.
@@ -35,8 +40,9 @@ the complete request body in the transport layer.
   lifecycle, and stack guards. Superseded placeholder `app_hooks.*` were
   removed.
 - `tests/host/test_shell.c`, `test_portal.c`, `test_packages.c`, and
-  `CMakeLists.txt`: portable behavior coverage and package unregister
-  regression coverage.
+  `CMakeLists.txt`: portable behavior coverage for launcher mapping/paging,
+  safe-mode per-package removal, failure transitions, diagnostics, persisted
+  input grammar, entropy bracketing, public HTTP errors, and package lifecycle.
 
 ## Red/green record
 
@@ -74,6 +80,39 @@ Production changes were preceded by focused failing host cases:
    2,272-byte frame. The root cause was the automatic 16-entry package catalog;
    moving that serialized kernel object to static storage reduced the final
    `app_main` frame to 848 bytes.
+10. Review regression: a package that exited during `start` first made the
+    watchface cycle report success without a render. Green requires one
+    successful runner render (which includes display refresh) and successful
+    cleanup; otherwise the built-in watchface fallback remains active.
+11. Review regression: the launcher first indexed the raw catalog, included
+    watchfaces, and hid entries after row seven. Green constructs an app-only
+    mapping, tests 0/7/8/16 app boundaries, pages seven visible rows, maps every
+    selection back to the right catalog entry, and renders bounded ordinal,
+    reference-prefix, and stable-hash labels.
+12. Review regression: readable safe-mode metadata first still produced only a
+    purge-all action. Green snapshots metadata without loading package code,
+    offers per-package selection/removal with a visible success result, and
+    retains purge-all only for an unreadable/corrupt index.
+13. Review regression: operation failures first remained on their source
+    screens, and diagnostics rendered only a serial-log notice. Green sends
+    settings/NVS, manual-time, NTP, portal, display, and package-action failures
+    to a bounded stable error screen, and pages structured per-service
+    `PASS`/`FAIL`/`N/A`/`OFF` diagnostics on the watch.
+14. Review regression: permissive persisted strings first accepted path-like or
+    incomplete TZ values, malformed DNS labels, and non-printable WPA bytes.
+    Green uses a conservative POSIX-TZ parser, strict DNS labels, printable
+    8-63 byte WPA passphrases or exact 64-hex keys, and empty passwords for open
+    networks, with adversarial cases.
+15. Review regression: short token strings first authorized, AP credentials
+    were sampled before a guaranteed entropy source, and tokens were created
+    before radio startup. Green requires exactly 32 hexadecimal token
+    characters, brackets a 256-bit seed with ESP-IDF's early-boot hardware RNG
+    before ADC setup, derives a fresh AP password per AP session with SHA-256,
+    and generates each 128-bit mutation token after Wi-Fi startup.
+16. Review regression: receive and staging/write/finalize failures first
+    collapsed to HTTP 400 or `invalid_package`. Green distinguishes client
+    receive 400, package validation 422, conflicts/battery 409, and storage
+    probe/stage/write/fsync/close 507 with stable public JSON codes.
 
 Final host command:
 
@@ -87,7 +126,7 @@ PATH="$HOME/.platformio/packages/tool-cmake/bin:$HOME/.platformio/packages/tool-
 ```
 
 Result: 7/7 CTest executables passed. The suites contain core 15, HAL 13,
-package 32, shell/settings 9, and portal 5 focused cases, plus SDK C/C++ ABI
+package 34, shell/settings 15, and portal 7 focused cases, plus SDK C/C++ ABI
 checks.
 
 ## Route and security behavior
@@ -101,14 +140,22 @@ checks.
   the existing 80 KiB WPK limit, at least 3.55 V, and free storage of body size
   plus 64 KiB. It streams into exclusive package staging and validates/installs
   through the package manager.
+- HTTP receive/client failures return 400 `upload_incomplete`; package
+  validation returns 422 `invalid_package`; state conflicts and low battery
+  return 409 codes; and storage probe/staging/write/fsync/close failures return
+  507 `storage_error` (capacity shortage remains 507 `insufficient_storage`).
 - `POST /api/v1/watchface/<id>/<version>/activate` and
   `DELETE /api/v1/packages/<id>/<version>` accept only exact method/path forms
   and validated URL-safe components.
 - Every mutating route requires the random 128-bit-per-session token in
-  `X-Watchy-Token`. Token comparison is exact and constant-work for equal
-  lengths. The token is embedded only in the served page.
-- AP sessions use `Watchy-<last-six-MAC-hex>` and a newly generated 16-character
-  WPA2 password shown on the watch. Client sessions use validated stored
+  `X-Watchy-Token`. Both values must be exactly 32 hexadecimal characters;
+  comparison is constant-work after syntax validation. The token is generated
+  after Wi-Fi startup and embedded only in the served page.
+- AP sessions use `Watchy-<last-six-MAC-hex>` and a fresh 16-character WPA2
+  password shown on the watch. A 256-bit seed is sampled under ESP-IDF's
+  supported bootloader RNG enable/fill/disable bracket during early boot,
+  before battery ADC initialization, and SHA-256 with a monotonic session
+  counter derives each AP password. Client sessions use validated stored
   credentials and show their assigned address. HTTP and all radios stop on
   Back, startup failure, normal sleep cleanup, or ten minutes without request
   activity.
@@ -124,16 +171,18 @@ Commands:
 ```text
 pio run -e watchy_v2 -t clean
 pio run -e watchy_v2
+$HOME/.platformio/packages/tool-ninja/ninja -C .pio/build/watchy_v2 \
+  esp-idf/watchy_packages/watchy_package_smoke.so
 build-host/tests/host/watchy_elf_fixture_validator \
   .pio/build/watchy_v2/esp-idf/watchy_packages/watchy_package_smoke.so
 ```
 
-- Clean ESP32 / ESP-IDF 5.5.0 build: success in 44.13 seconds.
-- RAM: 101,160 / 327,680 bytes (30.9%).
-- Flash: 1,321,743 / 1,835,008 bytes (72.0%).
+- Clean ESP32 / ESP-IDF 5.5.0 build: success in 42.79 seconds.
+- RAM: 101,192 / 327,680 bytes (30.9%).
+- Flash: 1,325,403 / 1,835,008 bytes (72.2%).
 - The real Xtensa shared-object fixture passed the production validator.
 - `-Wframe-larger-than=2048` is applied to main, shell, and package code.
-  Final relevant frames: `app_main` 848 bytes and HTTP `receive_upload` 1,264
+  Final relevant frames: `app_main` 1,056 bytes and HTTP `receive_upload` 1,280
   bytes; no frame warning occurred.
 
 ## Self-review
@@ -142,8 +191,9 @@ build-host/tests/host/watchy_elf_fixture_validator \
   route, upload, timeout, and information-disclosure requirement against the
   final tree.
 - Confirmed safe mode bypasses all third-party load paths, is retained across
-  deep sleep, renders without package storage, can purge a corrupt index and
-  package tree through a public recovery API, and clears only on normal reboot.
+  deep sleep, renders without package storage, lists/removes individual package
+  metadata when the index is readable, can purge a corrupt index and package
+  tree through a public recovery API, and clears only on normal reboot.
 - Confirmed package-render and package-app failures converge on built-in UI and
   warning state, and that RTC/button/motion wakes follow their distinct routes.
 - Confirmed the HTTP handler owns only a 1 KiB receive chunk, package staging is
@@ -153,8 +203,9 @@ build-host/tests/host/watchy_elf_fixture_validator \
 - Confirmed package removal commits a valid NVS index before best-effort tree
   cleanup and cannot leave active/pending/prior references to an uninstalled
   package.
-- Confirmed AP passwords and session tokens are regenerated for every start;
-  neither is emitted by a JSON route or serial log.
+- Confirmed AP passwords are freshly derived for every AP session from an
+  early-boot hardware-entropy seed, session tokens are freshly sampled after
+  network start, and neither secret is emitted by a JSON route or serial log.
 
 ## Concerns
 

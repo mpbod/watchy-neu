@@ -1,5 +1,6 @@
 #include "watchy/shell.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static uint8_t item_count(const watchy_shell_t *shell) {
@@ -16,6 +17,8 @@ static uint8_t item_count(const watchy_shell_t *shell) {
         return 5u;
     case WATCHY_SHELL_PACKAGE_PORTAL:
         return 2u;
+    case WATCHY_SHELL_DIAGNOSTICS:
+        return shell->diagnostic_count == 0u ? 1u : shell->diagnostic_count;
     default:
         return 1u;
     }
@@ -55,6 +58,140 @@ void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count)
             shell->selection = 0u;
         }
     }
+}
+
+void watchy_shell_set_package_catalog(watchy_shell_t *shell,
+                                     const watchy_package_catalog_t *catalog,
+                                     bool index_readable) {
+    size_t mapped = 0u;
+    if (shell == NULL) {
+        return;
+    }
+    shell->package_index_readable = index_readable;
+    if (catalog != NULL && index_readable) {
+        for (size_t index = 0u; index < catalog->count &&
+                               mapped < WATCHY_PACKAGE_INSTALLED_MAX; ++index) {
+            if (shell->safe_mode || catalog->packages[index].type == WATCHY_PACKAGE_TYPE_APP) {
+                shell->package_indices[mapped++] = (uint8_t)index;
+            }
+        }
+    }
+    watchy_shell_set_package_count(shell, mapped);
+}
+
+bool watchy_shell_selected_package(const watchy_shell_t *shell, size_t *out_catalog_index) {
+    if (shell == NULL || out_catalog_index == NULL || shell->package_count == 0u ||
+        shell->selection >= shell->package_count) {
+        return false;
+    }
+    *out_catalog_index = shell->package_indices[shell->selection];
+    return true;
+}
+
+size_t watchy_shell_package_page_start(const watchy_shell_t *shell) {
+    if (shell == NULL || shell->package_count == 0u) {
+        return 0u;
+    }
+    return (shell->selection / WATCHY_SHELL_PACKAGE_PAGE_ITEMS) *
+           WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
+}
+
+bool watchy_shell_format_package_label(const watchy_package_info_t *package,
+                                       size_t position,
+                                       size_t total,
+                                       char *out_label,
+                                       size_t out_size) {
+    uint32_t hash = UINT32_C(2166136261);
+    if (package == NULL || out_label == NULL || out_size == 0u || total == 0u ||
+        position >= total) {
+        return false;
+    }
+    for (size_t index = 0u; package->package_ref[index] != '\0'; ++index) {
+        hash ^= (uint8_t)package->package_ref[index];
+        hash *= UINT32_C(16777619);
+    }
+    const int length = snprintf(out_label, out_size, "%02u/%02u %.9s #%08lx",
+                                (unsigned)(position + 1u), (unsigned)total,
+                                package->package_ref, (unsigned long)hash);
+    return length >= 0 && (size_t)length < out_size;
+}
+
+void watchy_shell_set_diagnostic_count(watchy_shell_t *shell, size_t count) {
+    if (shell == NULL) {
+        return;
+    }
+    shell->diagnostic_count = count > UINT8_MAX ? UINT8_MAX : (uint8_t)count;
+    if (shell->screen == WATCHY_SHELL_DIAGNOSTICS && shell->selection >= item_count(shell)) {
+        shell->selection = 0u;
+    }
+}
+
+size_t watchy_shell_diagnostic_page_start(const watchy_shell_t *shell) {
+    if (shell == NULL || shell->diagnostic_count == 0u) {
+        return 0u;
+    }
+    return (shell->selection / WATCHY_SHELL_PACKAGE_PAGE_ITEMS) *
+           WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
+}
+
+bool watchy_shell_format_diagnostic_label(const watchy_diagnostic_entry_t *entry,
+                                          char *out_label,
+                                          size_t out_size) {
+    const char *state;
+    char service[13];
+    size_t length = 0u;
+    if (entry == NULL || entry->service == NULL || out_label == NULL || out_size == 0u) {
+        return false;
+    }
+    switch (entry->state) {
+    case WATCHY_DIAGNOSTIC_PASS: state = "PASS"; break;
+    case WATCHY_DIAGNOSTIC_FAIL: state = "FAIL"; break;
+    case WATCHY_DIAGNOSTIC_UNAVAILABLE: state = "N/A"; break;
+    case WATCHY_DIAGNOSTIC_STOPPED: state = "OFF"; break;
+    default: return false;
+    }
+    while (entry->service[length] != '\0' && length + 1u < sizeof(service)) {
+        const unsigned char value = (unsigned char)entry->service[length];
+        if (!((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+              (value >= '0' && value <= '9') || value == '-' || value == '_')) {
+            return false;
+        }
+        service[length] = value >= 'a' && value <= 'z' ? (char)(value - 'a' + 'A')
+                                                       : (char)value;
+        ++length;
+    }
+    service[length] = '\0';
+    const int result = snprintf(out_label, out_size, "%-12s %s", service, state);
+    return length != 0u && result >= 0 && (size_t)result < out_size;
+}
+
+void watchy_shell_fail(watchy_shell_t *shell, watchy_shell_error_t error) {
+    if (shell == NULL || error == WATCHY_SHELL_ERROR_NONE) {
+        return;
+    }
+    if (shell->screen != WATCHY_SHELL_ERROR) {
+        shell->return_screen = shell->screen;
+    }
+    shell->screen = WATCHY_SHELL_ERROR;
+    shell->selection = 0u;
+    shell->editing = false;
+    shell->pending_action = WATCHY_SHELL_ACTION_NONE;
+    shell->error = error;
+}
+
+const char *watchy_shell_error_message(const watchy_shell_t *shell) {
+    if (shell == NULL) return "OPERATION FAILED";
+    switch (shell->error) {
+    case WATCHY_SHELL_ERROR_SETTINGS_LOAD: return "SETTINGS LOAD FAILED";
+    case WATCHY_SHELL_ERROR_SETTINGS_SAVE: return "SETTINGS SAVE FAILED";
+    case WATCHY_SHELL_ERROR_MANUAL_TIME: return "TIME SAVE FAILED";
+    case WATCHY_SHELL_ERROR_NTP: return "TIME SYNC FAILED";
+    case WATCHY_SHELL_ERROR_PORTAL: return "PORTAL START FAILED";
+    case WATCHY_SHELL_ERROR_DISPLAY: return "DISPLAY FAILED";
+    case WATCHY_SHELL_ERROR_PACKAGE: return "PACKAGE ACTION FAILED";
+    case WATCHY_SHELL_ERROR_NONE: break;
+    }
+    return "OPERATION FAILED";
 }
 
 static void select_launcher(watchy_shell_t *shell) {
@@ -166,14 +303,19 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
         if (shell->selection == 0u) {
             enter(shell, WATCHY_SHELL_DIAGNOSTICS, WATCHY_SHELL_SAFE_MODE);
         } else if (shell->selection == 1u) {
-            shell->pending_action = WATCHY_SHELL_ACTION_PURGE_PACKAGES;
+            if (shell->package_index_readable) {
+                enter(shell, WATCHY_SHELL_PACKAGE_APPS, WATCHY_SHELL_SAFE_MODE);
+            } else {
+                shell->pending_action = WATCHY_SHELL_ACTION_PURGE_PACKAGES;
+            }
         } else {
             shell->pending_action = WATCHY_SHELL_ACTION_NORMAL_REBOOT;
         }
         break;
     case WATCHY_SHELL_PACKAGE_APPS:
         if (shell->package_count != 0u) {
-            shell->pending_action = WATCHY_SHELL_ACTION_RUN_PACKAGE;
+            shell->pending_action = shell->safe_mode ? WATCHY_SHELL_ACTION_REMOVE_PACKAGE
+                                                     : WATCHY_SHELL_ACTION_RUN_PACKAGE;
         }
         break;
     default:

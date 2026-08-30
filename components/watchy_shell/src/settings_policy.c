@@ -6,25 +6,94 @@ static bool terminated(const char *text, size_t capacity) {
     return text != NULL && strnlen(text, capacity) < capacity;
 }
 
-static bool timezone_valid(const char *timezone) {
-    size_t length;
-    if (!terminated(timezone, WATCHY_SETTINGS_TIMEZONE_MAX + 1u) ||
-        (length = strlen(timezone)) == 0u) {
-        return false;
+static bool ascii_alpha(char value) {
+    return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+}
+
+static bool parse_timezone_name(const char **cursor) {
+    const char *text = *cursor;
+    size_t length = 0u;
+    if (*text == '<') {
+        ++text;
+        while (*text != '\0' && *text != '>') {
+            if (!(ascii_alpha(*text) || (*text >= '0' && *text <= '9') ||
+                  *text == '+' || *text == '-')) {
+                return false;
+            }
+            ++length;
+            ++text;
+        }
+        if (*text != '>' || length < 3u) return false;
+        *cursor = text + 1u;
+        return true;
     }
-    for (size_t index = 0u; index < length; ++index) {
-        const unsigned char value = (unsigned char)timezone[index];
-        const bool alpha_numeric = (value >= 'a' && value <= 'z') ||
-                                   (value >= 'A' && value <= 'Z') ||
-                                   (value >= '0' && value <= '9');
-        const bool punctuation = value == '<' || value == '>' || value == '+' ||
-                                 value == '-' || value == ':' || value == ',' ||
-                                 value == '.' || value == '/';
-        if (!alpha_numeric && !punctuation) {
+    while (ascii_alpha(*text)) {
+        ++length;
+        ++text;
+    }
+    if (length < 3u) return false;
+    *cursor = text;
+    return true;
+}
+
+static bool parse_timezone_offset(const char **cursor) {
+    const char *text = *cursor;
+    unsigned hour = 0u;
+    unsigned digits = 0u;
+    if (*text == '+' || *text == '-') ++text;
+    while (*text >= '0' && *text <= '9' && digits < 2u) {
+        hour = hour * 10u + (unsigned)(*text - '0');
+        ++digits;
+        ++text;
+    }
+    if (digits == 0u || (*text >= '0' && *text <= '9') || hour > 24u) return false;
+    for (unsigned field = 0u; field < 2u && *text == ':'; ++field) {
+        ++text;
+        if (!(text[0] >= '0' && text[0] <= '5' && text[1] >= '0' && text[1] <= '9')) {
             return false;
         }
+        if (hour == 24u && (text[0] != '0' || text[1] != '0')) return false;
+        text += 2u;
     }
+    *cursor = text;
     return true;
+}
+
+static bool parse_timezone_rule(const char **cursor) {
+    const char *text = *cursor;
+    unsigned month = 0u;
+    unsigned week = 0u;
+    unsigned day = 0u;
+    if (*text++ != 'M' || *text < '1' || *text > '9') return false;
+    month = (unsigned)(*text++ - '0');
+    if (*text >= '0' && *text <= '9') month = month * 10u + (unsigned)(*text++ - '0');
+    if (*text++ != '.' || *text < '1' || *text > '5') return false;
+    week = (unsigned)(*text++ - '0');
+    if (*text++ != '.' || *text < '0' || *text > '6') return false;
+    day = (unsigned)(*text++ - '0');
+    if (month < 1u || month > 12u || week < 1u || week > 5u || day > 6u) return false;
+    *cursor = text;
+    return true;
+}
+
+static bool timezone_valid(const char *timezone) {
+    const char *cursor;
+    if (!terminated(timezone, WATCHY_SETTINGS_TIMEZONE_MAX + 1u) ||
+        timezone[0] == '\0' || strchr(timezone, '/') != NULL) {
+        return false;
+    }
+    cursor = timezone;
+    if (!parse_timezone_name(&cursor) || !parse_timezone_offset(&cursor)) return false;
+    if (*cursor == '\0') return true;
+    if (!parse_timezone_name(&cursor)) return false;
+    if (*cursor == '+' || *cursor == '-' || (*cursor >= '0' && *cursor <= '9')) {
+        if (!parse_timezone_offset(&cursor)) return false;
+    }
+    if (*cursor++ != ',' || !parse_timezone_rule(&cursor) || *cursor++ != ',' ||
+        !parse_timezone_rule(&cursor)) {
+        return false;
+    }
+    return *cursor == '\0';
 }
 
 static bool hostname_valid(const char *hostname) {
@@ -33,14 +102,25 @@ static bool hostname_valid(const char *hostname) {
         (length = strlen(hostname)) == 0u || hostname[0] == '.' || hostname[length - 1u] == '.') {
         return false;
     }
+    size_t label_length = 0u;
     for (size_t index = 0u; index < length; ++index) {
         const unsigned char value = (unsigned char)hostname[index];
-        if (!((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
-              (value >= '0' && value <= '9') || value == '.' || value == '-')) {
+        const bool alpha_numeric = (value >= 'a' && value <= 'z') ||
+                                   (value >= 'A' && value <= 'Z') ||
+                                   (value >= '0' && value <= '9');
+        if (value == '.') {
+            if (label_length == 0u || label_length > 63u || hostname[index - 1u] == '-') {
+                return false;
+            }
+            label_length = 0u;
+        } else if (!alpha_numeric && value != '-') {
             return false;
+        } else {
+            if (label_length == 0u && value == '-') return false;
+            if (++label_length > 63u) return false;
         }
     }
-    return true;
+    return label_length != 0u && hostname[length - 1u] != '-';
 }
 
 static bool wifi_valid(const char *ssid, const char *password) {
@@ -53,6 +133,10 @@ static bool wifi_valid(const char *ssid, const char *password) {
     ssid_length = strlen(ssid);
     password_length = strlen(password);
     if (ssid_length == 0u) return password_length == 0u;
+    for (size_t index = 0u; index < ssid_length; ++index) {
+        const unsigned char value = (unsigned char)ssid[index];
+        if (value < 0x20u || value > 0x7eu) return false;
+    }
     if (password_length == 0u) return true;
     if (password_length < 8u || password_length > WATCHY_SETTINGS_WIFI_PASSWORD_MAX) return false;
     if (password_length == WATCHY_SETTINGS_WIFI_PASSWORD_MAX) {
@@ -61,6 +145,9 @@ static bool wifi_valid(const char *ssid, const char *password) {
             if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
                   (value >= 'A' && value <= 'F'))) return false;
         }
+    } else for (size_t index = 0u; index < password_length; ++index) {
+        const unsigned char value = (unsigned char)password[index];
+        if (value < 0x20u || value > 0x7eu) return false;
     }
     return true;
 }

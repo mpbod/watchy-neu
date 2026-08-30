@@ -24,6 +24,16 @@ typedef struct {
     size_t count;
 } watchy_package_catalog_t;
 
+typedef struct {
+    watchy_package_status_t (*start)(void *context);
+    bool (*active)(void *context);
+    watchy_package_status_t (*render)(void *context);
+    watchy_package_status_t (*stop)(void *context);
+    void *context;
+} watchy_package_watchface_runner_t;
+
+bool watchy_package_run_watchface_cycle(const watchy_package_watchface_runner_t *runner);
+
 watchy_package_status_t watchy_packages_runtime_init(void);
 bool watchy_packages_run_watchface(bool safe_mode);
 watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bool safe_mode);
@@ -46,6 +56,11 @@ watchy_package_status_t watchy_packages_upload_finish(
     char out_package_ref[WATCHY_PACKAGE_REF_MAX + 1u]);
 void watchy_packages_upload_abort(void);
 bool watchy_packages_upload_active(void);
+watchy_package_status_t watchy_package_upload_finalize_status(bool active,
+                                                              bool output_valid,
+                                                              bool content_complete,
+                                                              bool sync_ok,
+                                                              bool close_ok);
 
 #ifdef __cplusplus
 }
