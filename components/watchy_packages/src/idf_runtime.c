@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -62,6 +63,17 @@ static size_t s_remove_lengths[WATCHY_REMOVE_DEPTH_MAX];
 static char s_remove_path[WATCHY_IDF_PATH_MAX];
 static bool s_initialized;
 static atomic_flag s_init_lock = ATOMIC_FLAG_INIT;
+static atomic_flag s_upload_lock = ATOMIC_FLAG_INIT;
+
+typedef struct {
+    int descriptor;
+    size_t expected_size;
+    size_t received_size;
+    char path[WATCHY_IDF_PATH_MAX];
+    bool active;
+} package_upload_t;
+
+static package_upload_t s_upload = {.descriptor = -1};
 
 static watchy_index_store_result_t idf_index_load(void *context,
                                                   watchy_package_index_t *out_index) {
@@ -1005,6 +1017,199 @@ watchy_package_status_t watchy_packages_select_watchface(const char *package_ref
     status = watchy_package_select_watchface(&s_index, package_ref);
     (void)xSemaphoreGive(s_package_mutex);
     return status;
+}
+
+watchy_package_status_t watchy_packages_snapshot(watchy_package_catalog_t *out_catalog) {
+    const watchy_package_index_t *index;
+    watchy_package_status_t status;
+    if (out_catalog == NULL) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    memset(out_catalog, 0, sizeof(*out_catalog));
+    status = watchy_packages_runtime_init();
+    if (status != WATCHY_PACKAGE_OK ||
+        xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
+        return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_STATE;
+    }
+    index = watchy_package_index_snapshot(&s_index);
+    out_catalog->count = index->installed_count;
+    for (size_t record = 0u; record < index->installed_count; ++record) {
+        watchy_package_info_t *info = &out_catalog->packages[record];
+        memcpy(info->package_ref, index->installed[record], sizeof(info->package_ref));
+        info->type = index->installed_types[record];
+        info->active = strcmp(index->active_watchface, info->package_ref) == 0;
+        info->pending = strcmp(index->pending_watchface, info->package_ref) == 0;
+        info->quarantined = watchy_package_is_quarantined(&s_index, info->package_ref);
+    }
+    (void)xSemaphoreGive(s_package_mutex);
+    return WATCHY_PACKAGE_OK;
+}
+
+watchy_package_status_t watchy_packages_remove(const char *package_ref) {
+    char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
+    char path[WATCHY_IDF_PATH_MAX];
+    watchy_package_status_t status = watchy_packages_runtime_init();
+    if (status != WATCHY_PACKAGE_OK || package_ref == NULL ||
+        !split_package_ref(package_ref, identifier, version) ||
+        snprintf(path, sizeof(path), "/data/packages/%s/%s", identifier, version) >=
+            (int)sizeof(path)) {
+        return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    if (xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    if (s_runner.active || watchy_package_session_loaded(&s_runner.session)) {
+        (void)xSemaphoreGive(s_package_mutex);
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    status = watchy_package_unregister(&s_index, package_ref);
+    if (status == WATCHY_PACKAGE_OK && !idf_remove_tree(NULL, path)) {
+        status = WATCHY_PACKAGE_ERR_FILESYSTEM;
+    }
+    (void)xSemaphoreGive(s_package_mutex);
+    return status;
+}
+
+watchy_package_status_t watchy_packages_safe_mode_purge(void) {
+    nvs_handle_t handle = 0u;
+    esp_err_t error;
+    bool filesystem_ok;
+    if (s_package_mutex == NULL && (s_package_mutex = xSemaphoreCreateMutex()) == NULL) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    if (xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    if (s_runner.active || watchy_package_session_loaded(&s_runner.session)) {
+        (void)xSemaphoreGive(s_package_mutex);
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    const bool staging_ok = idf_remove_tree(NULL, "/data/staging");
+    const bool packages_ok = idf_remove_tree(NULL, "/data/packages");
+    filesystem_ok = staging_ok && packages_ok;
+    error = nvs_open(WATCHY_PACKAGE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (error == ESP_OK) {
+        error = nvs_erase_all(handle);
+    }
+    if (error == ESP_OK) {
+        error = nvs_commit(handle);
+    }
+    if (handle != 0u) {
+        nvs_close(handle);
+    }
+    memset(&s_index, 0, sizeof(s_index));
+    s_initialized = false;
+    (void)xSemaphoreGive(s_package_mutex);
+    if (error != ESP_OK) {
+        return WATCHY_PACKAGE_ERR_STORE;
+    }
+    if (!filesystem_ok) {
+        return WATCHY_PACKAGE_ERR_FILESYSTEM;
+    }
+    return watchy_packages_runtime_init();
+}
+
+watchy_package_status_t watchy_packages_upload_begin(size_t expected_size) {
+    if (expected_size == 0u || expected_size > WATCHY_PACKAGE_WPK_BYTES_MAX) {
+        return expected_size > WATCHY_PACKAGE_WPK_BYTES_MAX ? WATCHY_PACKAGE_ERR_LIMIT
+                                                            : WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    if (watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
+        atomic_flag_test_and_set_explicit(&s_upload_lock, memory_order_acquire)) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    memset(&s_upload, 0, sizeof(s_upload));
+    s_upload.descriptor = -1;
+    s_upload.expected_size = expected_size;
+    if (!idf_mkdirs_path("/data/staging")) {
+        atomic_flag_clear_explicit(&s_upload_lock, memory_order_release);
+        return WATCHY_PACKAGE_ERR_FILESYSTEM;
+    }
+    for (unsigned attempt = 0u; attempt < 8u; ++attempt) {
+        const int result = snprintf(s_upload.path, sizeof(s_upload.path),
+                                    "/data/staging/.watchy-portal-%08" PRIx32 ".wpk",
+                                    esp_random());
+        if (result < 0 || result >= (int)sizeof(s_upload.path)) {
+            break;
+        }
+        s_upload.descriptor = open(s_upload.path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (s_upload.descriptor >= 0) {
+            s_upload.active = true;
+            return WATCHY_PACKAGE_OK;
+        }
+    }
+    memset(&s_upload, 0, sizeof(s_upload));
+    s_upload.descriptor = -1;
+    atomic_flag_clear_explicit(&s_upload_lock, memory_order_release);
+    return WATCHY_PACKAGE_ERR_FILESYSTEM;
+}
+
+watchy_package_status_t watchy_packages_upload_write(const uint8_t *bytes, size_t size) {
+    if (!s_upload.active || s_upload.descriptor < 0 || (bytes == NULL && size != 0u) ||
+        size > s_upload.expected_size - s_upload.received_size) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    size_t offset = 0u;
+    while (offset < size) {
+        const ssize_t written = write(s_upload.descriptor, bytes + offset, size - offset);
+        if (written <= 0) {
+            return WATCHY_PACKAGE_ERR_FILESYSTEM;
+        }
+        offset += (size_t)written;
+    }
+    s_upload.received_size += size;
+    return WATCHY_PACKAGE_OK;
+}
+
+void watchy_packages_upload_abort(void) {
+    if (!s_upload.active) {
+        return;
+    }
+    if (s_upload.descriptor >= 0) {
+        (void)close(s_upload.descriptor);
+    }
+    if (s_upload.path[0] != '\0') {
+        (void)unlink(s_upload.path);
+    }
+    memset(&s_upload, 0, sizeof(s_upload));
+    s_upload.descriptor = -1;
+    atomic_flag_clear_explicit(&s_upload_lock, memory_order_release);
+}
+
+watchy_package_status_t watchy_packages_upload_finish(
+    char out_package_ref[WATCHY_PACKAGE_REF_MAX + 1u]) {
+    uint8_t *bytes;
+    size_t received;
+    char path[WATCHY_IDF_PATH_MAX];
+    watchy_package_status_t status;
+    if (!s_upload.active || out_package_ref == NULL ||
+        s_upload.received_size != s_upload.expected_size ||
+        fsync(s_upload.descriptor) != 0 || close(s_upload.descriptor) != 0) {
+        watchy_packages_upload_abort();
+        return WATCHY_PACKAGE_ERR_WPK;
+    }
+    s_upload.descriptor = -1;
+    received = s_upload.received_size;
+    memcpy(path, s_upload.path, sizeof(path));
+    bytes = malloc(received);
+    if (bytes == NULL) {
+        watchy_packages_upload_abort();
+        return WATCHY_PACKAGE_ERR_LIMIT;
+    }
+    if (!idf_read_file(NULL, path, bytes, received, &received)) {
+        free(bytes);
+        watchy_packages_upload_abort();
+        return WATCHY_PACKAGE_ERR_FILESYSTEM;
+    }
+    status = watchy_packages_install_blob(bytes, received, out_package_ref);
+    free(bytes);
+    watchy_packages_upload_abort();
+    return status;
+}
+
+bool watchy_packages_upload_active(void) {
+    return s_upload.active;
 }
 
 bool watchy_packages_link_smoke(void) {

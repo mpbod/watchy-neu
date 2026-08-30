@@ -440,3 +440,43 @@ watchy_package_status_t watchy_package_register_installed(
                                                    package_ref,
                                                    WATCHY_PACKAGE_TYPE_WATCHFACE);
 }
+
+watchy_package_status_t watchy_package_unregister(watchy_package_index_manager_t *manager,
+                                                  const char *package_ref) {
+    watchy_package_index_t *next;
+    ptrdiff_t installed_record;
+    ptrdiff_t health_record;
+    if (check_manager(manager) != WATCHY_PACKAGE_OK || !package_ref_valid(package_ref) ||
+        (installed_record = find_installed(&manager->index, package_ref)) < 0) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    next = &manager->scratch;
+    *next = manager->index;
+    for (size_t record = (size_t)installed_record; record + 1u < next->installed_count; ++record) {
+        memcpy(next->installed[record], next->installed[record + 1u],
+               sizeof(next->installed[record]));
+        next->installed_types[record] = next->installed_types[record + 1u];
+    }
+    --next->installed_count;
+    memset(next->installed[next->installed_count], 0,
+           sizeof(next->installed[next->installed_count]));
+    next->installed_types[next->installed_count] = WATCHY_PACKAGE_TYPE_WATCHFACE;
+    health_record = find_health(next, package_ref);
+    if (health_record >= 0) {
+        for (size_t record = (size_t)health_record; record + 1u < next->health_count; ++record) {
+            next->health[record] = next->health[record + 1u];
+        }
+        --next->health_count;
+        memset(&next->health[next->health_count], 0, sizeof(next->health[next->health_count]));
+    }
+    if (strcmp(next->active_watchface, package_ref) == 0 ||
+        strcmp(next->prior_watchface, package_ref) == 0) {
+        memset(next->active_watchface, 0, sizeof(next->active_watchface));
+        memset(next->pending_watchface, 0, sizeof(next->pending_watchface));
+        memset(next->prior_watchface, 0, sizeof(next->prior_watchface));
+    } else if (strcmp(next->pending_watchface, package_ref) == 0) {
+        memset(next->pending_watchface, 0, sizeof(next->pending_watchface));
+        memset(next->prior_watchface, 0, sizeof(next->prior_watchface));
+    }
+    return commit_index(manager, next);
+}

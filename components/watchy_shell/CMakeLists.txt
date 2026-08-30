@@ -1,14 +1,22 @@
 idf_component_register(
     SRCS
-        "main.c"
+        "src/portal_idf.c"
+        "src/portal_policy.c"
+        "src/settings_idf.c"
+        "src/settings_policy.c"
+        "src/shell_policy.c"
+        "src/shell_render.c"
+        "src/ui.c"
     INCLUDE_DIRS
-        "."
+        "include"
     REQUIRES
+        watchy_core
         watchy_hal
         watchy_packages
-        watchy_shell
+        esp_http_server
         esp_netif
-        esp_system
+        esp_wifi
+        nvs_flash
 )
 
 target_compile_features(${COMPONENT_LIB} PRIVATE c_std_11)

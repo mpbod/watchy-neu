@@ -273,6 +273,8 @@ bool watchy_package_is_quarantined(const watchy_package_index_manager_t *manager
 watchy_package_status_t watchy_package_register_installed(
     watchy_package_index_manager_t *manager,
     const char *package_ref);
+watchy_package_status_t watchy_package_unregister(watchy_package_index_manager_t *manager,
+                                                  const char *package_ref);
 watchy_package_status_t watchy_package_register_installed_typed(
     watchy_package_index_manager_t *manager,
     const char *package_ref,

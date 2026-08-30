@@ -32,6 +32,7 @@ void watchy_framebuffer_fill_rect(uint8_t *framebuffer,
 
 watchy_status_t watchy_display_init(void);
 bool watchy_display_ready(void);
+watchy_status_t watchy_display_set_partial_limit(uint16_t partial_limit);
 watchy_canvas_t watchy_display_acquire(void);
 watchy_status_t watchy_display_refresh(watchy_refresh_mode_t requested);
 watchy_status_t watchy_display_power_off(void);

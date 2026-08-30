@@ -821,6 +821,36 @@ static int test_selection_is_transactional_when_persistence_fails(void) {
     return 0;
 }
 
+static int test_unregister_removes_health_and_all_selection_references_transactionally(void) {
+    fake_index_store_t store = {0};
+    watchy_package_index_store_t api = fake_store_api(&store);
+    watchy_package_index_manager_t manager;
+    const watchy_package_index_t *snapshot;
+
+    CHECK(watchy_package_index_init(&manager, &api) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, "clock.old@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, "clock.keep@2") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, "clock.keep@2") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_promote_pending(&manager, "clock.keep@2") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, "clock.old@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_begin_attempt(&manager, "clock.old@1", false) == WATCHY_PACKAGE_OK);
+
+    store.fail_save = true;
+    CHECK(watchy_package_unregister(&manager, "clock.old@1") == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(watchy_package_is_installed(&manager, "clock.old@1", NULL));
+
+    store.fail_save = false;
+    CHECK(watchy_package_unregister(&manager, "clock.old@1") == WATCHY_PACKAGE_OK);
+    snapshot = watchy_package_index_snapshot(&manager);
+    CHECK(!watchy_package_is_installed(&manager, "clock.old@1", NULL));
+    CHECK(watchy_package_is_installed(&manager, "clock.keep@2", NULL));
+    CHECK(strcmp(snapshot->active_watchface, "clock.keep@2") == 0);
+    CHECK(snapshot->pending_watchface[0] == '\0');
+    CHECK(snapshot->prior_watchface[0] == '\0');
+    CHECK(snapshot->health_count == 0u);
+    return 0;
+}
+
 static int test_pending_watchface_promotes_after_render_and_rolls_back_on_failure(void) {
     fake_index_store_t store = {0};
     watchy_package_index_store_t api = fake_store_api(&store);
@@ -1584,6 +1614,7 @@ int main(void) {
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
     CHECK(test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data() == 0);
     CHECK(test_selection_is_transactional_when_persistence_fails() == 0);
+    CHECK(test_unregister_removes_health_and_all_selection_references_transactionally() == 0);
     CHECK(test_pending_watchface_promotes_after_render_and_rolls_back_on_failure() == 0);
     CHECK(test_three_incomplete_attempts_quarantine_persistently_and_safe_mode_bypasses() == 0);
     CHECK(test_index_rejects_corrupt_persisted_counts_and_strings() == 0);
@@ -1595,6 +1626,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 31 package tests");
+    puts("PASS 32 package tests");
     return 0;
 }

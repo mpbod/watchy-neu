@@ -1,5 +1,3 @@
-#include "app_hooks.h"
-
 #include "watchy/battery.h"
 #include "watchy/buses.h"
 #include "watchy/buttons.h"
@@ -7,145 +5,432 @@
 #include "watchy/display.h"
 #include "watchy/haptics.h"
 #include "watchy/motion.h"
+#include "watchy/package_runtime.h"
+#include "watchy/portal.h"
 #include "watchy/power.h"
+#include "watchy/radios.h"
 #include "watchy/rtc.h"
+#include "watchy/rtc_calendar.h"
+#include "watchy/settings.h"
+#include "watchy/shell.h"
+#include "watchy/shell_render.h"
 #include "watchy/storage.h"
 
 #include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
+#include "esp_attr.h"
+#include "esp_netif_sntp.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#define WATCHY_SHELL_IDLE_MS 30000u
+#define WATCHY_BUTTON_POLL_MS 50u
+#define WATCHY_NTP_WIFI_TIMEOUT_MS 15000u
+
 static const char *TAG = "watchy";
+static RTC_DATA_ATTR bool s_safe_mode_latched;
 
-static const uint8_t DIGITS[10][5] = {
-    {0x07, 0x05, 0x05, 0x05, 0x07},
-    {0x02, 0x06, 0x02, 0x02, 0x07},
-    {0x07, 0x01, 0x07, 0x04, 0x07},
-    {0x07, 0x01, 0x07, 0x01, 0x07},
-    {0x05, 0x05, 0x07, 0x01, 0x01},
-    {0x07, 0x04, 0x07, 0x01, 0x07},
-    {0x07, 0x04, 0x07, 0x05, 0x07},
-    {0x07, 0x01, 0x01, 0x01, 0x01},
-    {0x07, 0x05, 0x07, 0x05, 0x07},
-    {0x07, 0x05, 0x07, 0x01, 0x07},
-};
-
-static void draw_digit(uint8_t *framebuffer, int16_t x, int16_t y, uint8_t digit, int16_t scale) {
-    for (int16_t row = 0; row < 5; ++row) {
-        for (int16_t column = 0; column < 3; ++column) {
-            if ((DIGITS[digit][row] & (uint8_t)(1u << (2 - column))) != 0u) {
-                watchy_framebuffer_fill_rect(framebuffer, WATCHY_DISPLAY_FRAMEBUFFER_SIZE,
-                                             x + column * scale, y + row * scale,
-                                             scale, scale, true);
-            }
-        }
-    }
+static uint64_t milliseconds(void) {
+    return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
-static void render_status(const watchy_time_t *time,
-                          bool time_valid,
-                          const watchy_battery_state_t *battery,
-                          bool battery_valid,
-                          bool safe_mode,
-                          watchy_wake_cause_t wake_cause) {
-    watchy_canvas_t canvas = watchy_display_acquire();
-    if (canvas.pixels == NULL) {
-        return;
-    }
-    watchy_framebuffer_fill(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, false);
-    if (time_valid) {
-        const int16_t scale = 7;
-        const int16_t top = 68;
-        draw_digit(canvas.pixels, 35, top, (uint8_t)(time->hour / 10), scale);
-        draw_digit(canvas.pixels, 63, top, (uint8_t)(time->hour % 10), scale);
-        watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 94, top + 7, 5, 5, true);
-        watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 94, top + 24, 5, 5, true);
-        draw_digit(canvas.pixels, 106, top, (uint8_t)(time->minute / 10), scale);
-        draw_digit(canvas.pixels, 134, top, (uint8_t)(time->minute % 10), scale);
-    } else {
-        watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 45, 92, 110, 8, true);
-    }
-
-    watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 30, 145, 140, 3, true);
-    watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 30, 165, 140, 3, true);
-    watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 30, 145, 3, 23, true);
-    watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 167, 145, 3, 23, true);
-    if (battery_valid) {
-        const int16_t width = (int16_t)((uint32_t)battery->percent * 132u / 100u);
-        watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 34, 151, width, 11, true);
-    }
-    if (safe_mode) {
-        watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, 8, 8, 20, 20, true);
-    }
-    watchy_framebuffer_fill_rect(canvas.pixels, WATCHY_DISPLAY_FRAMEBUFFER_SIZE,
-                                 175, 8, 4 + (int16_t)wake_cause * 3, 8, true);
-}
-
-static void log_diagnostics(void) {
+static void collect_and_log_diagnostics(void) {
     watchy_diagnostic_report_t report;
     watchy_diagnostics_collect(&report);
-    for (size_t index = 0; index < report.count; ++index) {
+    for (size_t index = 0u; index < report.count; ++index) {
         const watchy_diagnostic_entry_t *entry = &report.entries[index];
         ESP_LOGI(TAG, "diag service=%s state=%d status=%" PRId32 " detail=%s",
                  entry->service, entry->state, entry->status_code, entry->detail);
     }
 }
 
+static void refresh_shell(const watchy_shell_t *shell,
+                          const watchy_settings_t *settings,
+                          const watchy_time_t *time,
+                          const watchy_battery_state_t *battery,
+                          const watchy_package_catalog_t *catalog,
+                          const char *detail,
+                          watchy_refresh_mode_t mode) {
+    watchy_canvas_t canvas = watchy_display_acquire();
+    if (canvas.pixels == NULL) return;
+    watchy_shell_render(&canvas, shell, settings, time, battery, catalog, detail);
+    if (watchy_display_refresh(mode) != WATCHY_STATUS_OK) {
+        ESP_LOGE(TAG, "shell display refresh failed");
+    }
+}
+
+static watchy_shell_input_t input_from_mask(watchy_button_mask_t mask) {
+    if ((mask & WATCHY_BUTTON_MASK_MENU) != 0u) return WATCHY_SHELL_INPUT_MENU;
+    if ((mask & WATCHY_BUTTON_MASK_BACK) != 0u) return WATCHY_SHELL_INPUT_BACK;
+    if ((mask & WATCHY_BUTTON_MASK_UP) != 0u) return WATCHY_SHELL_INPUT_UP;
+    return WATCHY_SHELL_INPUT_DOWN;
+}
+
+static watchy_button_t package_button_from_mask(watchy_button_mask_t mask) {
+    if ((mask & WATCHY_BUTTON_MASK_MENU) != 0u) return WATCHY_BUTTON_CONFIRM;
+    if ((mask & WATCHY_BUTTON_MASK_BACK) != 0u) return WATCHY_BUTTON_BACK;
+    if ((mask & WATCHY_BUTTON_MASK_UP) != 0u) return WATCHY_BUTTON_UP;
+    return WATCHY_BUTTON_DOWN;
+}
+
+static bool run_package_app(const char *package_ref) {
+    watchy_button_mask_t previous;
+    uint64_t last_activity;
+    watchy_package_status_t status = watchy_packages_runner_start(package_ref, false);
+    if (status != WATCHY_PACKAGE_OK) return false;
+    if (!watchy_packages_runner_active()) return true;
+    status = watchy_packages_runner_render();
+    previous = watchy_buttons_sample();
+    last_activity = milliseconds();
+    while (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
+        const watchy_button_mask_t current = watchy_buttons_sample();
+        const watchy_button_mask_t pressed = current & ~previous;
+        previous = current;
+        if ((pressed & WATCHY_BUTTON_MASK_BACK) != 0u ||
+            milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
+            status = watchy_packages_runner_stop();
+            break;
+        }
+        if (pressed != 0u) {
+            const watchy_event_t event = {
+                .type = WATCHY_EVENT_BUTTON,
+                .data.button = {.button = package_button_from_mask(pressed), .pressed = true},
+            };
+            last_activity = milliseconds();
+            status = watchy_packages_runner_event(&event);
+            if (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
+                status = watchy_packages_runner_render();
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
+    }
+    if (watchy_packages_runner_active()) (void)watchy_packages_runner_stop();
+    return status == WATCHY_PACKAGE_OK;
+}
+
+static void sync_active_watchface_setting(watchy_settings_t *settings,
+                                          const watchy_package_catalog_t *catalog) {
+    const char *selected = "";
+    for (size_t index = 0u; index < catalog->count; ++index) {
+        if (catalog->packages[index].pending) {
+            selected = catalog->packages[index].package_ref;
+            break;
+        }
+        if (catalog->packages[index].active) selected = catalog->packages[index].package_ref;
+    }
+    if (strcmp(settings->active_watchface, selected) != 0) {
+        memset(settings->active_watchface, 0, sizeof(settings->active_watchface));
+        memcpy(settings->active_watchface, selected, strlen(selected) + 1u);
+        (void)watchy_settings_save(settings);
+    }
+}
+
+static watchy_status_t sync_time_ntp(const watchy_settings_t *settings) {
+    watchy_wifi_sta_config_t wifi = {0};
+    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(settings->ntp_server);
+    bool sntp_started = false;
+    watchy_status_t result = WATCHY_STATUS_INVALID_STATE;
+    if (settings->wifi_ssid[0] == '\0') return WATCHY_STATUS_INVALID_ARGUMENT;
+    memcpy(wifi.ssid, settings->wifi_ssid, sizeof(wifi.ssid));
+    memcpy(wifi.password, settings->wifi_password, sizeof(wifi.password));
+    if (watchy_wifi_start_sta(&wifi, false) != WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    const uint64_t deadline = milliseconds() + WATCHY_NTP_WIFI_TIMEOUT_MS;
+    while (watchy_wifi_state() != WATCHY_WIFI_STA_CONNECTED &&
+           (int64_t)(deadline - milliseconds()) > 0) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (watchy_wifi_state() != WATCHY_WIFI_STA_CONNECTED ||
+        esp_netif_sntp_init(&sntp) != ESP_OK) goto cleanup;
+    sntp_started = true;
+    if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) != ESP_OK ||
+        setenv("TZ", settings->timezone, 1) != 0) goto cleanup;
+    tzset();
+    time_t epoch = time(NULL);
+    struct tm local_tm;
+    struct tm utc_tm;
+    if (epoch < 0 || localtime_r(&epoch, &local_tm) == NULL ||
+        gmtime_r(&epoch, &utc_tm) == NULL) goto cleanup;
+    watchy_time_t local_zero = {
+        .year = (int16_t)(local_tm.tm_year + 1900), .month = (uint8_t)(local_tm.tm_mon + 1),
+        .day = (uint8_t)local_tm.tm_mday, .hour = (uint8_t)local_tm.tm_hour,
+        .minute = (uint8_t)local_tm.tm_min, .second = (uint8_t)local_tm.tm_sec,
+        .weekday = (uint8_t)local_tm.tm_wday, .utc_offset_minutes = 0,
+    };
+    watchy_time_t utc_zero = {
+        .year = (int16_t)(utc_tm.tm_year + 1900), .month = (uint8_t)(utc_tm.tm_mon + 1),
+        .day = (uint8_t)utc_tm.tm_mday, .hour = (uint8_t)utc_tm.tm_hour,
+        .minute = (uint8_t)utc_tm.tm_min, .second = (uint8_t)utc_tm.tm_sec,
+        .weekday = (uint8_t)utc_tm.tm_wday, .utc_offset_minutes = 0,
+    };
+    int64_t local_seconds;
+    int64_t utc_seconds;
+    if (watchy_calendar_to_unix(&local_zero, &local_seconds) != WATCHY_STATUS_OK ||
+        watchy_calendar_to_unix(&utc_zero, &utc_seconds) != WATCHY_STATUS_OK ||
+        (local_seconds - utc_seconds) / 60 < -1439 ||
+        (local_seconds - utc_seconds) / 60 > 1439) goto cleanup;
+    local_zero.utc_offset_minutes = (int16_t)((local_seconds - utc_seconds) / 60);
+    result = watchy_rtc_set_local(&local_zero);
+cleanup:
+    if (sntp_started) esp_netif_sntp_deinit();
+    (void)watchy_wifi_stop();
+    return result;
+}
+
+static uint8_t days_in_month(const watchy_time_t *time) {
+    watchy_time_t candidate = *time;
+    candidate.day = 31u;
+    while (candidate.day > 28u && !watchy_calendar_valid(&candidate)) --candidate.day;
+    return candidate.day;
+}
+
+static void adjust_manual_time(watchy_time_t *time, uint8_t field, int delta) {
+    if (field == 0u) {
+        time->year = (int16_t)(time->year + delta);
+        if (time->year > 2099) time->year = 2000;
+        if (time->year < 2000) time->year = 2099;
+    } else if (field == 1u) {
+        int month = (int)time->month + delta;
+        if (month > 12) month = 1;
+        if (month < 1) month = 12;
+        time->month = (uint8_t)month;
+    } else if (field == 2u) {
+        const uint8_t maximum = days_in_month(time);
+        int day = (int)time->day + delta;
+        if (day > maximum) day = 1;
+        if (day < 1) day = maximum;
+        time->day = (uint8_t)day;
+    } else if (field == 3u) {
+        time->hour = (uint8_t)(((int)time->hour + delta + 24) % 24);
+    } else {
+        time->minute = (uint8_t)(((int)time->minute + delta + 60) % 60);
+    }
+    const uint8_t maximum = days_in_month(time);
+    if (time->day > maximum) time->day = maximum;
+    time->second = 0u;
+    int64_t epoch;
+    watchy_time_t normalized;
+    if (watchy_calendar_to_unix(time, &epoch) == WATCHY_STATUS_OK &&
+        watchy_calendar_from_unix(epoch, time->utc_offset_minutes, &normalized) == WATCHY_STATUS_OK) {
+        *time = normalized;
+    }
+}
+
+static void manual_time_detail(const watchy_time_t *time, uint8_t field,
+                               bool editing, char *detail, size_t size) {
+    static const char *const names[] = {"YEAR", "MONTH", "DAY", "HOUR", "MINUTE"};
+    snprintf(detail, size, "%04d-%02u-%02u %02u:%02u\n%s %s", time->year, time->month,
+             time->day, time->hour, time->minute, names[field], editing ? "EDIT" : "SELECT");
+}
+
+static void run_shell(watchy_shell_t *shell,
+                      watchy_settings_t *settings,
+                      watchy_time_t *time,
+                      watchy_battery_state_t *battery,
+                      watchy_package_catalog_t *catalog,
+                      const char *safe_reason) {
+    watchy_button_mask_t previous = watchy_buttons_sample();
+    uint64_t last_activity = milliseconds();
+    char detail[128] = {0};
+    if (shell->safe_mode && safe_reason != NULL) snprintf(detail, sizeof(detail), "%s", safe_reason);
+    while (!shell->sleep_requested) {
+        const watchy_button_mask_t current = watchy_buttons_sample();
+        const watchy_button_mask_t pressed = current & ~previous;
+        previous = current;
+        if (watchy_portal_active()) {
+            if ((pressed & WATCHY_BUTTON_MASK_BACK) != 0u || watchy_portal_timed_out()) {
+                (void)watchy_portal_stop();
+                watchy_shell_input(shell, WATCHY_SHELL_INPUT_BACK);
+                detail[0] = '\0';
+                if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
+                    watchy_shell_set_package_count(shell, catalog->count);
+                    sync_active_watchface_setting(settings, catalog);
+                }
+                refresh_shell(shell, settings, time, battery, catalog, NULL, WATCHY_REFRESH_PARTIAL);
+                last_activity = milliseconds();
+            }
+            vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
+            continue;
+        }
+        if (pressed != 0u) {
+            detail[0] = '\0';
+            watchy_shell_input(shell, input_from_mask(pressed));
+            last_activity = milliseconds();
+            const watchy_shell_action_t action = watchy_shell_take_action(shell);
+            switch (action) {
+            case WATCHY_SHELL_ACTION_SAVE_SETTINGS:
+                if (shell->selection == 0u) settings->time_24h = !settings->time_24h;
+                else if (shell->selection == 1u) settings->motion_wake = !settings->motion_wake;
+                else if (shell->selection == 6u) {
+                    settings->partial_refresh_limit =
+                        settings->partial_refresh_limit >= WATCHY_SETTINGS_PARTIAL_LIMIT_MAX
+                            ? 5u : (uint16_t)(settings->partial_refresh_limit + 5u);
+                    (void)watchy_display_set_partial_limit(settings->partial_refresh_limit);
+                }
+                (void)watchy_settings_save(settings);
+                break;
+            case WATCHY_SHELL_ACTION_MANUAL_INCREMENT:
+            case WATCHY_SHELL_ACTION_MANUAL_DECREMENT:
+                adjust_manual_time(time, shell->selection,
+                                   action == WATCHY_SHELL_ACTION_MANUAL_INCREMENT ? 1 : -1);
+                break;
+            case WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME:
+                if (watchy_rtc_set_local(time) != WATCHY_STATUS_OK) {
+                    snprintf(detail, sizeof(detail), "TIME SAVE FAILED");
+                }
+                break;
+            case WATCHY_SHELL_ACTION_SYNC_NTP:
+                snprintf(detail, sizeof(detail), "SYNCING");
+                refresh_shell(shell, settings, time, battery, catalog, detail, WATCHY_REFRESH_PARTIAL);
+                if (sync_time_ntp(settings) == WATCHY_STATUS_OK &&
+                    watchy_rtc_read_local(time) == WATCHY_STATUS_OK) {
+                    snprintf(detail, sizeof(detail), "TIME UPDATED");
+                } else snprintf(detail, sizeof(detail), "SYNC FAILED");
+                last_activity = milliseconds();
+                break;
+            case WATCHY_SHELL_ACTION_START_PORTAL_CLIENT:
+            case WATCHY_SHELL_ACTION_START_PORTAL_AP: {
+                watchy_portal_session_info_t info;
+                const watchy_portal_network_mode_t mode = action == WATCHY_SHELL_ACTION_START_PORTAL_AP
+                    ? WATCHY_PORTAL_NETWORK_AP : WATCHY_PORTAL_NETWORK_CLIENT;
+                if (watchy_portal_start(mode, settings, &info) == WATCHY_STATUS_OK) {
+                    if (mode == WATCHY_PORTAL_NETWORK_AP) {
+                        snprintf(detail, sizeof(detail), "SSID %s\nPASS %s\nIP %s",
+                                 info.network_name, info.network_secret, info.address);
+                    } else {
+                        snprintf(detail, sizeof(detail), "SSID %s\nIP %s",
+                                 info.network_name, info.address);
+                    }
+                } else snprintf(detail, sizeof(detail), "PORTAL START FAILED");
+                break;
+            }
+            case WATCHY_SHELL_ACTION_REMOVE_PACKAGE:
+                if (shell->selection < catalog->count &&
+                    watchy_packages_remove(catalog->packages[shell->selection].package_ref) == WATCHY_PACKAGE_OK) {
+                    (void)watchy_packages_snapshot(catalog);
+                    watchy_shell_set_package_count(shell, catalog->count);
+                    snprintf(detail, sizeof(detail), "PACKAGE REMOVED");
+                } else snprintf(detail, sizeof(detail), "REMOVE FAILED");
+                break;
+            case WATCHY_SHELL_ACTION_RUN_PACKAGE:
+                if (shell->selection < catalog->count &&
+                    run_package_app(catalog->packages[shell->selection].package_ref)) {
+                    snprintf(detail, sizeof(detail), "PACKAGE EXITED");
+                } else {
+                    shell->package_warning = true;
+                    snprintf(detail, sizeof(detail), "PACKAGE FAILED");
+                }
+                last_activity = milliseconds();
+                break;
+            case WATCHY_SHELL_ACTION_PURGE_PACKAGES:
+                if (watchy_packages_safe_mode_purge() == WATCHY_PACKAGE_OK) {
+                    memset(catalog, 0, sizeof(*catalog));
+                    settings->active_watchface[0] = '\0';
+                    (void)watchy_settings_save(settings);
+                    snprintf(detail, sizeof(detail), "PACKAGES REMOVED");
+                } else snprintf(detail, sizeof(detail), "REMOVE FAILED");
+                break;
+            case WATCHY_SHELL_ACTION_NORMAL_REBOOT:
+                (void)watchy_portal_stop();
+                s_safe_mode_latched = false;
+                esp_restart();
+            case WATCHY_SHELL_ACTION_NONE:
+                break;
+            }
+            if (shell->screen == WATCHY_SHELL_MANUAL_TIME) {
+                manual_time_detail(time, shell->selection, shell->editing, detail, sizeof(detail));
+            } else if (shell->screen == WATCHY_SHELL_DIAGNOSTICS) {
+                collect_and_log_diagnostics();
+                snprintf(detail, sizeof(detail), "RESULTS ON SERIAL");
+            }
+            refresh_shell(shell, settings, time, battery, catalog,
+                          detail[0] == '\0' ? NULL : detail, WATCHY_REFRESH_PARTIAL);
+        } else if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
+            watchy_shell_input(shell, WATCHY_SHELL_INPUT_IDLE);
+            refresh_shell(shell, settings, time, battery, catalog, NULL, WATCHY_REFRESH_PARTIAL);
+        }
+        vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
+    }
+}
+
 void app_main(void) {
+    static watchy_package_catalog_t catalog;
     const watchy_wake_cause_t wake_cause = watchy_power_capture_wake_cause();
+    watchy_settings_t settings;
+    watchy_shell_t shell;
     watchy_time_t time = {0};
     watchy_battery_state_t battery = {0};
-    bool safe_mode;
-    bool time_valid;
-    bool battery_valid;
     bool timer_configured = false;
+    bool safe_mode;
+    bool package_selected = false;
     bool package_rendered = false;
+    bool package_failed = false;
+    const char *safe_reason = "BACK+DOWN HELD";
 
     ESP_LOGI(TAG, "boot wake_cause=%d", wake_cause);
     if (watchy_storage_init() != WATCHY_STATUS_OK) {
         ESP_LOGE(TAG, "storage initialization failed");
+        safe_reason = "STORAGE UNAVAILABLE";
     }
-    if (watchy_buses_init() != WATCHY_STATUS_OK) {
-        ESP_LOGE(TAG, "bus initialization failed");
+    if (watchy_buses_init() != WATCHY_STATUS_OK) ESP_LOGE(TAG, "bus initialization failed");
+    (void)watchy_buttons_init();
+    const bool safe_mode_chord = wake_cause == WATCHY_WAKE_COLD &&
+                                 watchy_buttons_is_safe_mode_chord(watchy_buttons_sample());
+    safe_mode = safe_mode_chord || s_safe_mode_latched;
+    if (safe_mode_chord) s_safe_mode_latched = true;
+    (void)watchy_haptics_init();
+    (void)watchy_rtc_init();
+    (void)watchy_motion_init();
+    (void)watchy_battery_init();
+    (void)watchy_display_init();
+    if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) watchy_settings_defaults(&settings);
+    (void)watchy_display_set_partial_limit(settings.partial_refresh_limit);
+    if (watchy_rtc_read_local(&time) != WATCHY_STATUS_OK) {
+        time = (watchy_time_t){.year = 2024, .month = 1u, .day = 1u,
+                              .weekday = 1u, .utc_offset_minutes = 0};
     }
-    watchy_buttons_init();
-    safe_mode = wake_cause == WATCHY_WAKE_COLD &&
-                watchy_buttons_is_safe_mode_chord(watchy_buttons_sample());
-    watchy_haptics_init();
-    watchy_rtc_init();
-    watchy_motion_init();
-    watchy_battery_init();
-    watchy_display_init();
+    (void)watchy_battery_read(&battery);
 
-    if (safe_mode) {
-        watchy_app_safe_mode_hook();
-    } else {
-        package_rendered = watchy_app_loader_hook();
-    }
-
-    time_valid = watchy_rtc_read_local(&time) == WATCHY_STATUS_OK;
-    battery_valid = watchy_battery_read(&battery) == WATCHY_STATUS_OK;
-    log_diagnostics();
-    if (!package_rendered) {
-        render_status(&time, time_valid, &battery, battery_valid, safe_mode, wake_cause);
-    }
-    if (!package_rendered && watchy_display_ready()) {
-        if (watchy_display_refresh(wake_cause == WATCHY_WAKE_COLD ? WATCHY_REFRESH_FULL
-                                                                  : WATCHY_REFRESH_PARTIAL) !=
-            WATCHY_STATUS_OK) {
-            ESP_LOGE(TAG, "display refresh failed");
+    const watchy_package_status_t package_status = safe_mode ? WATCHY_PACKAGE_ERR_SAFE_MODE
+                                                              : watchy_packages_snapshot(&catalog);
+    if (package_status == WATCHY_PACKAGE_OK) {
+        for (size_t index = 0u; index < catalog.count; ++index) {
+            package_selected = package_selected || catalog.packages[index].active ||
+                               catalog.packages[index].pending;
         }
+        sync_active_watchface_setting(&settings, &catalog);
+    } else if (!safe_mode) package_failed = true;
+    const bool package_wake = wake_cause != WATCHY_WAKE_BUTTON &&
+                              !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake);
+    if (!safe_mode && package_wake && package_selected) {
+        package_rendered = watchy_packages_run_watchface(false);
+        package_failed = !package_rendered;
     }
-    if (watchy_rtc_ready()) {
-        timer_configured = watchy_rtc_set_minute_timer(1) == WATCHY_STATUS_OK;
+    watchy_shell_begin(&shell, wake_cause, settings.motion_wake, safe_mode, package_failed);
+    watchy_shell_set_package_count(&shell, catalog.count);
+    collect_and_log_diagnostics();
+    if (!package_rendered && !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake)) {
+        refresh_shell(&shell, &settings, &time, &battery, &catalog,
+                      safe_mode ? safe_reason : NULL,
+                      wake_cause == WATCHY_WAKE_COLD ? WATCHY_REFRESH_FULL : WATCHY_REFRESH_PARTIAL);
     }
-    if (watchy_power_prepare_deep_sleep(timer_configured) != WATCHY_STATUS_OK) {
-        ESP_LOGE(TAG, "sleep preparation failed; remaining awake to avoid an unwakeable sleep");
-        for (;;) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
+    if (wake_cause == WATCHY_WAKE_BUTTON || safe_mode) {
+        run_shell(&shell, &settings, &time, &battery, &catalog, safe_mode ? safe_reason : NULL);
+    }
+    (void)watchy_portal_stop();
+    if (watchy_rtc_ready()) timer_configured = watchy_rtc_set_minute_timer(1u) == WATCHY_STATUS_OK;
+    if (watchy_power_prepare_deep_sleep_with_motion(timer_configured, settings.motion_wake) !=
+        WATCHY_STATUS_OK) {
+        ESP_LOGE(TAG, "sleep preparation failed; remaining awake");
+        for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
     watchy_power_enter_deep_sleep();
 }

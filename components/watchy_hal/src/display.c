@@ -21,6 +21,7 @@ static uint8_t s_cold_previous_framebuffer[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
 static RTC_DATA_ATTR watchy_display_retained_state_t s_retained;
 static bool s_ready;
 static bool s_hibernated;
+static uint16_t s_partial_limit = WATCHY_DISPLAY_PARTIAL_LIMIT;
 
 static watchy_status_t from_esp_error(esp_err_t error) {
     return error == ESP_OK ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
@@ -128,6 +129,14 @@ bool watchy_display_ready(void) {
     return s_ready;
 }
 
+watchy_status_t watchy_display_set_partial_limit(uint16_t partial_limit) {
+    if (partial_limit == 0u) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    s_partial_limit = partial_limit;
+    return WATCHY_STATUS_OK;
+}
+
 watchy_canvas_t watchy_display_acquire(void) {
     watchy_canvas_t canvas = {
         .width = WATCHY_DISPLAY_WIDTH,
@@ -143,7 +152,7 @@ watchy_canvas_t watchy_display_acquire(void) {
 watchy_status_t watchy_display_refresh(watchy_refresh_mode_t requested) {
     const bool retained_valid = watchy_display_retained_valid(&s_retained);
     const watchy_refresh_mode_t mode =
-        watchy_display_prepare_refresh(&s_retained, requested, WATCHY_DISPLAY_PARTIAL_LIMIT);
+        watchy_display_prepare_refresh(&s_retained, requested, s_partial_limit);
     const uint8_t update_control = mode == WATCHY_REFRESH_FULL ? 0xf7 : 0xfc;
     const uint8_t *previous = retained_valid ? s_retained.previous_frame
                                              : s_cold_previous_framebuffer;

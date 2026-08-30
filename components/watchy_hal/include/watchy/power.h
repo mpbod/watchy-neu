@@ -51,6 +51,8 @@ bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,
                                        uint64_t active_sources);
 bool watchy_power_release_pin_for_sleep(uint8_t pin);
 watchy_status_t watchy_power_prepare_deep_sleep(bool timer_configured);
+watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configured,
+                                                            bool motion_wake_enabled);
 bool watchy_power_prepare_attempted(void);
 watchy_status_t watchy_power_last_prepare_status(void);
 void watchy_power_enter_deep_sleep(void) __attribute__((noreturn));
