@@ -12,6 +12,7 @@
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
+#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -22,6 +23,7 @@
 
 static watchy_status_t s_last_prepare_status = WATCHY_STATUS_INVALID_STATE;
 static bool s_prepare_attempted;
+static const char *const TAG = "watchy_power";
 
 static watchy_raw_wake_cause_t raw_wake_cause(esp_sleep_wakeup_cause_t cause) {
     switch (cause) {
@@ -45,6 +47,8 @@ static watchy_raw_wake_cause_t raw_wake_cause(esp_sleep_wakeup_cause_t cause) {
 watchy_wake_cause_t watchy_power_capture_wake_cause(void) {
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     const uint64_t gpio_mask = cause == ESP_SLEEP_WAKEUP_EXT1 ? esp_sleep_get_ext1_wakeup_status() : 0;
+    ESP_LOGI(TAG, "wake raw=%d reset=%d ext1=0x%016llx",
+             (int)cause, (int)esp_reset_reason(), (unsigned long long)gpio_mask);
     if (cause == ESP_SLEEP_WAKEUP_UNDEFINED && esp_reset_reason() != ESP_RST_POWERON) {
         return WATCHY_WAKE_OTHER;
     }
@@ -74,6 +78,27 @@ static void release_unused_pins(void) {
 static bool prepare_motor_for_sleep(void) {
     return watchy_haptics_deinit() == WATCHY_STATUS_OK &&
            watchy_haptics_hold_off_for_sleep() == WATCHY_STATUS_OK;
+}
+
+static bool prepare_button_wake_pins(void) {
+    static const gpio_num_t pins[] = {
+        WATCHY_PIN_BUTTON_MENU,
+        WATCHY_PIN_BUTTON_BACK,
+        WATCHY_PIN_BUTTON_DOWN,
+        WATCHY_PIN_BUTTON_UP,
+    };
+    for (size_t index = 0; index < sizeof(pins) / sizeof(pins[0]); ++index) {
+        const gpio_num_t pin = pins[index];
+        if (rtc_gpio_init(pin) != ESP_OK ||
+            rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY) != ESP_OK) {
+            return false;
+        }
+        if (watchy_power_button_needs_internal_pulldown((uint8_t)pin) &&
+            (rtc_gpio_pullup_dis(pin) != ESP_OK || rtc_gpio_pulldown_en(pin) != ESP_OK)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool wait_for_wake_sources_inactive(bool motion_wake_enabled, bool rtc_wake_enabled) {
@@ -159,6 +184,7 @@ watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configure
         esp_sleep_enable_ext0_wakeup(WATCHY_PIN_RTC_INTERRUPT,
                                      WATCHY_RTC_INTERRUPT_ACTIVE_LEVEL) == ESP_OK;
     requirements.ext1_configured =
+        prepare_button_wake_pins() &&
         esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_HIGH) == ESP_OK;
     requirements.sources_inactive = wait_for_wake_sources_inactive(motion_wake_enabled, true);
     s_last_prepare_status = watchy_power_sleep_allowed(&requirements) ? WATCHY_STATUS_OK
@@ -198,6 +224,7 @@ watchy_status_t watchy_power_prepare_button_only_sleep(void) {
     release_unused_pins();
     (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     requirements.ext1_configured =
+        prepare_button_wake_pins() &&
         esp_sleep_enable_ext1_wakeup(button_mask, ESP_EXT1_WAKEUP_ANY_HIGH) == ESP_OK;
     requirements.sources_inactive = wait_for_wake_sources_inactive(false, false);
     s_last_prepare_status = watchy_power_sleep_allowed(&requirements)
@@ -214,6 +241,14 @@ bool watchy_power_prepare_attempted(void) {
 }
 
 void watchy_power_enter_deep_sleep(void) {
+    ESP_LOGI(TAG,
+             "sleep source levels menu=%d back=%d down=%d up=%d motion=%d rtc=%d",
+             gpio_get_level(WATCHY_PIN_BUTTON_MENU),
+             gpio_get_level(WATCHY_PIN_BUTTON_BACK),
+             gpio_get_level(WATCHY_PIN_BUTTON_DOWN),
+             gpio_get_level(WATCHY_PIN_BUTTON_UP),
+             gpio_get_level(WATCHY_PIN_BMA423_INTERRUPT_1),
+             gpio_get_level(WATCHY_PIN_RTC_INTERRUPT));
     esp_deep_sleep_start();
     for (;;) {
     }

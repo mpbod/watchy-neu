@@ -262,9 +262,13 @@ static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
 }
 
 static int test_motor_pin_is_retained_low_instead_of_generically_released(void) {
+    CHECK(watchy_power_button_needs_internal_pulldown(WATCHY_PIN_BUTTON_MENU));
+    CHECK(watchy_power_button_needs_internal_pulldown(WATCHY_PIN_BUTTON_BACK));
+    CHECK(watchy_power_button_needs_internal_pulldown(WATCHY_PIN_BUTTON_DOWN));
+    CHECK(!watchy_power_button_needs_internal_pulldown(WATCHY_PIN_BUTTON_UP));
     CHECK(!watchy_power_release_pin_for_sleep(WATCHY_PIN_MOTOR));
     CHECK(watchy_power_release_pin_for_sleep(WATCHY_PIN_DISPLAY_BUSY));
-    CHECK(watchy_power_release_pin_for_sleep(WATCHY_PIN_BATTERY_ADC));
+    CHECK(!watchy_power_release_pin_for_sleep(WATCHY_PIN_BATTERY_ADC));
     return 0;
 }
 

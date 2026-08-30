@@ -62,6 +62,11 @@ bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,
     return filter->consecutive_inactive_samples >= 3u;
 }
 
+bool watchy_power_button_needs_internal_pulldown(uint8_t pin) {
+    return pin == WATCHY_PIN_BUTTON_MENU || pin == WATCHY_PIN_BUTTON_BACK ||
+           pin == WATCHY_PIN_BUTTON_DOWN;
+}
+
 bool watchy_power_release_pin_for_sleep(uint8_t pin) {
-    return pin != WATCHY_PIN_MOTOR;
+    return pin != WATCHY_PIN_MOTOR && pin != WATCHY_PIN_BATTERY_ADC;
 }
