@@ -31,3 +31,18 @@ target_include_directories(watchy_sdk_cpp_tests PRIVATE
 target_compile_features(watchy_sdk_cpp_tests PRIVATE cxx_std_17)
 target_compile_options(watchy_sdk_cpp_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_sdk_cpp_tests COMMAND watchy_sdk_cpp_tests)
+
+add_executable(watchy_hal_tests
+  test_hal.c
+  ../../components/watchy_hal/src/framebuffer.c
+  ../../components/watchy_hal/src/buttons_policy.c
+  ../../components/watchy_hal/src/battery_policy.c
+  ../../components/watchy_hal/src/power_policy.c
+)
+target_include_directories(watchy_hal_tests PRIVATE
+  ../../components/watchy_hal/include
+  ../../sdk/include
+)
+target_compile_features(watchy_hal_tests PRIVATE c_std_11)
+target_compile_options(watchy_hal_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_hal_tests COMMAND watchy_hal_tests)

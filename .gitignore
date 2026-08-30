@@ -1,5 +1,7 @@
 /build/
 /build-host/
+/.pio/
+/sdkconfig.watchy_v2
 /.cache/
 /.superpowers/
 sdkconfig
