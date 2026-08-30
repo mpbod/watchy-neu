@@ -270,6 +270,12 @@ bool watchy_package_transition_take(watchy_package_transition_latch_t *latch,
     return true;
 }
 
+void watchy_package_transition_cleanup(watchy_package_host_context_t *context) {
+    if (context != NULL) {
+        (void)watchy_package_transition_take(&context->transition, NULL);
+    }
+}
+
 static watchy_status_t host_request_transition(
     void *opaque, const watchy_transition_request_v1_t *request) {
     watchy_package_host_context_t *context = opaque;

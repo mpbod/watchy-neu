@@ -870,6 +870,7 @@ static watchy_package_status_t runner_finish(bool clean) {
         stop_status = watchy_package_session_stop(&s_runner.session);
     }
     if (s_runner.host_ready) {
+        watchy_package_transition_cleanup(&s_runner.host);
         watchy_package_host_deinit(&s_runner.host);
         s_runner.host_ready = false;
     }

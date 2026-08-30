@@ -125,6 +125,7 @@ watchy_status_t watchy_package_transition_latch(
 /* A NULL output discards the occupied request for teardown. */
 bool watchy_package_transition_take(watchy_package_transition_latch_t *latch,
                                     watchy_transition_request_v1_t *out_request);
+void watchy_package_transition_cleanup(watchy_package_host_context_t *context);
 void watchy_package_transition_bind(watchy_package_host_context_t *context,
                                     watchy_package_readable_fn_t readable,
                                     void *readable_context);

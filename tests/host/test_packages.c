@@ -944,18 +944,26 @@ static watchy_status_t transition_present(void *opaque,
     return probe->status[call];
 }
 
-static int test_transition_render_failure_discards_without_presenting(void) {
-    watchy_package_transition_latch_t latch = {0};
+static int test_transition_failed_runner_and_deinit_cleanup_is_idempotent(void) {
+    watchy_package_host_context_t context = {0};
     watchy_transition_request_v1_t valid = valid_package_transition_request();
     watchy_transition_request_v1_t taken;
     transition_present_probe_t probe = {0};
 
-    CHECK(watchy_package_transition_latch(&latch, &valid) == WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_latch(&context.transition, &valid) == WATCHY_STATUS_OK);
     CHECK(watchy_package_transition_present_after_render(
-              &latch, false, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
+              &context.transition, false, WATCHY_REFRESH_PARTIAL,
+              transition_present, &probe) ==
           WATCHY_STATUS_INVALID_STATE);
     CHECK(probe.calls == 0u);
-    CHECK(!watchy_package_transition_take(&latch, &taken));
+    CHECK(!watchy_package_transition_take(&context.transition, &taken));
+
+    /* A stop callback may latch again before runner cleanup reaches host deinit. */
+    CHECK(watchy_package_transition_latch(&context.transition, &valid) == WATCHY_STATUS_OK);
+    watchy_package_transition_cleanup(&context);
+    watchy_package_transition_cleanup(&context);
+    CHECK(!watchy_package_transition_take(&context.transition, &taken));
+    watchy_package_transition_cleanup(NULL);
     return 0;
 }
 
@@ -2136,7 +2144,7 @@ int main(void) {
     CHECK(test_transition_latch_copies_one_request_and_consumes_it_once() == 0);
     CHECK(test_transition_latch_rejects_invalid_requests_without_occupying() == 0);
     CHECK(test_transition_callback_admits_only_readable_active_requests() == 0);
-    CHECK(test_transition_render_failure_discards_without_presenting() == 0);
+    CHECK(test_transition_failed_runner_and_deinit_cleanup_is_idempotent() == 0);
     CHECK(test_transition_present_consumes_once_and_only_falls_back_on_rejection() == 0);
     CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);

@@ -758,7 +758,7 @@ void watchy_package_host_deinit(watchy_package_host_context_t *context) {
     if (context->state_mutex != NULL) {
         vSemaphoreDelete((SemaphoreHandle_t)context->state_mutex);
     }
-    (void)watchy_package_transition_take(&context->transition, NULL);
+    watchy_package_transition_cleanup(context);
     (void)watchy_radios_stop_all();
     memset(context, 0, sizeof(*context));
 }
