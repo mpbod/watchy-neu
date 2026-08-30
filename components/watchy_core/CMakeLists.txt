@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/runtime.c"
+        "src/refresh_policy.c"
+        "src/wpk.c"
+    INCLUDE_DIRS
+        "include"
+        "../../sdk/include"
+)

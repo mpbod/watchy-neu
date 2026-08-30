@@ -13,16 +13,9 @@
     } \
 } while (0)
 
-static int test_bundle_rejects_bad_magic(void) {
-    uint8_t bytes[WPK_HEADER_SIZE] = {0};
-    wpk_view_t view = {0};
-    CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_MAGIC);
-    return 0;
-}
-
-static int test_bundle_accepts_well_formed_layout(void) {
-    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+static wpk_header_t *make_valid_header(uint8_t *bytes, size_t size) {
     wpk_header_t *header = (wpk_header_t *)bytes;
+    memset(bytes, 0, size);
     memcpy(header->magic, WPK_MAGIC, sizeof(header->magic));
     header->format_version = WPK_FORMAT_VERSION;
     header->header_size = WPK_HEADER_SIZE;
@@ -32,7 +25,20 @@ static int test_bundle_accepts_well_formed_layout(void) {
     header->elf_size = 16;
     header->assets_offset = WPK_HEADER_SIZE + 24;
     header->assets_size = 8;
-    header->total_size = sizeof(bytes);
+    header->total_size = (uint32_t)size;
+    return header;
+}
+
+static int test_bundle_rejects_bad_magic(void) {
+    uint8_t bytes[WPK_HEADER_SIZE] = {0};
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_MAGIC);
+    return 0;
+}
+
+static int test_bundle_accepts_well_formed_layout(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    make_valid_header(bytes, sizeof(bytes));
     wpk_view_t view = {0};
     CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_OK);
     CHECK(view.manifest_size == 8);
@@ -41,19 +47,40 @@ static int test_bundle_accepts_well_formed_layout(void) {
     return 0;
 }
 
+static int test_bundle_rejects_truncated_blob(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    make_valid_header(bytes, sizeof(bytes));
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, sizeof(bytes) - 1, &view) == WPK_ERR_TRUNCATED);
+    return 0;
+}
+
 static int test_bundle_rejects_overlapping_sections(void) {
     uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
-    wpk_header_t *header = (wpk_header_t *)bytes;
-    memcpy(header->magic, WPK_MAGIC, sizeof(header->magic));
-    header->format_version = WPK_FORMAT_VERSION;
-    header->header_size = WPK_HEADER_SIZE;
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
     header->manifest_offset = WPK_HEADER_SIZE;
     header->manifest_size = 16;
     header->elf_offset = WPK_HEADER_SIZE + 8;
-    header->elf_size = 16;
-    header->assets_offset = WPK_HEADER_SIZE + 24;
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_LAYOUT);
+    return 0;
+}
+
+static int test_bundle_rejects_out_of_order_sections(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
+    header->elf_offset = WPK_HEADER_SIZE + 16;
+    header->assets_offset = WPK_HEADER_SIZE + 8;
+    wpk_view_t view = {0};
+    CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_LAYOUT);
+    return 0;
+}
+
+static int test_bundle_rejects_section_offset_overflow(void) {
+    uint8_t bytes[WPK_HEADER_SIZE + 32] = {0};
+    wpk_header_t *header = make_valid_header(bytes, sizeof(bytes));
+    header->assets_offset = UINT32_MAX - 3;
     header->assets_size = 8;
-    header->total_size = sizeof(bytes);
     wpk_view_t view = {0};
     CHECK(wpk_parse(bytes, sizeof(bytes), &view) == WPK_ERR_LAYOUT);
     return 0;
@@ -61,7 +88,7 @@ static int test_bundle_rejects_overlapping_sections(void) {
 
 static int test_abi_negotiation(void) {
     CHECK(watchy_abi_compatible(1, 0, 1, 0));
-    CHECK(watchy_abi_compatible(1, 0, 1, 4));
+    CHECK(watchy_abi_compatible(1, 2, 1, 4));
     CHECK(!watchy_abi_compatible(1, 1, 1, 0));
     CHECK(!watchy_abi_compatible(2, 0, 1, 9));
     return 0;
@@ -72,9 +99,12 @@ static int test_runtime_lifecycle(void) {
     watchy_runtime_reset(&runtime);
     CHECK(runtime.state == WATCHY_RUNTIME_EMPTY);
     CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_LOADED) == WATCHY_STATUS_OK);
+    CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_EMPTY) == WATCHY_STATUS_INVALID_STATE);
     CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_STARTED) == WATCHY_STATUS_OK);
+    CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_LOADED) == WATCHY_STATUS_INVALID_STATE);
     CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_STOPPED) == WATCHY_STATUS_OK);
     CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_EMPTY) == WATCHY_STATUS_OK);
+    CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_STOPPED) == WATCHY_STATUS_INVALID_STATE);
     CHECK(watchy_runtime_transition(&runtime, WATCHY_RUNTIME_STARTED) == WATCHY_STATUS_INVALID_STATE);
     return 0;
 }
@@ -89,14 +119,30 @@ static int test_refresh_policy_promotes_after_partial_limit(void) {
     return 0;
 }
 
+static int test_refresh_policy_resets_after_explicit_full(void) {
+    watchy_refresh_policy_t policy;
+    watchy_refresh_policy_reset(&policy, 3);
+    CHECK(watchy_refresh_decide(&policy, WATCHY_REFRESH_PARTIAL) == WATCHY_REFRESH_PARTIAL);
+    CHECK(policy.partial_count == 1);
+    CHECK(watchy_refresh_decide(&policy, WATCHY_REFRESH_FULL) == WATCHY_REFRESH_FULL);
+    CHECK(policy.partial_count == 0);
+    CHECK(watchy_refresh_decide(&policy, WATCHY_REFRESH_PARTIAL) == WATCHY_REFRESH_PARTIAL);
+    CHECK(policy.partial_count == 1);
+    return 0;
+}
+
 int main(void) {
     int (*tests[])(void) = {
         test_bundle_rejects_bad_magic,
         test_bundle_accepts_well_formed_layout,
+        test_bundle_rejects_truncated_blob,
         test_bundle_rejects_overlapping_sections,
+        test_bundle_rejects_out_of_order_sections,
+        test_bundle_rejects_section_offset_overflow,
         test_abi_negotiation,
         test_runtime_lifecycle,
         test_refresh_policy_promotes_after_partial_limit,
+        test_refresh_policy_resets_after_explicit_full,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {
