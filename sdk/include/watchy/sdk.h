@@ -9,20 +9,61 @@ extern "C" {
 #endif
 
 #define WATCHY_ABI_V1_MAJOR 1u
-#define WATCHY_ABI_V1_MINOR 1u
+#define WATCHY_ABI_V1_MINOR 2u
 
 typedef enum {
     WATCHY_STATUS_OK = 0,
     WATCHY_STATUS_INVALID_ARGUMENT = -1,
     WATCHY_STATUS_INVALID_STATE = -2,
     WATCHY_STATUS_INCOMPATIBLE_ABI = -3,
-    WATCHY_STATUS_UNSUPPORTED = -4
+    WATCHY_STATUS_UNSUPPORTED = -4,
+    WATCHY_STATUS_BUSY = -5
 } watchy_status_t;
 
 typedef enum {
     WATCHY_REFRESH_PARTIAL = 0,
     WATCHY_REFRESH_FULL = 1
 } watchy_refresh_mode_t;
+
+typedef enum {
+    WATCHY_TRANSITION_CUT = 0,
+    WATCHY_TRANSITION_FLASH,
+    WATCHY_TRANSITION_WIPE,
+    WATCHY_TRANSITION_PUSH,
+    WATCHY_TRANSITION_DITHER,
+    WATCHY_TRANSITION_GROW,
+    WATCHY_TRANSITION_ODOMETER,
+    WATCHY_TRANSITION_SPLIT,
+    WATCHY_TRANSITION_FILL,
+    WATCHY_TRANSITION_SHUTTER,
+} watchy_transition_effect_t;
+
+typedef enum {
+    WATCHY_TRANSITION_DIRECTION_NONE = 0,
+    WATCHY_TRANSITION_DIRECTION_LEFT,
+    WATCHY_TRANSITION_DIRECTION_RIGHT,
+    WATCHY_TRANSITION_DIRECTION_UP,
+    WATCHY_TRANSITION_DIRECTION_DOWN,
+} watchy_transition_direction_t;
+
+typedef struct {
+    int16_t x;
+    int16_t y;
+    int16_t width;
+    int16_t height;
+} watchy_transition_rect_t;
+
+#define WATCHY_TRANSITION_HAS_RECT UINT32_C(1)
+#define WATCHY_TRANSITION_PREFER_FULL UINT32_C(2)
+
+typedef struct {
+    uint32_t size;
+    watchy_transition_effect_t effect;
+    watchy_transition_direction_t direction;
+    watchy_transition_rect_t rect;
+    uint32_t flags;
+    uint32_t reserved[2];
+} watchy_transition_request_v1_t;
 
 typedef enum {
     WATCHY_PIXEL_MONO = 0,
@@ -203,6 +244,8 @@ typedef struct {
     void (*log)(void *context, const char *message);
     watchy_status_t (*request_exit)(void *context);
     watchy_status_t (*request_refresh)(void *context, watchy_refresh_mode_t mode);
+    watchy_status_t (*request_transition)(void *context,
+                                          const watchy_transition_request_v1_t *request);
 } watchy_system_api_v1_t;
 
 typedef struct {

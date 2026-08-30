@@ -38,6 +38,11 @@ _Static_assert(offsetof(watchy_bluetooth_api_v1_t, request) == sizeof(bluetooth_
                "ABI 1.0 Bluetooth prefix changed");
 _Static_assert(offsetof(watchy_system_api_v1_t, request_exit) == sizeof(system_v1_0_prefix_t),
                "ABI 1.0 system prefix changed");
+_Static_assert(WATCHY_ABI_V1_MINOR == 2u, "ABI minor must be 1.2");
+_Static_assert(WATCHY_TRANSITION_CUT == 0, "stable effect value");
+_Static_assert(WATCHY_STATUS_BUSY == -5, "stable busy status value");
+_Static_assert(sizeof(((watchy_system_api_v1_t *)0)->request_transition) == sizeof(void *),
+               "system API exposes transition request");
 
 typedef struct {
     uint32_t last_read_buffer_size;
@@ -89,7 +94,7 @@ int main(void) {
     uint32_t out_size = 0;
     static const char payload[] = "abi";
 
-    CHECK(WATCHY_ABI_V1_MINOR == 1u);
+    CHECK(WATCHY_ABI_V1_MINOR == 2u);
 
     CHECK(host.size == (uint32_t)sizeof(watchy_host_caps_v1_t));
     CHECK(host.storage->read(host.storage->context, "/pkg/data", buffer, (uint32_t)sizeof(buffer), &out_size) ==

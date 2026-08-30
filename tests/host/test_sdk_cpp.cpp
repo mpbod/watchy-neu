@@ -6,11 +6,22 @@
 
 #include "watchy/sdk.hpp"
 
+#define CHECK(expr) do { \
+    if (!(expr)) { \
+        std::fprintf(stderr, "FAIL %s:%d: %s\\n", __FILE__, __LINE__, #expr); \
+        return 1; \
+    } \
+} while (0)
+
 namespace {
 
 struct StorageContext {
     std::uint32_t last_read_buffer_size = 0;
     std::uint32_t last_written_size = 0;
+};
+
+struct TransitionCapture {
+    watchy_transition_request_v1_t request{};
 };
 
 static_assert(std::is_same<decltype(watchy_host_caps_v1_t{}.size), std::uint32_t>::value,
@@ -39,6 +50,11 @@ static_assert(offsetof(watchy_bluetooth_api_v1_t, request) == sizeof(BluetoothV1
               "ABI 1.0 C++ Bluetooth prefix changed");
 static_assert(offsetof(watchy_system_api_v1_t, request_exit) == sizeof(SystemV10Prefix),
               "ABI 1.0 C++ system prefix changed");
+static_assert(WATCHY_ABI_V1_MINOR == 2u, "ABI minor must be 1.2");
+static_assert(WATCHY_TRANSITION_CUT == 0, "stable effect value");
+static_assert(WATCHY_STATUS_BUSY == -5, "stable busy status value");
+static_assert(sizeof(((watchy_system_api_v1_t *)0)->request_transition) == sizeof(void *),
+              "system API exposes transition request");
 
 watchy_status_t test_storage_read(void *context,
                                   const char *path,
@@ -70,6 +86,13 @@ watchy_status_t test_storage_write(void *context,
     return WATCHY_STATUS_OK;
 }
 
+watchy_status_t capture_transition_request(void *context,
+                                           const watchy_transition_request_v1_t *request) {
+    TransitionCapture *captured = static_cast<TransitionCapture *>(context);
+    captured->request = *request;
+    return WATCHY_STATUS_OK;
+}
+
 }  // namespace
 
 int main() {
@@ -84,9 +107,22 @@ int main() {
     std::uint32_t out_size = 0;
     const char payload[] = "ok";
 
-    if (WATCHY_ABI_V1_MINOR != 1u) {
-        return 1;
-    }
+    TransitionCapture captured;
+    watchy_system_api_v1_t system_api = {
+        &captured,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        capture_transition_request,
+    };
+    watchy_transition_request_v1_t request{};
+    request.size = sizeof(request);
+    request.effect = WATCHY_TRANSITION_WIPE;
+
+    CHECK(watchy::System(&system_api).request_transition(&request) == WATCHY_STATUS_OK);
+    CHECK(captured.request.effect == WATCHY_TRANSITION_WIPE);
 
     if (storage.read("/pkg/data", buffer, static_cast<std::uint32_t>(sizeof(buffer)), &out_size) != WATCHY_STATUS_OK) {
         return 1;

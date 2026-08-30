@@ -201,6 +201,11 @@ public:
                    ? api_->request_refresh(api_->context, mode)
                    : WATCHY_STATUS_UNSUPPORTED;
     }
+    watchy_status_t request_transition(const watchy_transition_request_v1_t *request) const noexcept {
+        return (api_ != nullptr && api_->request_transition != nullptr)
+                   ? api_->request_transition(api_->context, request)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
 
 private:
     const watchy_system_api_v1_t *api_;

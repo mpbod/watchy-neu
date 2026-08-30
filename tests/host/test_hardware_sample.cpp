@@ -161,7 +161,7 @@ int main() {
     watchy_network_api_v1_t network = {&probe, false_state, network_request, nullptr, network_status};
     watchy_bluetooth_api_v1_t bluetooth = {&probe, false_state, bluetooth_request, nullptr,
                                            bluetooth_status};
-    watchy_system_api_v1_t system = {&probe, nullptr, nullptr, nullptr, request_exit, nullptr};
+    watchy_system_api_v1_t system = {&probe, nullptr, nullptr, nullptr, request_exit, nullptr, nullptr};
     watchy_clock_api_v1_t clock = {nullptr, unavailable_clock, nullptr};
     watchy_motion_api_v1_t motion = {nullptr, unavailable_motion};
     watchy_battery_api_v1_t battery = {nullptr, unavailable_battery};
