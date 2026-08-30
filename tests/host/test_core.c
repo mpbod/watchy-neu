@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "watchy/runtime.h"
+#include "watchy/transition.h"
 #include "watchy/wpk.h"
 
 #define CHECK(expr) do { \
@@ -181,6 +182,228 @@ static int test_refresh_policy_resets_after_explicit_full(void) {
     return 0;
 }
 
+static watchy_transition_request_v1_t valid_transition_request(void) {
+    return (watchy_transition_request_v1_t){
+        .size = sizeof(watchy_transition_request_v1_t),
+        .effect = WATCHY_TRANSITION_WIPE,
+        .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+    };
+}
+
+static int test_transition_rejects_malformed_requests(void) {
+    struct invalid_request_case {
+        watchy_transition_request_v1_t request;
+    } cases[] = {
+        {.request = {.size = sizeof(watchy_transition_request_v1_t) - 1u,
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+                     .reserved = {1u, 0u}}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+                     .reserved = {0u, 1u}}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+                     .flags = UINT32_C(4)}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = (watchy_transition_direction_t)5}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = (watchy_transition_effect_t)10,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+                     .flags = WATCHY_TRANSITION_HAS_RECT,
+                     .rect = {0, 0, 0, 1}}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_WIPE,
+                     .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+                     .flags = WATCHY_TRANSITION_HAS_RECT,
+                     .rect = {INT16_MAX, 0, INT16_MAX, 1}}},
+        {.request = {.size = sizeof(watchy_transition_request_v1_t),
+                     .effect = WATCHY_TRANSITION_ODOMETER,
+                     .direction = WATCHY_TRANSITION_DIRECTION_UP}},
+    };
+
+    CHECK(watchy_transition_validate(NULL) == WATCHY_STATUS_INVALID_ARGUMENT);
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        CHECK(watchy_transition_validate(&cases[i].request) == WATCHY_STATUS_INVALID_ARGUMENT);
+    }
+    return 0;
+}
+
+static int test_transition_normalizes_omitted_rectangle(void) {
+    watchy_transition_request_v1_t request = valid_transition_request();
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_FULL,
+        .attended = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.rect.x == 0 && plan.rect.y == 0);
+    CHECK(plan.rect.width == 200 && plan.rect.height == 200);
+    CHECK(plan.effect == WATCHY_TRANSITION_WIPE);
+    CHECK(plan.direction == WATCHY_TRANSITION_DIRECTION_RIGHT);
+    CHECK(plan.write_count == 4u);
+    CHECK(!plan.target_full && !plan.mandatory_clear);
+    return 0;
+}
+
+static int test_transition_uses_cut_when_no_request_is_supplied(void) {
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_FULL,
+        .attended = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    CHECK(watchy_transition_plan(NULL, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT);
+    CHECK(plan.direction == WATCHY_TRANSITION_DIRECTION_NONE);
+    CHECK(plan.rect.x == 0 && plan.rect.y == 0);
+    CHECK(plan.rect.width == 200 && plan.rect.height == 200);
+    CHECK(plan.write_count == 1u);
+    CHECK(!plan.target_full && !plan.mandatory_clear);
+    return 0;
+}
+
+static int test_transition_rejects_unknown_policy_level(void) {
+    watchy_transition_request_v1_t request = valid_transition_request();
+    watchy_transition_policy_context_t context = {
+        .level = (watchy_transition_level_t)-1,
+        .attended = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_INVALID_ARGUMENT);
+    return 0;
+}
+
+static int test_transition_assigns_bounded_write_counts(void) {
+    static const struct transition_count_case {
+        watchy_transition_effect_t effect;
+        uint8_t write_count;
+    } cases[] = {
+        {WATCHY_TRANSITION_CUT, 1u},
+        {WATCHY_TRANSITION_FLASH, 2u},
+        {WATCHY_TRANSITION_WIPE, 4u},
+        {WATCHY_TRANSITION_PUSH, 3u},
+        {WATCHY_TRANSITION_DITHER, 2u},
+        {WATCHY_TRANSITION_GROW, 3u},
+        {WATCHY_TRANSITION_ODOMETER, 3u},
+        {WATCHY_TRANSITION_SPLIT, 3u},
+        {WATCHY_TRANSITION_FILL, 5u},
+        {WATCHY_TRANSITION_SHUTTER, 5u},
+    };
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_FULL,
+        .attended = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        watchy_transition_request_v1_t request = valid_transition_request();
+        request.effect = cases[i].effect;
+        if (request.effect == WATCHY_TRANSITION_ODOMETER) {
+            request.flags = WATCHY_TRANSITION_HAS_RECT;
+            request.rect = (watchy_transition_rect_t){20, 20, 40, 40};
+        }
+        CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+        CHECK(plan.effect == cases[i].effect);
+        CHECK(plan.write_count == cases[i].write_count);
+    }
+    return 0;
+}
+
+static int test_transition_respects_full_target_preference(void) {
+    watchy_transition_request_v1_t request = valid_transition_request();
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_FULL,
+        .attended = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    request.flags = WATCHY_TRANSITION_PREFER_FULL;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.target_full);
+    return 0;
+}
+
+static int test_transition_policy_matrix_downgrades_optional_motion(void) {
+    watchy_transition_request_v1_t request = valid_transition_request();
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_FULL,
+        .attended = true,
+        .battery_mv = 3900u,
+        .source_valid = true,
+    };
+    watchy_transition_plan_t plan;
+
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_WIPE && plan.write_count == 4u);
+    context.level = WATCHY_TRANSITION_LEVEL_REDUCED;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_FLASH && plan.write_count == 2u);
+    context.level = WATCHY_TRANSITION_LEVEL_OFF;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT && plan.write_count == 1u);
+
+    context.level = WATCHY_TRANSITION_LEVEL_FULL;
+    context.battery_mv = 3549u;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT && plan.write_count == 1u);
+    context.battery_mv = 3900u;
+    context.attended = false;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT && plan.write_count == 1u);
+    context.attended = true;
+    context.safe_mode = true;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT && plan.write_count == 1u);
+    context.safe_mode = false;
+    context.source_valid = false;
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT && plan.write_count == 1u);
+    return 0;
+}
+
+static int test_transition_clear_overrides_optional_effect(void) {
+    watchy_transition_request_v1_t request = valid_transition_request();
+    watchy_transition_policy_context_t context = {
+        .level = WATCHY_TRANSITION_LEVEL_OFF,
+        .attended = false,
+        .safe_mode = true,
+        .source_valid = false,
+        .clear_required = true,
+        .battery_mv = 3549u,
+    };
+    watchy_transition_plan_t plan;
+
+    CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
+    CHECK(plan.effect == WATCHY_TRANSITION_CUT);
+    CHECK(plan.direction == WATCHY_TRANSITION_DIRECTION_NONE);
+    CHECK(plan.rect.x == 0 && plan.rect.y == 0);
+    CHECK(plan.rect.width == 200 && plan.rect.height == 200);
+    CHECK(plan.write_count == 2u);
+    CHECK(plan.target_full && plan.mandatory_clear);
+    return 0;
+}
+
 int main(void) {
     int (*tests[])(void) = {
         test_bundle_rejects_bad_magic,
@@ -198,6 +421,14 @@ int main(void) {
         test_runtime_lifecycle,
         test_refresh_policy_promotes_after_partial_limit,
         test_refresh_policy_resets_after_explicit_full,
+        test_transition_rejects_malformed_requests,
+        test_transition_normalizes_omitted_rectangle,
+        test_transition_uses_cut_when_no_request_is_supplied,
+        test_transition_rejects_unknown_policy_level,
+        test_transition_assigns_bounded_write_counts,
+        test_transition_respects_full_target_preference,
+        test_transition_policy_matrix_downgrades_optional_motion,
+        test_transition_clear_overrides_optional_effect,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {
