@@ -319,9 +319,13 @@ static int test_elf_validator_accepts_only_sane_xtensa_shared_objects(void) {
 
     make_valid_xtensa_elf(elf);
     CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, &runtime_bytes) == WATCHY_PACKAGE_OK);
-    /* 4 text + one 8-byte ESP32 esp_symtab entry + the 21-byte exported
-     * name rounded to the target's 4-byte allocation alignment. */
-    CHECK(runtime_bytes == 36u);
+    /* 4 text + one target TLSF allocation for the 8-byte esp_symtab table
+     * (12-byte minimum payload + 4-byte header) + one allocation for the
+     * 21-byte entry name (24-byte aligned payload + 4-byte header). */
+    CHECK(runtime_bytes == 48u);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 48u, NULL) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 47u, NULL) ==
+          WATCHY_PACKAGE_ERR_LIMIT);
 
     elf[4] = 2u;
     CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) == WATCHY_PACKAGE_ERR_ELF);
@@ -434,14 +438,16 @@ static int test_elf_validator_rejects_loader_consumed_hostile_structures(void) {
     return 0;
 }
 
-#define MANY_EXPORTS 64u
-#define MANY_ELF_SIZE 1368u
+#define MANY_FUNCTIONS 3000u
+#define MANY_DYNSYM_OFFSET 348u
+#define MANY_TEXT_OFFSET (MANY_DYNSYM_OFFSET + (MANY_FUNCTIONS + 1u) * 16u)
+#define MANY_ELF_SIZE (MANY_TEXT_OFFSET + 4u)
 
-static void make_many_symbol_xtensa_elf(uint8_t bytes[MANY_ELF_SIZE]) {
+static void make_many_symbol_xtensa_elf(uint8_t bytes[MANY_ELF_SIZE],
+                                        uint32_t function_count,
+                                        bool define_all) {
     static const char names[] = "\0.text\0.shstrtab\0.dynstr\0.dynsym\0";
-    static const char symbols[] = "\0f\0";
-    const uint32_t dynsym_offset = 324u;
-    const uint32_t text_offset = 1364u;
+    static const char symbols[] = "\0watchy_package_entry\0f\0";
     memset(bytes, 0, MANY_ELF_SIZE);
     memcpy(bytes, "\177ELF", 4u);
     bytes[4] = 1u;
@@ -460,7 +466,7 @@ static void make_many_symbol_xtensa_elf(uint8_t bytes[MANY_ELF_SIZE]) {
     put_u16le(bytes, 48u, 5u);
     put_u16le(bytes, 50u, 2u);
     put_u32le(bytes, 52u, 1u);
-    put_u32le(bytes, 56u, text_offset);
+    put_u32le(bytes, 56u, MANY_TEXT_OFFSET);
     put_u32le(bytes, 60u, 0x1000u);
     put_u32le(bytes, 68u, 4u);
     put_u32le(bytes, 72u, 4u);
@@ -470,7 +476,7 @@ static void make_many_symbol_xtensa_elf(uint8_t bytes[MANY_ELF_SIZE]) {
     put_u32le(bytes, 128u, 1u);
     put_u32le(bytes, 132u, 6u);
     put_u32le(bytes, 136u, 0x1000u);
-    put_u32le(bytes, 140u, text_offset);
+    put_u32le(bytes, 140u, MANY_TEXT_OFFSET);
     put_u32le(bytes, 144u, 4u);
     put_u32le(bytes, 156u, 4u);
     put_u32le(bytes, 164u, 7u);
@@ -485,34 +491,70 @@ static void make_many_symbol_xtensa_elf(uint8_t bytes[MANY_ELF_SIZE]) {
     put_u32le(bytes, 236u, 1u);
     put_u32le(bytes, 244u, 25u);
     put_u32le(bytes, 248u, 11u);
-    put_u32le(bytes, 260u, dynsym_offset);
-    put_u32le(bytes, 264u, (MANY_EXPORTS + 1u) * 16u);
+    put_u32le(bytes, 260u, MANY_DYNSYM_OFFSET);
+    put_u32le(bytes, 264u, (function_count + 1u) * 16u);
     put_u32le(bytes, 268u, 3u);
     put_u32le(bytes, 272u, 1u);
     put_u32le(bytes, 276u, 4u);
     put_u32le(bytes, 280u, 16u);
     memcpy(bytes + 284u, names, sizeof(names));
     memcpy(bytes + 320u, symbols, sizeof(symbols));
-    for (uint32_t index = 1u; index <= MANY_EXPORTS; ++index) {
-        const size_t offset = dynsym_offset + (size_t)index * 16u;
-        put_u32le(bytes, offset, 1u);
-        put_u32le(bytes, offset + 4u, 0x1000u);
-        put_u32le(bytes, offset + 8u, 4u);
+    for (uint32_t index = 1u; index <= function_count; ++index) {
+        const size_t offset = MANY_DYNSYM_OFFSET + (size_t)index * 16u;
+        const bool defined = index == 1u || define_all;
+        put_u32le(bytes, offset, defined ? 1u : 22u);
+        put_u32le(bytes, offset + 4u, defined ? 0x1000u : 0u);
+        put_u32le(bytes, offset + 8u, defined ? 4u : 0u);
         bytes[offset + 12u] = 0x12u;
-        put_u16le(bytes, offset + 14u, 1u);
+        put_u16le(bytes, offset + 14u, defined ? 1u : 0u);
     }
-    bytes[text_offset] = 0x06u;
-    bytes[text_offset + 1u] = 0x01u;
+    bytes[MANY_TEXT_OFFSET] = 0x06u;
+    bytes[MANY_TEXT_OFFSET + 1u] = 0x01u;
 }
 
-static int test_elf_runtime_accounts_for_many_exported_symbols(void) {
-    uint8_t elf[MANY_ELF_SIZE];
+static int test_elf_requires_exactly_the_literal_single_export(void) {
+    uint8_t elf[ELF_FIXTURE_SIZE];
+
+    make_valid_xtensa_elf(elf);
+    elf[373u] = 'x';
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) ==
+          WATCHY_PACKAGE_ERR_ELF);
+
+    make_valid_xtensa_elf(elf);
+    elf[424u] = 0x02u;
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) ==
+          WATCHY_PACKAGE_ERR_ELF);
+
+    return 0;
+}
+
+static int test_elf_rejects_duplicate_and_thousands_of_defined_exports(void) {
+    static uint8_t elf[MANY_ELF_SIZE];
+
+    make_many_symbol_xtensa_elf(elf, 2u, true);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf),
+                                      WATCHY_PACKAGE_RUNTIME_BYTES_MAX, NULL) ==
+          WATCHY_PACKAGE_ERR_ELF);
+
+    make_many_symbol_xtensa_elf(elf, MANY_FUNCTIONS, true);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf),
+                                      WATCHY_PACKAGE_RUNTIME_BYTES_MAX, NULL) ==
+          WATCHY_PACKAGE_ERR_ELF);
+    return 0;
+}
+
+static int test_elf_runtime_accounts_for_thousands_of_undefined_global_functions(void) {
+    static uint8_t elf[MANY_ELF_SIZE];
     uint32_t runtime_bytes = 0u;
-    make_many_symbol_xtensa_elf(elf);
-    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 772u, &runtime_bytes) ==
+
+    make_many_symbol_xtensa_elf(elf, MANY_FUNCTIONS, false);
+    /* One defined package entry plus 2,999 undefined globals consumed by
+     * elf_loader: 4 text + (24,000 table payload + 4 header) +
+     * (24 entry-name payload + 4 header) + 2,999 * (12 + 4). */
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 72020u, &runtime_bytes) ==
           WATCHY_PACKAGE_OK);
-    CHECK(runtime_bytes == 772u);
-    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 771u, NULL) ==
+    CHECK(runtime_bytes == 72020u);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 72019u, NULL) ==
           WATCHY_PACKAGE_ERR_LIMIT);
     return 0;
 }
@@ -693,7 +735,7 @@ static int test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data
     probe.normalized_size = size;
     CHECK(watchy_package_validate(bytes, size, &crypto, &package) == WATCHY_PACKAGE_OK);
     CHECK(strcmp(package.manifest.id, "clock.simple") == 0);
-    CHECK(package.runtime_bytes == 36u);
+    CHECK(package.runtime_bytes == 48u);
     CHECK(package.assets_size == 3u);
 
     asset_size_digit = (uint8_t *)strstr((char *)bytes + header->manifest_offset,
@@ -1530,7 +1572,9 @@ int main(void) {
     CHECK(test_elf_validator_accepts_only_sane_xtensa_shared_objects() == 0);
     CHECK(test_elf_validator_rejects_files_larger_than_64_kib() == 0);
     CHECK(test_elf_validator_rejects_loader_consumed_hostile_structures() == 0);
-    CHECK(test_elf_runtime_accounts_for_many_exported_symbols() == 0);
+    CHECK(test_elf_requires_exactly_the_literal_single_export() == 0);
+    CHECK(test_elf_rejects_duplicate_and_thousands_of_defined_exports() == 0);
+    CHECK(test_elf_runtime_accounts_for_thousands_of_undefined_global_functions() == 0);
     CHECK(test_reconciliation_distinguishes_valid_new_versions_from_transactions() == 0);
     CHECK(test_async_policy_pumps_once_and_preserves_cancelled_requests() == 0);
     CHECK(test_runner_post_policy_requires_cleanup_for_exit_or_refresh_failure() == 0);
@@ -1551,6 +1595,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 29 package tests");
+    puts("PASS 31 package tests");
     return 0;
 }

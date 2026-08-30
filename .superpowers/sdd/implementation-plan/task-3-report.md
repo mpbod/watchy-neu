@@ -1,4 +1,4 @@
-# Task 3 report: package runtime review fix round 2
+# Task 3 report: package runtime review fix round 3
 
 ## Result
 
@@ -8,8 +8,11 @@ transaction-owned staging, explicit index wire encoding, and bounded target
 storage/runtime adapters. Round 2 applies the no-PSRAM Watchy 2.0 memory
 ceilings, exact loader symbol-memory accounting, exact transaction namespaces,
 per-runner-task watchdog enrollment, callback deadlines, and host-tested
-portable target policies. The public ABI major remains 1; minor 0 prefixes are
-unchanged and ABI minor is 1 as ruled in review.
+portable target policies. Round 3 makes the ELF package export contract exact:
+one and only one defined global function named `watchy_package_entry`, with
+the complete target TLSF footprint of elf_loader's persistent symbol table and
+separate names charged to the runtime ceiling. The public ABI major remains 1;
+minor 0 prefixes are unchanged and ABI minor is 1 as ruled in review.
 
 ## Files
 
@@ -36,8 +39,9 @@ unchanged and ABI minor is 1 as ruled in review.
   canonical escape profile.
 - `components/watchy_packages/src/elf_validate.c`: validation of the exact
   bus-address-mirror section model consumed by elf_loader 1.3.3, including one
-  dynamic symbol/string pair and target-layout accounting for the persistent
-  exported-function table and name allocations.
+  dynamic symbol/string pair, the literal single-entry export contract, and
+  target TLSF accounting for the persistent loader function table and every
+  separately allocated name.
 - `components/watchy_packages/src/package_state.c`: explicit fixed-width NVS
   wire encoding and validated installed/type/selection/health invariants.
 - `components/watchy_packages/src/package_install.c`: absolute preflight limit,
@@ -83,10 +87,10 @@ Portable behavior was exercised test-first. The material red cases were:
 3. Hostile section-name/table/link/info/entry/overflow/overlap mutations passed
    the earlier ELF check. Green validates all loader-consumed tables and exact
    named allocations.
-4. Unsupported Xtensa relocation type 6 and an undefined global function in
-   `.dynsym` were accepted. Both hostile fixtures failed before the final
-   loader-consumed checks and now fail closed; the real Xtensa fixture remains
-   green.
+4. Unsupported Xtensa relocation type 6 was accepted. It now fails closed;
+   undefined and local functions remain structurally checked but do not count
+   as defined package exports. Loader-consumed undefined globals are included
+   in persistent allocation accounting.
 5. Raw index structure persistence accepted inconsistent flags, selections,
    types, and reserved bytes. Green uses a 2978-byte little-endian wire format
    and rejects every tested corruption.
@@ -118,11 +122,8 @@ Portable behavior was exercised test-first. The material red cases were:
     boundaries. Exact-limit and one-byte-over tests cover the boundaries.
 14. ELF runtime accounting returned only relocated section bytes (`4` for the
     minimal fixture) and duplicate dynamic symbol/string tables were accepted.
-    Green requires exactly one `.dynsym` linked to exactly one `.dynstr`,
-    rejects duplicate hostile fixtures, and reports `36` bytes for the minimal
-    fixture: 4 text + one 8-byte ESP32 `esp_symtab_t` + its 21-byte name rounded
-    to 4-byte target alignment. A 64-export fixture reports exactly 772 bytes
-    and fails with a 771-byte declaration.
+    Green requires exactly one `.dynsym` linked to exactly one `.dynstr` and
+    rejects duplicate hostile fixtures.
 15. Transaction/reconciliation tests showed that substring matching treated
     valid `1.new.0` as temporary, and the installer did not retry a colliding
     transaction directory. Green uses only `.watchy-txn-xxxxxxxx`, keeps an
@@ -142,14 +143,25 @@ Portable behavior was exercised test-first. The material red cases were:
     initialization. Green verifies/adds and then re-verifies the current task
     at start/event/render/stop entry, resets the deadline for every callback,
     and fails package startup closed if enrollment cannot be proven.
+19. Export validation accepted a missing export, the wrong export name,
+    duplicate exports, and thousands of defined global-function exports. The
+    new assertion-level fixtures failed against that behavior. Green permits
+    exactly one defined global `STT_FUNC`, requires its name to be the literal
+    `watchy_package_entry`, and rejects zero, two, or 3,000 defined exports.
+20. Symbol accounting charged raw requests but omitted TLSF block overhead and
+    its 12-byte minimum payload. The minimal fixture now reports exactly 48
+    bytes: 4 text + a 16-byte TLSF table block + a 28-byte TLSF name block, and
+    fails a 47-byte declaration. A structurally valid fixture with one defined
+    entry plus 2,999 undefined loader-consumed functions reports 72,020 bytes
+    and fails a 72,019-byte declaration.
 
 Final host evidence:
 
 - Normal AppleClang build: CTest 5/5 passed (core 15, SDK C, SDK C++, HAL 13,
-  package 29); the separate real-Xtensa fixture smoke passed with
-  `runtime_bytes=292`.
-- Fresh round-2 UBSan build (`-fsanitize=undefined -fno-omit-frame-pointer`):
-  CTest 5/5 passed and the fixture smoke passed with `runtime_bytes=292`; no
+  package 31); the separate real-Xtensa fixture smoke passed with
+  `runtime_bytes=304`.
+- Fresh round-3 UBSan build (`-fsanitize=undefined -fno-omit-frame-pointer`):
+  CTest 5/5 passed and the fixture smoke passed with `runtime_bytes=304`; no
   UBSan diagnostics.
 - ASan remains unclaimed: AppleClang ASan startup hangs in this runner even for
   the unchanged core executable. UBSan is the clean sanitizer result requested
@@ -175,9 +187,13 @@ Final host evidence:
   names, section/segment containment, entry execution, allocation and file
   overlaps, NOBITS, symbols/strings, RELA links/info/entry sizes and supported
   Xtensa relocation types, dynamic/hash relationships, and all arithmetic. It
-  also permits one `.dynsym`/`.dynstr` pair only and charges the persistent
-  32-bit `esp_symtab_t` table (8 bytes/export) plus a separately allocated,
-  4-byte-rounded name for every exported global function.
+  also permits one `.dynsym`/`.dynstr` pair only and exactly one defined global
+  function export named `watchy_package_entry`. Undefined/local functions are
+  not package exports. For every global function elf_loader consumes, runtime
+  accounting models ESP-IDF's 32-bit TLSF allocation as a 4-byte-aligned
+  payload of at least 12 bytes plus its 4-byte used-block header. This is
+  applied once to the 8-byte-per-entry `esp_symtab_t` table and separately to
+  every copied symbol name, with checked arithmetic.
 - The target adapter additionally obtains the active `dlmod`/`esp_elf_t`
   allocation boundaries. A readable/executable ESP address is accepted only
   when the complete range also lies in the current package's relocated text or
@@ -226,14 +242,14 @@ Commands:
 pio run -e watchy_v2 -t clean
 pio run -e watchy_v2
 ninja -C .pio/build/watchy_v2 esp-idf/watchy_packages/watchy_package_xtensa_smoke
-build/host-final/watchy_elf_fixture_validator \
+build-host/tests/host/watchy_elf_fixture_validator \
   .pio/build/watchy_v2/esp-idf/watchy_packages/watchy_package_smoke.so
 ```
 
-- Clean firmware build: success in 44.41 seconds on ESP32 / ESP-IDF 5.5.0.
+- Clean firmware build: success in 45.39 seconds on ESP32 / ESP-IDF 5.5.0.
 - Resolved package: `espressif/elf_loader` 1.3.3, dynamic shared-object support
   enabled, bus-address-mirror mode enabled, filesystem base `/data`.
-- Final size: 97,752 / 327,680 RAM (29.8%) and 1,254,079 / 1,835,008 flash
+- Final size: 97,768 / 327,680 RAM (29.8%) and 1,254,811 / 1,835,008 flash
   (68.3%).
 - Final firmware symbols include `dlopen`, `dlsym`, `dlclose`,
   `watchy_package_install`, `watchy_package_select_watchface`,
@@ -242,8 +258,8 @@ build/host-final/watchy_elf_fixture_validator \
 - The fixture is an actual ELF32 little-endian `ET_DYN`, `EM_XTENSA` shared
   object with entry `0x1004` and ten `R_XTENSA_RELATIVE` relocations. It is
   compiled and linked with the installed Xtensa 14.2.0 target compiler and
-  passes the production validator (`runtime_bytes=292`, including its exported
-  function table/name allocations).
+  exports only `watchy_package_entry` and passes the production validator
+  (`runtime_bytes=304`, including the target TLSF table/name allocations).
 - Stack guard: every package source is compiled with
   `-Wframe-larger-than=2048`. No warning occurred. `.su` reports show the
   largest frame is `watchy_package_install` at 1600 bytes; runner start is 1008,
@@ -295,6 +311,10 @@ No physical Watchy execution is claimed.
   from storage immediately before the real loader is called.
 - Confirmed install/select/event roots are referenced from target code and are
   present in the final firmware ELF after garbage collection.
+- Confirmed the target-generated fixture has exactly one dynamic global
+  function, literally `watchy_package_entry`; local callbacks remain local.
+  Rechecked the target TLSF allocator's 4-byte alignment, 12-byte minimum
+  payload, and 4-byte block overhead against the pinned ESP-IDF source.
 
 ## Concerns and limitations
 

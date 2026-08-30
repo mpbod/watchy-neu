@@ -16,7 +16,11 @@ enum {
     SHN_UNDEF = 0u, STB_GLOBAL = 1u, STT_FUNC = 2u,
     R_XTENSA_RTLD = 2u, R_XTENSA_GLOB_DAT = 3u, R_XTENSA_JMP_SLOT = 4u,
     R_XTENSA_RELATIVE = 5u,
+    TARGET_TLSF_ALIGN = 4u, TARGET_TLSF_MIN_PAYLOAD = 12u,
+    TARGET_TLSF_BLOCK_HEADER = 4u, TARGET_ESP_SYMTAB_ENTRY = 8u,
 };
+
+static const char package_entry_name[] = "watchy_package_entry";
 
 static uint16_t u16(const uint8_t *p) {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8u));
@@ -46,6 +50,19 @@ static bool table_fits(size_t file_size, uint32_t offset, uint16_t count, uint16
 
 static bool power_two(uint32_t value) {
     return value != 0u && (value & (value - 1u)) == 0u;
+}
+
+static bool target_tlsf_allocation(uint32_t requested, uint32_t *out) {
+    uint32_t payload;
+    if (requested == 0u || requested > UINT32_MAX - (TARGET_TLSF_ALIGN - 1u)) {
+        return false;
+    }
+    payload = (requested + (TARGET_TLSF_ALIGN - 1u)) &
+              ~(uint32_t)(TARGET_TLSF_ALIGN - 1u);
+    if (payload < TARGET_TLSF_MIN_PAYLOAD) {
+        payload = TARGET_TLSF_MIN_PAYLOAD;
+    }
+    return add_ok(payload, TARGET_TLSF_BLOCK_HEADER, out);
 }
 
 static bool ranges_overlap(uint32_t a, uint32_t as, uint32_t b, uint32_t bs) {
@@ -157,6 +174,8 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
     uint8_t seen_loader_sections = 0u;
     uint16_t dynsym_index = 0u;
     uint16_t dynstr_index = 0u;
+    uint32_t loader_function_count = 0u;
+    uint32_t defined_export_count = 0u;
 
     if (elf == NULL) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
@@ -338,6 +357,9 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
             for (uint32_t symbol_index = 0u; symbol_index < entries; ++symbol_index) {
                 const uint8_t *sym = elf + offset + (size_t)symbol_index * SYM_SIZE;
                 const uint16_t sym_section = u16(sym + 14u);
+                const bool loader_function = type == SHT_DYNSYM &&
+                    (sym[12u] >> 4u) == STB_GLOBAL &&
+                    (sym[12u] & 0x0fu) == STT_FUNC;
                 uint32_t sym_end;
                 if (!nul_string(str, str_size, u32(sym)) ||
                     (sym_section != SHN_UNDEF && sym_section < 0xff00u && sym_section >= shnum) ||
@@ -353,38 +375,47 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
                         u32(sym + 4u) < u32(target + 12u) || sym_end > target_end) {
                         return WATCHY_PACKAGE_ERR_ELF;
                     }
-                    if (type == SHT_DYNSYM && (sym[12u] >> 4u) == STB_GLOBAL &&
-                        (sym[12u] & 0x0fu) == STT_FUNC &&
+                    if (loader_function &&
                         loader_section_kind(target_name, u32(target + 4u),
                                             u32(target + 8u)) != 1) {
                         return WATCHY_PACKAGE_ERR_ELF;
                     }
-                } else if (type == SHT_DYNSYM && (sym[12u] >> 4u) == STB_GLOBAL &&
-                           (sym[12u] & 0x0fu) == STT_FUNC) {
-                    /* elf_loader exports every global function by subtracting
-                     * the .text base, including undefined functions. Reject
-                     * those before it can perform that invalid mapping. */
-                    return WATCHY_PACKAGE_ERR_ELF;
                 }
-                if (type == SHT_DYNSYM && (sym[12u] >> 4u) == STB_GLOBAL &&
-                    (sym[12u] & 0x0fu) == STT_FUNC) {
+                if (loader_function) {
                     const uint8_t *terminator = memchr(str + u32(sym), '\0',
                                                        str_size - u32(sym));
                     const uint32_t name_bytes = (uint32_t)(terminator - (str + u32(sym))) + 1u;
-                    uint32_t aligned_name;
-                    /* ESP32 esp_symtab_t is two 32-bit pointers. elf_loader
-                     * allocates a table entry and a separate name for every
-                     * exported global function. */
-                    if (name_bytes > UINT32_MAX - 3u) {
+                    uint32_t name_allocation;
+                    if (loader_function_count == UINT32_MAX ||
+                        !target_tlsf_allocation(name_bytes, &name_allocation) ||
+                        runtime > UINT32_MAX - name_allocation) {
                         return WATCHY_PACKAGE_ERR_LIMIT;
                     }
-                    aligned_name = (name_bytes + 3u) & ~UINT32_C(3);
-                    if (runtime > UINT32_MAX - 8u ||
-                        runtime + 8u > UINT32_MAX - aligned_name) {
-                        return WATCHY_PACKAGE_ERR_LIMIT;
+                    ++loader_function_count;
+                    runtime += name_allocation;
+
+                    if (sym_section != SHN_UNDEF) {
+                        if (sym_section >= 0xff00u ||
+                            strcmp((const char *)str + u32(sym), package_entry_name) != 0 ||
+                            defined_export_count != 0u) {
+                            return WATCHY_PACKAGE_ERR_ELF;
+                        }
+                        ++defined_export_count;
                     }
-                    runtime += 8u + aligned_name;
                 }
+            }
+            if (type == SHT_DYNSYM && loader_function_count != 0u) {
+                uint32_t table_request;
+                uint32_t table_allocation;
+                if (loader_function_count > UINT32_MAX / TARGET_ESP_SYMTAB_ENTRY) {
+                    return WATCHY_PACKAGE_ERR_LIMIT;
+                }
+                table_request = loader_function_count * TARGET_ESP_SYMTAB_ENTRY;
+                if (!target_tlsf_allocation(table_request, &table_allocation) ||
+                    runtime > UINT32_MAX - table_allocation) {
+                    return WATCHY_PACKAGE_ERR_LIMIT;
+                }
+                runtime += table_allocation;
             }
         } else if (type == SHT_RELA) {
             const uint32_t link = u32(sh + 24u);
@@ -440,7 +471,8 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
             }
         }
     }
-    if ((seen_loader_sections & 1u) == 0u || text_size == 0u || entry < text_addr ||
+    if ((seen_loader_sections & 1u) == 0u || text_size == 0u || defined_export_count != 1u ||
+        entry < text_addr ||
         entry >= text_addr + text_size || runtime == 0u || runtime > declared_runtime_bytes) {
         return runtime > declared_runtime_bytes ? WATCHY_PACKAGE_ERR_LIMIT : WATCHY_PACKAGE_ERR_ELF;
     }
