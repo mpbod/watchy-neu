@@ -11,14 +11,13 @@ watchy_package_status_t watchy_package_validate(const uint8_t *wpk,
                                                 const watchy_crypto_api_t *crypto,
                                                 watchy_validated_package_t *out_package) {
     wpk_view_t view;
-    watchy_validated_package_t package;
     watchy_package_status_t status;
     uint32_t asset_bytes = 0u;
 
     if (wpk == NULL || crypto == NULL || out_package == NULL) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
     }
-    memset(&package, 0, sizeof(package));
+    memset(out_package, 0, sizeof(*out_package));
     if (wpk_parse(wpk, wpk_size, &view) != WPK_OK) {
         return WATCHY_PACKAGE_ERR_WPK;
     }
@@ -31,25 +30,27 @@ watchy_package_status_t watchy_package_validate(const uint8_t *wpk,
     if (status != WATCHY_PACKAGE_OK) {
         return status;
     }
-    status = watchy_package_manifest_parse(view.manifest, view.manifest_size, &package.manifest);
+    status = watchy_package_manifest_parse(view.manifest,
+                                           view.manifest_size,
+                                           &out_package->manifest);
     if (status != WATCHY_PACKAGE_OK) {
         return status;
     }
-    if (!watchy_abi_compatible(package.manifest.abi_major,
-                               package.manifest.abi_minor,
+    if (!watchy_abi_compatible(out_package->manifest.abi_major,
+                               out_package->manifest.abi_minor,
                                WATCHY_ABI_V1_MAJOR,
                                WATCHY_ABI_V1_MINOR)) {
         return WATCHY_PACKAGE_ERR_ABI;
     }
     status = watchy_package_elf_validate(view.elf,
                                          view.elf_size,
-                                         package.manifest.max_runtime_bytes,
-                                         &package.runtime_bytes);
+                                         out_package->manifest.max_runtime_bytes,
+                                         &out_package->runtime_bytes);
     if (status != WATCHY_PACKAGE_OK) {
         return status;
     }
-    for (size_t index = 0u; index < package.manifest.asset_count; ++index) {
-        const uint32_t size = package.manifest.assets[index].size;
+    for (size_t index = 0u; index < out_package->manifest.asset_count; ++index) {
+        const uint32_t size = out_package->manifest.assets[index].size;
         if (size > UINT32_MAX - asset_bytes) {
             return WATCHY_PACKAGE_ERR_LIMIT;
         }
@@ -59,10 +60,9 @@ watchy_package_status_t watchy_package_validate(const uint8_t *wpk,
         return WATCHY_PACKAGE_ERR_ASSETS;
     }
 
-    package.elf = view.elf;
-    package.elf_size = view.elf_size;
-    package.assets = view.assets;
-    package.assets_size = view.assets_size;
-    *out_package = package;
+    out_package->elf = view.elf;
+    out_package->elf_size = view.elf_size;
+    out_package->assets = view.assets;
+    out_package->assets_size = view.assets_size;
     return WATCHY_PACKAGE_OK;
 }

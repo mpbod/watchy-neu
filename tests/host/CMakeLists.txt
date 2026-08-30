@@ -1,3 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(watchy_host_tests LANGUAGES C CXX)
+enable_testing()
+
 add_executable(watchy_core_tests
   test_core.c
   ../../components/watchy_core/src/wpk.c
@@ -59,6 +63,7 @@ add_executable(watchy_packages_tests
   ../../components/watchy_packages/src/package_state.c
   ../../components/watchy_packages/src/package_runtime.c
   ../../components/watchy_packages/src/package_install.c
+  ../../components/watchy_packages/src/sha256.c
   ../../components/watchy_core/src/wpk.c
   ../../components/watchy_core/src/runtime.c
 )
@@ -70,3 +75,15 @@ target_include_directories(watchy_packages_tests PRIVATE
 target_compile_features(watchy_packages_tests PRIVATE c_std_11)
 target_compile_options(watchy_packages_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_packages_tests COMMAND watchy_packages_tests)
+
+add_executable(watchy_elf_fixture_validator
+  validate_elf_fixture.c
+  ../../components/watchy_packages/src/elf_validate.c
+)
+target_include_directories(watchy_elf_fixture_validator PRIVATE
+  ../../components/watchy_packages/include
+  ../../components/watchy_core/include
+  ../../sdk/include
+)
+target_compile_features(watchy_elf_fixture_validator PRIVATE c_std_11)
+target_compile_options(watchy_elf_fixture_validator PRIVATE -Wall -Wextra -Werror)

@@ -48,11 +48,15 @@ typedef enum {
 #define WATCHY_PACKAGE_RUNTIME_BYTES_MAX (160u * 1024u)
 #define WATCHY_PACKAGE_ELF_BYTES_MAX (384u * 1024u)
 #define WATCHY_PACKAGE_MANIFEST_BYTES_MAX (16u * 1024u)
+#define WATCHY_PACKAGE_WPK_BYTES_MAX                                                   \
+    (68u + WATCHY_PACKAGE_MANIFEST_BYTES_MAX + WATCHY_PACKAGE_ELF_BYTES_MAX +          \
+     WATCHY_PACKAGE_ASSETS_BYTES_MAX)
 #define WATCHY_PACKAGE_REF_MAX (WATCHY_PACKAGE_ID_MAX + 1u + WATCHY_PACKAGE_VERSION_MAX)
 #define WATCHY_PACKAGE_HEALTH_RECORD_MAX 16u
 #define WATCHY_PACKAGE_INSTALLED_MAX 16u
 #define WATCHY_PACKAGE_INDEX_MAGIC UINT32_C(0x57504b49)
 #define WATCHY_PACKAGE_INDEX_VERSION 1u
+#define WATCHY_PACKAGE_INDEX_WIRE_MAX 4096u
 
 typedef enum {
     WATCHY_PACKAGE_TYPE_WATCHFACE = 0,
@@ -114,6 +118,7 @@ typedef struct {
     char pending_watchface[WATCHY_PACKAGE_REF_MAX + 1u];
     char prior_watchface[WATCHY_PACKAGE_REF_MAX + 1u];
     char installed[WATCHY_PACKAGE_INSTALLED_MAX][WATCHY_PACKAGE_REF_MAX + 1u];
+    watchy_package_type_t installed_types[WATCHY_PACKAGE_INSTALLED_MAX];
     size_t installed_count;
     watchy_package_health_t health[WATCHY_PACKAGE_HEALTH_RECORD_MAX];
     size_t health_count;
@@ -133,6 +138,7 @@ typedef struct {
 
 typedef struct {
     watchy_package_index_t index;
+    watchy_package_index_t scratch;
     watchy_package_index_store_t store;
     bool initialized;
 } watchy_package_index_manager_t;
@@ -143,6 +149,9 @@ typedef struct {
     void *(*open)(void *context, const char *path, int mode);
     void *(*symbol)(void *context, void *handle, const char *name);
     int (*close)(void *context, void *handle);
+    bool (*readable)(void *context, const void *address, size_t size);
+    bool (*writable)(void *context, void *address, size_t size);
+    bool (*executable)(void *context, const void *address, size_t size);
     void *context;
 } watchy_package_loader_api_t;
 
@@ -157,9 +166,14 @@ typedef struct {
     watchy_package_watchdog_api_t watchdog;
     watchy_runtime_t runtime;
     void *handle;
-    const watchy_package_descriptor_v1_t *descriptor;
+    watchy_package_descriptor_v1_t descriptor;
+    char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
+    char name[WATCHY_PACKAGE_NAME_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
     void *user_data;
     bool on_load_completed;
+    bool initialized;
+    bool poisoned;
 } watchy_package_session_t;
 
 typedef struct {
@@ -168,12 +182,33 @@ typedef struct {
                        const uint8_t *bytes,
                        size_t size,
                        bool read_only);
+    bool (*write_file_exclusive)(void *context,
+                                 const char *path,
+                                 const uint8_t *bytes,
+                                 size_t size);
+    bool (*read_file)(void *context,
+                      const char *path,
+                      uint8_t *bytes,
+                      size_t capacity,
+                      size_t *out_size);
     bool (*mkdirs)(void *context, const char *path);
+    bool (*mkdir_exclusive)(void *context, const char *path);
     bool (*sync_tree)(void *context, const char *path);
-    bool (*rename_atomic)(void *context, const char *source, const char *destination);
+    bool (*rename_noreplace)(void *context, const char *source, const char *destination);
+    bool (*path_exists)(void *context, const char *path);
     bool (*remove_tree)(void *context, const char *path);
+    uint32_t (*unique_id)(void *context);
     void *context;
 } watchy_package_fs_api_t;
+
+/* Caller-owned install storage. One workspace may service one transaction at a
+ * time; target code serializes it with the install/state mutex. */
+typedef struct {
+    watchy_validated_package_t package;
+    uint8_t *stage_bytes;
+    size_t stage_capacity;
+    bool in_use;
+} watchy_package_install_workspace_t;
 
 typedef struct {
     const uint8_t *bytes;
@@ -224,6 +259,21 @@ bool watchy_package_is_quarantined(const watchy_package_index_manager_t *manager
 watchy_package_status_t watchy_package_register_installed(
     watchy_package_index_manager_t *manager,
     const char *package_ref);
+watchy_package_status_t watchy_package_register_installed_typed(
+    watchy_package_index_manager_t *manager,
+    const char *package_ref,
+    watchy_package_type_t type);
+bool watchy_package_is_installed(const watchy_package_index_manager_t *manager,
+                                 const char *package_ref,
+                                 watchy_package_type_t *out_type);
+watchy_package_status_t watchy_package_index_encode(
+    const watchy_package_index_t *index,
+    uint8_t *wire,
+    size_t capacity,
+    size_t *out_size);
+watchy_package_status_t watchy_package_index_decode(const uint8_t *wire,
+                                                    size_t size,
+                                                    watchy_package_index_t *out_index);
 watchy_package_status_t watchy_package_session_init(
     watchy_package_session_t *session,
     const watchy_package_loader_api_t *loader,
@@ -244,6 +294,7 @@ watchy_package_status_t watchy_package_session_stop(watchy_package_session_t *se
 bool watchy_package_session_loaded(const watchy_package_session_t *session);
 watchy_package_status_t watchy_package_install(watchy_package_index_manager_t *manager,
                                                const watchy_package_fs_api_t *filesystem,
+                                               watchy_package_install_workspace_t *workspace,
                                                const uint8_t *wpk,
                                                size_t wpk_size,
                                                const watchy_crypto_api_t *crypto,

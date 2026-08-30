@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define WATCHY_ABI_V1_MAJOR 1u
-#define WATCHY_ABI_V1_MINOR 0u
+#define WATCHY_ABI_V1_MINOR 1u
 
 typedef enum {
     WATCHY_STATUS_OK = 0,
@@ -46,6 +46,32 @@ typedef enum {
     WATCHY_EVENT_BLUETOOTH = 6,
     WATCHY_EVENT_SYSTEM = 7
 } watchy_event_type_t;
+
+/* ABI 1.1 asynchronous radio operations. Request IDs are host-generated and
+ * remain valid until their terminal status has been observed or cancelled. */
+typedef uint32_t watchy_request_id_t;
+
+typedef enum {
+    WATCHY_ASYNC_PENDING = 0,
+    WATCHY_ASYNC_SUCCEEDED = 1,
+    WATCHY_ASYNC_FAILED = 2,
+    WATCHY_ASYNC_CANCELLED = 3
+} watchy_async_state_t;
+
+typedef struct {
+    watchy_async_state_t state;
+    watchy_status_t result;
+} watchy_async_status_t;
+
+typedef enum {
+    WATCHY_NETWORK_CONNECT = 0,
+    WATCHY_NETWORK_DISCONNECT = 1
+} watchy_network_request_t;
+
+typedef enum {
+    WATCHY_BLUETOOTH_START = 0,
+    WATCHY_BLUETOOTH_STOP = 1
+} watchy_bluetooth_request_t;
 
 typedef struct {
     uint16_t major;
@@ -147,11 +173,25 @@ typedef struct {
 typedef struct {
     void *context;
     bool (*connected)(void *context);
+    watchy_status_t (*request)(void *context,
+                              watchy_network_request_t request,
+                              watchy_request_id_t *out_request_id);
+    watchy_status_t (*cancel)(void *context, watchy_request_id_t request_id);
+    watchy_status_t (*status)(void *context,
+                             watchy_request_id_t request_id,
+                             watchy_async_status_t *out_status);
 } watchy_network_api_v1_t;
 
 typedef struct {
     void *context;
     bool (*enabled)(void *context);
+    watchy_status_t (*request)(void *context,
+                              watchy_bluetooth_request_t request,
+                              watchy_request_id_t *out_request_id);
+    watchy_status_t (*cancel)(void *context, watchy_request_id_t request_id);
+    watchy_status_t (*status)(void *context,
+                             watchy_request_id_t request_id,
+                             watchy_async_status_t *out_status);
 } watchy_bluetooth_api_v1_t;
 
 typedef struct {
@@ -159,6 +199,8 @@ typedef struct {
     uint32_t (*millis)(void *context);
     void (*sleep_ms)(void *context, uint32_t duration_ms);
     void (*log)(void *context, const char *message);
+    watchy_status_t (*request_exit)(void *context);
+    watchy_status_t (*request_refresh)(void *context, watchy_refresh_mode_t mode);
 } watchy_system_api_v1_t;
 
 typedef struct {

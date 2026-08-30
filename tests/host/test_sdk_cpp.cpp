@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <type_traits>
@@ -14,6 +15,30 @@ struct StorageContext {
 
 static_assert(std::is_same<decltype(watchy_host_caps_v1_t{}.size), std::uint32_t>::value,
               "watchy_host_caps_v1_t.size must be uint32_t");
+
+struct NetworkV10Prefix {
+    void *context;
+    bool (*connected)(void *context);
+};
+
+struct BluetoothV10Prefix {
+    void *context;
+    bool (*enabled)(void *context);
+};
+
+struct SystemV10Prefix {
+    void *context;
+    std::uint32_t (*millis)(void *context);
+    void (*sleep_ms)(void *context, std::uint32_t duration_ms);
+    void (*log)(void *context, const char *message);
+};
+
+static_assert(offsetof(watchy_network_api_v1_t, request) == sizeof(NetworkV10Prefix),
+              "ABI 1.0 C++ network prefix changed");
+static_assert(offsetof(watchy_bluetooth_api_v1_t, request) == sizeof(BluetoothV10Prefix),
+              "ABI 1.0 C++ Bluetooth prefix changed");
+static_assert(offsetof(watchy_system_api_v1_t, request_exit) == sizeof(SystemV10Prefix),
+              "ABI 1.0 C++ system prefix changed");
 
 watchy_status_t test_storage_read(void *context,
                                   const char *path,
@@ -58,6 +83,10 @@ int main() {
     char buffer[8] = {};
     std::uint32_t out_size = 0;
     const char payload[] = "ok";
+
+    if (WATCHY_ABI_V1_MINOR != 1u) {
+        return 1;
+    }
 
     if (storage.read("/pkg/data", buffer, static_cast<std::uint32_t>(sizeof(buffer)), &out_size) != WATCHY_STATUS_OK) {
         return 1;

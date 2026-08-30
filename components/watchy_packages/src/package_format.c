@@ -144,6 +144,25 @@ static bool paths_collide(const char *lhs, const char *rhs) {
            (rhs_length < lhs_length && memcmp(lhs, rhs, rhs_length) == 0 && lhs[rhs_length] == '/');
 }
 
+static bool asset_path_reserved(const char *path) {
+    static const char *const reserved[] = {
+        "package.so", "manifest.json", "state", ".new",
+    };
+    const char *separator = strchr(path, '/');
+    const size_t first_length = separator == NULL ? strlen(path) : (size_t)(separator - path);
+
+    if (first_length == 0u || path[0] == '.') {
+        return true;
+    }
+    for (size_t index = 0u; index < sizeof(reserved) / sizeof(reserved[0]); ++index) {
+        const size_t length = strlen(reserved[index]);
+        if (first_length == length && memcmp(path, reserved[index], length) == 0) {
+            return true;
+        }
+    }
+    return first_length >= 7u && memcmp(path, "watchy-", 7u) == 0;
+}
+
 static bool package_version_valid(const char *version) {
     const size_t length = strlen(version);
     if (length == 0u || length > WATCHY_PACKAGE_VERSION_MAX || strcmp(version, ".") == 0 ||
@@ -239,7 +258,7 @@ static watchy_package_status_t parse_assets(manifest_cursor_t *cursor,
             !cursor_take(cursor, "}")) {
             return WATCHY_PACKAGE_ERR_MANIFEST;
         }
-        if (!watchy_package_relative_path_valid(asset->path)) {
+        if (!watchy_package_relative_path_valid(asset->path) || asset_path_reserved(asset->path)) {
             return WATCHY_PACKAGE_ERR_PATH;
         }
         for (size_t prior = 0u; prior < manifest->asset_count; ++prior) {
@@ -265,7 +284,6 @@ watchy_package_status_t watchy_package_manifest_parse(const uint8_t *json,
                                                       size_t json_size,
                                                       watchy_package_manifest_t *out_manifest) {
     manifest_cursor_t cursor = {.bytes = json, .size = json_size, .offset = 0u};
-    watchy_package_manifest_t manifest;
     uint32_t integer = 0u;
     watchy_package_status_t status;
     char type[10];
@@ -276,70 +294,71 @@ watchy_package_status_t watchy_package_manifest_parse(const uint8_t *json,
     if (!utf8_valid(json, json_size)) {
         return WATCHY_PACKAGE_ERR_UTF8;
     }
-    memset(&manifest, 0, sizeof(manifest));
+    memset(out_manifest, 0, sizeof(*out_manifest));
 
     if (!cursor_take(&cursor, "{\"abi_major\":") ||
         !cursor_uint32(&cursor, &integer) || integer > UINT16_MAX) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    manifest.abi_major = (uint16_t)integer;
+    out_manifest->abi_major = (uint16_t)integer;
     if (!cursor_take(&cursor, ",\"abi_minor\":") ||
         !cursor_uint32(&cursor, &integer) || integer > UINT16_MAX) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    manifest.abi_minor = (uint16_t)integer;
+    out_manifest->abi_minor = (uint16_t)integer;
     if (!cursor_take(&cursor, ",\"assets\":")) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    status = parse_assets(&cursor, &manifest);
+    status = parse_assets(&cursor, out_manifest);
     if (status != WATCHY_PACKAGE_OK) {
         return status;
     }
     if (!cursor_take(&cursor, ",\"capabilities\":") ||
-        !cursor_uint32(&cursor, &manifest.capabilities)) {
+        !cursor_uint32(&cursor, &out_manifest->capabilities)) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    if ((manifest.capabilities & ~WATCHY_CAP_KNOWN_MASK) != 0u) {
+    if ((out_manifest->capabilities & ~WATCHY_CAP_KNOWN_MASK) != 0u) {
         return WATCHY_PACKAGE_ERR_CAPABILITY;
     }
     if (!cursor_take(&cursor, ",\"id\":") ||
-        !cursor_string(&cursor, manifest.id, sizeof(manifest.id))) {
+        !cursor_string(&cursor, out_manifest->id, sizeof(out_manifest->id))) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    if (!watchy_package_id_valid(manifest.id)) {
+    if (!watchy_package_id_valid(out_manifest->id)) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
     if (!cursor_take(&cursor, ",\"max_runtime_bytes\":") ||
-        !cursor_uint32(&cursor, &manifest.max_runtime_bytes)) {
+        !cursor_uint32(&cursor, &out_manifest->max_runtime_bytes)) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    if (manifest.max_runtime_bytes == 0u ||
-        manifest.max_runtime_bytes > WATCHY_PACKAGE_RUNTIME_BYTES_MAX) {
+    if (out_manifest->max_runtime_bytes == 0u ||
+        out_manifest->max_runtime_bytes > WATCHY_PACKAGE_RUNTIME_BYTES_MAX) {
         return WATCHY_PACKAGE_ERR_LIMIT;
     }
     if (!cursor_take(&cursor, ",\"name\":") ||
-        !cursor_string(&cursor, manifest.name, sizeof(manifest.name)) || manifest.name[0] == '\0' ||
+        !cursor_string(&cursor, out_manifest->name, sizeof(out_manifest->name)) ||
+        out_manifest->name[0] == '\0' ||
         !cursor_take(&cursor, ",\"type\":") ||
         !cursor_string(&cursor, type, sizeof(type))) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
     if (strcmp(type, "watchface") == 0) {
-        manifest.type = WATCHY_PACKAGE_TYPE_WATCHFACE;
+        out_manifest->type = WATCHY_PACKAGE_TYPE_WATCHFACE;
     } else if (strcmp(type, "app") == 0) {
-        manifest.type = WATCHY_PACKAGE_TYPE_APP;
+        out_manifest->type = WATCHY_PACKAGE_TYPE_APP;
     } else {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
     if (!cursor_take(&cursor, ",\"version\":") ||
-        !cursor_string(&cursor, manifest.version, sizeof(manifest.version)) ||
-        manifest.version[0] == '\0' || !cursor_take(&cursor, "}") || cursor.offset != cursor.size) {
+        !cursor_string(&cursor, out_manifest->version, sizeof(out_manifest->version)) ||
+        out_manifest->version[0] == '\0' || !cursor_take(&cursor, "}") ||
+        cursor.offset != cursor.size) {
         return WATCHY_PACKAGE_ERR_MANIFEST;
     }
-    if (!package_version_valid(manifest.version)) {
+    if (!package_version_valid(out_manifest->version)) {
         return WATCHY_PACKAGE_ERR_PATH;
     }
 
-    *out_manifest = manifest;
     return WATCHY_PACKAGE_OK;
 }
 

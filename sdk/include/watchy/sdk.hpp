@@ -123,6 +123,23 @@ public:
     bool connected() const noexcept {
         return api_ != nullptr && api_->connected != nullptr && api_->connected(api_->context);
     }
+    watchy_status_t request(watchy_network_request_t operation,
+                            watchy_request_id_t *out_request_id) const noexcept {
+        return (api_ != nullptr && api_->request != nullptr)
+                   ? api_->request(api_->context, operation, out_request_id)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
+    watchy_status_t cancel(watchy_request_id_t request_id) const noexcept {
+        return (api_ != nullptr && api_->cancel != nullptr)
+                   ? api_->cancel(api_->context, request_id)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
+    watchy_status_t status(watchy_request_id_t request_id,
+                           watchy_async_status_t *out_status) const noexcept {
+        return (api_ != nullptr && api_->status != nullptr)
+                   ? api_->status(api_->context, request_id, out_status)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
 
 private:
     const watchy_network_api_v1_t *api_;
@@ -134,6 +151,23 @@ public:
 
     bool enabled() const noexcept {
         return api_ != nullptr && api_->enabled != nullptr && api_->enabled(api_->context);
+    }
+    watchy_status_t request(watchy_bluetooth_request_t operation,
+                            watchy_request_id_t *out_request_id) const noexcept {
+        return (api_ != nullptr && api_->request != nullptr)
+                   ? api_->request(api_->context, operation, out_request_id)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
+    watchy_status_t cancel(watchy_request_id_t request_id) const noexcept {
+        return (api_ != nullptr && api_->cancel != nullptr)
+                   ? api_->cancel(api_->context, request_id)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
+    watchy_status_t status(watchy_request_id_t request_id,
+                           watchy_async_status_t *out_status) const noexcept {
+        return (api_ != nullptr && api_->status != nullptr)
+                   ? api_->status(api_->context, request_id, out_status)
+                   : WATCHY_STATUS_UNSUPPORTED;
     }
 
 private:
@@ -156,6 +190,16 @@ public:
         if (api_ != nullptr && api_->log != nullptr) {
             api_->log(api_->context, message);
         }
+    }
+    watchy_status_t request_exit() const noexcept {
+        return (api_ != nullptr && api_->request_exit != nullptr)
+                   ? api_->request_exit(api_->context)
+                   : WATCHY_STATUS_UNSUPPORTED;
+    }
+    watchy_status_t request_refresh(watchy_refresh_mode_t mode) const noexcept {
+        return (api_ != nullptr && api_->request_refresh != nullptr)
+                   ? api_->request_refresh(api_->context, mode)
+                   : WATCHY_STATUS_UNSUPPORTED;
     }
 
 private:
