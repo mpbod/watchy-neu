@@ -3,6 +3,7 @@ idf_component_register(
         "src/runtime.c"
         "src/refresh_policy.c"
         "src/transition_compositor.c"
+        "src/transition_executor.c"
         "src/transition_policy.c"
         "src/wpk.c"
     INCLUDE_DIRS

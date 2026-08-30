@@ -692,6 +692,182 @@ static int test_transition_mandatory_clear_inverts_then_targets(void) {
     return 0;
 }
 
+typedef struct {
+    const uint8_t *target;
+    size_t fail_at;
+    size_t cancel_at;
+    size_t write_count;
+    size_t feed_count;
+    size_t cancel_count;
+    watchy_refresh_mode_t modes[5];
+    bool frames_are_target[5];
+} fake_writer_t;
+
+static watchy_status_t fake_write(void *context,
+                                  const uint8_t *frame,
+                                  watchy_refresh_mode_t mode) {
+    fake_writer_t *writer = context;
+
+    if (writer->write_count == writer->fail_at) {
+        ++writer->write_count;
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    writer->modes[writer->write_count] = mode;
+    writer->frames_are_target[writer->write_count] =
+        memcmp(frame, writer->target, WATCHY_TRANSITION_FRAME_BYTES) == 0;
+    ++writer->write_count;
+    return WATCHY_STATUS_OK;
+}
+
+static bool fake_cancel(void *context) {
+    fake_writer_t *writer = context;
+    const bool cancelled = writer->cancel_count == writer->cancel_at;
+
+    ++writer->cancel_count;
+    return cancelled;
+}
+
+static void fake_feed(void *context) {
+    fake_writer_t *writer = context;
+
+    ++writer->feed_count;
+}
+
+static watchy_transition_plan_t test_transition_wipe_plan(void) {
+    return (watchy_transition_plan_t){
+        .effect = WATCHY_TRANSITION_WIPE,
+        .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
+        .rect = {0, 0, 200, 200},
+        .write_count = 4u,
+    };
+}
+
+static int test_transition_executor_writes_bounded_sequence_and_target(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = test_transition_wipe_plan();
+    fake_writer_t writer = {.target = target, .fail_at = SIZE_MAX, .cancel_at = SIZE_MAX};
+    watchy_transition_result_t result;
+
+    plan.target_full = true;
+    make_transition_fixture(source, target);
+    CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
+                                    fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
+    CHECK(writer.write_count == plan.write_count);
+    CHECK(writer.feed_count == plan.write_count);
+    CHECK(writer.cancel_count == plan.write_count - 1u);
+    CHECK(writer.modes[0] == WATCHY_REFRESH_PARTIAL);
+    CHECK(writer.modes[1] == WATCHY_REFRESH_PARTIAL);
+    CHECK(writer.modes[2] == WATCHY_REFRESH_PARTIAL);
+    CHECK(writer.modes[3] == WATCHY_REFRESH_FULL);
+    CHECK(!writer.frames_are_target[0]);
+    CHECK(!writer.frames_are_target[1]);
+    CHECK(!writer.frames_are_target[2]);
+    CHECK(writer.frames_are_target[3]);
+    CHECK(result.writes_completed == plan.write_count);
+    CHECK(result.completed && !result.cancelled && result.source_valid && result.last_frame_is_target);
+    return 0;
+}
+
+static int test_transition_executor_cancels_optional_sequence_at_write_boundaries(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = test_transition_wipe_plan();
+
+    make_transition_fixture(source, target);
+    for (size_t cancelled_after = 0u; cancelled_after + 1u < plan.write_count;
+         ++cancelled_after) {
+        fake_writer_t writer = {
+            .target = target,
+            .fail_at = SIZE_MAX,
+            .cancel_at = cancelled_after,
+        };
+        watchy_transition_result_t result;
+
+        CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
+                                        fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
+        CHECK(writer.write_count == cancelled_after + 1u);
+        CHECK(writer.feed_count == cancelled_after + 1u);
+        CHECK(writer.cancel_count == cancelled_after + 1u);
+        CHECK(result.writes_completed == cancelled_after + 1u);
+        CHECK(!result.completed && result.cancelled && result.source_valid &&
+              !result.last_frame_is_target);
+    }
+    return 0;
+}
+
+static int test_transition_executor_completes_mandatory_clear_without_cancellation(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = {
+        .effect = WATCHY_TRANSITION_CUT,
+        .direction = WATCHY_TRANSITION_DIRECTION_NONE,
+        .rect = {0, 0, 200, 200},
+        .write_count = 2u,
+        .target_full = true,
+        .mandatory_clear = true,
+    };
+    fake_writer_t writer = {.target = target, .fail_at = SIZE_MAX, .cancel_at = 0u};
+    watchy_transition_result_t result;
+
+    make_transition_fixture(source, target);
+    CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
+                                    fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
+    CHECK(writer.write_count == plan.write_count);
+    CHECK(writer.feed_count == plan.write_count);
+    CHECK(writer.cancel_count == 0u);
+    CHECK(writer.modes[0] == WATCHY_REFRESH_FULL);
+    CHECK(writer.modes[1] == WATCHY_REFRESH_FULL);
+    CHECK(!writer.frames_are_target[0]);
+    CHECK(writer.frames_are_target[1]);
+    CHECK(result.writes_completed == plan.write_count);
+    CHECK(result.completed && !result.cancelled && result.source_valid && result.last_frame_is_target);
+    return 0;
+}
+
+static int test_transition_executor_invalidates_source_for_each_failed_write(void) {
+    uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
+    uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
+    watchy_transition_plan_t plan = test_transition_wipe_plan();
+
+    make_transition_fixture(source, target);
+    for (size_t fail_at = 0u; fail_at < plan.write_count; ++fail_at) {
+        fake_writer_t writer = {.target = target, .fail_at = fail_at, .cancel_at = SIZE_MAX};
+        watchy_transition_result_t result;
+
+        CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
+                                        fake_cancel, fake_feed, &writer, &result) ==
+              WATCHY_STATUS_INVALID_STATE);
+        CHECK(writer.write_count == fail_at + 1u);
+        CHECK(writer.feed_count == fail_at);
+        CHECK(writer.cancel_count == fail_at);
+        CHECK(result.writes_completed == fail_at);
+        CHECK(!result.completed && !result.cancelled && !result.source_valid &&
+              !result.last_frame_is_target);
+    }
+    return 0;
+}
+
+static int test_transition_executor_rejects_empty_plan_without_callbacks(void) {
+    const watchy_transition_plan_t plan = {0};
+    fake_writer_t writer = {.fail_at = SIZE_MAX, .cancel_at = SIZE_MAX};
+    watchy_transition_result_t result;
+
+    CHECK(watchy_transition_execute(&plan, NULL, NULL, NULL, 0u, fake_write, fake_cancel,
+                                    fake_feed, &writer, &result) == WATCHY_STATUS_INVALID_STATE);
+    CHECK(writer.write_count == 0u);
+    CHECK(writer.feed_count == 0u);
+    CHECK(writer.cancel_count == 0u);
+    CHECK(result.writes_completed == 0u);
+    CHECK(!result.completed && !result.cancelled && !result.source_valid &&
+          !result.last_frame_is_target);
+    return 0;
+}
+
 int main(void) {
     int (*tests[])(void) = {
         test_bundle_rejects_bad_magic,
@@ -723,6 +899,11 @@ int main(void) {
         test_transition_effect_edges_and_checkerboard,
         test_transition_effects_match_frozen_frames,
         test_transition_mandatory_clear_inverts_then_targets,
+        test_transition_executor_writes_bounded_sequence_and_target,
+        test_transition_executor_cancels_optional_sequence_at_write_boundaries,
+        test_transition_executor_completes_mandatory_clear_without_cancellation,
+        test_transition_executor_invalidates_source_for_each_failed_write,
+        test_transition_executor_rejects_empty_plan_without_callbacks,
     };
     const size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {

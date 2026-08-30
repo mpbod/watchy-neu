@@ -39,6 +39,20 @@ typedef struct {
     bool mandatory_clear;
 } watchy_transition_plan_t;
 
+typedef watchy_status_t (*watchy_transition_write_fn)(void *context,
+                                                       const uint8_t *frame,
+                                                       watchy_refresh_mode_t mode);
+typedef bool (*watchy_transition_cancel_fn)(void *context);
+typedef void (*watchy_transition_feed_fn)(void *context);
+
+typedef struct {
+    uint8_t writes_completed;
+    bool completed;
+    bool cancelled;
+    bool source_valid;
+    bool last_frame_is_target;
+} watchy_transition_result_t;
+
 watchy_status_t watchy_transition_validate(const watchy_transition_request_v1_t *request);
 watchy_status_t watchy_transition_plan(const watchy_transition_request_v1_t *request,
                                        const watchy_transition_policy_context_t *context,
@@ -49,6 +63,16 @@ watchy_status_t watchy_transition_compose_frame(const watchy_transition_plan_t *
                                                 const uint8_t *target,
                                                 uint8_t *out,
                                                 size_t size);
+watchy_status_t watchy_transition_execute(const watchy_transition_plan_t *plan,
+                                          const uint8_t *source,
+                                          const uint8_t *target,
+                                          uint8_t *scratch,
+                                          size_t size,
+                                          watchy_transition_write_fn write,
+                                          watchy_transition_cancel_fn cancel,
+                                          watchy_transition_feed_fn feed,
+                                          void *context,
+                                          watchy_transition_result_t *out_result);
 
 #ifdef __cplusplus
 }

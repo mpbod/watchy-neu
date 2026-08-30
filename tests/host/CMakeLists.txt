@@ -8,6 +8,7 @@ add_executable(watchy_core_tests
   ../../components/watchy_core/src/runtime.c
   ../../components/watchy_core/src/refresh_policy.c
   ../../components/watchy_core/src/transition_compositor.c
+  ../../components/watchy_core/src/transition_executor.c
   ../../components/watchy_core/src/transition_policy.c
 )
 target_include_directories(watchy_core_tests PRIVATE
