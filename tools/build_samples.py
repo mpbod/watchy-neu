@@ -59,6 +59,7 @@ def main(arguments=None):
         build = build_with_idf(sample) if os.environ.get("IDF_PATH") else build_with_platformio(sample)
         elf = build / so_name
         output = args.output_dir / output_name
+        run([sys.executable, ROOT / "tools" / "watchy_pkg.py", "audit-elf", "--elf", elf])
         run([sys.executable, ROOT / "tools" / "watchy_pkg.py", "build",
              "--manifest", sample / "manifest.json", "--elf", elf,
              "--assets", sample / "assets", "--output", output])

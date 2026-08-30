@@ -36,6 +36,28 @@ target_compile_features(watchy_sdk_cpp_tests PRIVATE cxx_std_17)
 target_compile_options(watchy_sdk_cpp_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_sdk_cpp_tests COMMAND watchy_sdk_cpp_tests)
 
+add_executable(watchy_digital_sample_tests
+  test_digital_sample.cpp
+)
+target_include_directories(watchy_digital_sample_tests PRIVATE
+  ../../sdk/include
+  ../../samples/common
+)
+target_compile_features(watchy_digital_sample_tests PRIVATE cxx_std_17)
+target_compile_options(watchy_digital_sample_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_digital_sample_tests COMMAND watchy_digital_sample_tests)
+
+add_executable(watchy_hardware_sample_tests
+  test_hardware_sample.cpp
+)
+target_include_directories(watchy_hardware_sample_tests PRIVATE
+  ../../sdk/include
+  ../../samples/common
+)
+target_compile_features(watchy_hardware_sample_tests PRIVATE cxx_std_17)
+target_compile_options(watchy_hardware_sample_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_hardware_sample_tests COMMAND watchy_hardware_sample_tests)
+
 add_executable(watchy_hal_tests
   test_hal.c
   ../../components/watchy_hal/src/framebuffer.c

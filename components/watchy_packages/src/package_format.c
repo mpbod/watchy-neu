@@ -144,6 +144,16 @@ static bool paths_collide(const char *lhs, const char *rhs) {
            (rhs_length < lhs_length && memcmp(lhs, rhs, rhs_length) == 0 && lhs[rhs_length] == '/');
 }
 
+static int utf8_byte_compare(const char *lhs, const char *rhs) {
+    const unsigned char *left = (const unsigned char *)lhs;
+    const unsigned char *right = (const unsigned char *)rhs;
+    while (*left != '\0' && *left == *right) {
+        ++left;
+        ++right;
+    }
+    return (int)*left - (int)*right;
+}
+
 static bool asset_path_reserved(const char *path) {
     static const char *const reserved[] = {
         "package.so", "manifest.json", "state", ".new",
@@ -261,6 +271,11 @@ static watchy_package_status_t parse_assets(manifest_cursor_t *cursor,
         }
         if (!watchy_package_relative_path_valid(asset->path) || asset_path_reserved(asset->path)) {
             return WATCHY_PACKAGE_ERR_PATH;
+        }
+        if (manifest->asset_count != 0u &&
+            utf8_byte_compare(manifest->assets[manifest->asset_count - 1u].path,
+                              asset->path) >= 0) {
+            return WATCHY_PACKAGE_ERR_MANIFEST;
         }
         for (size_t prior = 0u; prior < manifest->asset_count; ++prior) {
             if (paths_collide(manifest->assets[prior].path, asset->path)) {

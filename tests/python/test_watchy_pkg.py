@@ -17,40 +17,75 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(watchy_pkg)
 
 
-def make_xtensa_so(*, machine=94, elf_type=3, export="watchy_package_entry"):
+def make_xtensa_so(*, machine=94, elf_type=3, export="watchy_package_entry",
+                   undefined_relocation=False):
     """Build a small ELF32 fixture independently of the package implementation."""
     text = b"\x00\x00\x00\x00"
     dynstr = b"\0" + export.encode("ascii") + b"\0"
-    shstr = b"\0.text\0.dynstr\0.dynsym\0.shstrtab\0"
+    if undefined_relocation:
+        dynstr += b"memset\0"
+    shstr = b"\0.text\0.dynstr\0.dynsym\0"
+    if undefined_relocation:
+        shstr += b".rela.dyn\0"
+    shstr += b".shstrtab\0"
     eh_size, ph_size, sh_size = 52, 32, 40
     text_off = eh_size + ph_size
     dynstr_off = text_off + len(text)
     dynsym_off = (dynstr_off + len(dynstr) + 3) & ~3
     dynsym = bytes(16) + struct.pack("<IIIBBH", 1, 0x1000, 4, 0x12, 0, 1)
-    shstr_off = dynsym_off + len(dynsym)
+    relocation = b""
+    if undefined_relocation:
+        memset_offset = dynstr.index(b"memset")
+        dynsym += struct.pack("<IIIBBH", memset_offset, 0, 0, 0x10, 0, 0)
+        relocation = struct.pack("<IIi", 0x1000, (2 << 8) | 3, 0)
+    relocation_off = dynsym_off + len(dynsym)
+    shstr_off = relocation_off + len(relocation)
     shoff = (shstr_off + len(shstr) + 3) & ~3
-    blob = bytearray(shoff + 5 * sh_size)
+    section_count = 6 if undefined_relocation else 5
+    blob = bytearray(shoff + section_count * sh_size)
     blob[:16] = b"\x7fELF\x01\x01\x01" + bytes(9)
     struct.pack_into(
         "<HHIIIIIHHHHHH", blob, 16, elf_type, machine, 1, 0x1000,
-        eh_size, shoff, 0, eh_size, ph_size, 1, sh_size, 5, 4,
+        eh_size, shoff, 0, eh_size, ph_size, 1, sh_size, section_count,
+        section_count - 1,
     )
     struct.pack_into("<IIIIIIII", blob, eh_size, 1, text_off, 0x1000, 0x1000,
                      len(text), len(text), 5, 4)
     blob[text_off:text_off + len(text)] = text
     blob[dynstr_off:dynstr_off + len(dynstr)] = dynstr
     blob[dynsym_off:dynsym_off + len(dynsym)] = dynsym
+    blob[relocation_off:relocation_off + len(relocation)] = relocation
     blob[shstr_off:shstr_off + len(shstr)] = shstr
-    names = {".text": 1, ".dynstr": 7, ".dynsym": 15, ".shstrtab": 23}
+    names = {name: shstr.index(name.encode("ascii"))
+             for name in (".text", ".dynstr", ".dynsym", ".shstrtab")}
     sections = [
         (names[".text"], 1, 6, 0x1000, text_off, len(text), 0, 0, 4, 0),
         (names[".dynstr"], 3, 0, 0, dynstr_off, len(dynstr), 0, 0, 1, 0),
         (names[".dynsym"], 11, 0, 0, dynsym_off, len(dynsym), 2, 1, 4, 16),
-        (names[".shstrtab"], 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0),
     ]
+    if undefined_relocation:
+        sections.append((shstr.index(b".rela.dyn"), 4, 0, 0, relocation_off,
+                         len(relocation), 3, 0, 4, 12))
+    sections.append((names[".shstrtab"], 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0))
     for index, values in enumerate(sections, 1):
         struct.pack_into("<IIIIIIIIII", blob, shoff + index * sh_size, *values)
     return bytes(blob)
+
+
+def make_wpk(manifest, elf, assets):
+    manifest_bytes = json.dumps(
+        manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    total = watchy_pkg.HEADER_SIZE + len(manifest_bytes) + len(elf) + len(assets)
+    header = watchy_pkg.HEADER.pack(
+        watchy_pkg.MAGIC, watchy_pkg.FORMAT_VERSION, watchy_pkg.HEADER_SIZE, total,
+        watchy_pkg.HEADER_SIZE, len(manifest_bytes),
+        watchy_pkg.HEADER_SIZE + len(manifest_bytes), len(elf),
+        watchy_pkg.HEADER_SIZE + len(manifest_bytes) + len(elf), len(assets), bytes(32),
+    )
+    package = bytearray(header + manifest_bytes + elf + assets)
+    package[watchy_pkg.DIGEST_OFFSET:watchy_pkg.DIGEST_OFFSET + 32] = hashlib.sha256(package).digest()
+    return bytes(package)
 
 
 def base_manifest(assets=None):
@@ -145,6 +180,16 @@ class PackageToolTests(unittest.TestCase):
         with self.assertRaisesRegex(watchy_pkg.PackageError, "elf"):
             watchy_pkg.validate_elf(bytes(non_readable_load), 4096)
 
+    def test_elf_rejects_relocations_to_undefined_symbols(self):
+        with self.assertRaisesRegex(watchy_pkg.PackageError, "elf"):
+            watchy_pkg.validate_elf(make_xtensa_so(undefined_relocation=True), 4096)
+
+    def test_symbol_audit_reports_only_the_package_entry_export(self):
+        audit = watchy_pkg.audit_elf_symbols(make_xtensa_so())
+        self.assertEqual(audit["defined_global_functions"], ["watchy_package_entry"])
+        self.assertEqual(audit["undefined_symbols"], [])
+        self.assertEqual(audit["symbol_relocations"], [])
+
     def test_traversal_and_symlink_assets_are_rejected(self):
         self.write_manifest(base_manifest([{"path": "../secret", "size": 1}]))
         with self.assertRaisesRegex(watchy_pkg.PackageError, "path"):
@@ -171,6 +216,15 @@ class PackageToolTests(unittest.TestCase):
         self.assertEqual([a["path"] for a in info["manifest"]["assets"]], ["a.bin", "z.bin"])
         parsed = watchy_pkg.verify_package(output.read_bytes())
         self.assertEqual(parsed["asset_bytes"], b"AAZ")
+
+    def test_verify_rejects_digest_correct_wpk_with_unsorted_assets(self):
+        manifest = base_manifest([
+            {"path": "z.bin", "size": 1},
+            {"path": "a.bin", "size": 2},
+        ])
+        package = make_wpk(manifest, make_xtensa_so(), b"ZAA")
+        with self.assertRaisesRegex(watchy_pkg.PackageError, "manifest"):
+            watchy_pkg.verify_package(package)
 
     def test_failure_is_atomic_and_leaves_no_temporary_sibling(self):
         output = self.dir / "kept.wpk"

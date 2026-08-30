@@ -42,7 +42,8 @@ repeated incomplete attempts can quarantine a package.
 Callbacks are synchronous and must not retain kernel canvas/event pointers.
 The package task has a cumulative 4000 ms callback budget against the system
 watchdog. Avoid blocking; asynchronous Wi-Fi/BLE requests return request IDs
-whose status is polled or delivered through network/Bluetooth events.
+whose status packages must poll through `Network::status` or
+`Bluetooth::status`. The v1 firmware does not deliver radio completion events.
 
 ## Events
 
@@ -50,6 +51,8 @@ whose status is polled or delivered through network/Bluetooth events.
 Bluetooth, or system. Inspect only the union member selected by `type`. Button
 events identify Up, Down, Confirm, or Back and press/release state. The host may
 request app exit; apps can request graceful exit through `System::request_exit`.
+Network and Bluetooth remain reserved event tags in ABI 1.1; the current host
+does not emit them, so polling the matching request ID is authoritative.
 
 ## Capabilities
 
@@ -97,14 +100,17 @@ Use fixed/static storage and explicit POD ownership. Across the ABI boundary:
 
 - no exceptions, RTTI, STL objects, virtual interfaces, or C++ name mangling;
 - no allocator ownership transfer and no function-local thread-safe statics;
-- no direct ESP-IDF/libc dependency unless the loader explicitly resolves it;
+- no direct ESP-IDF/libc dependency; the template supplies hidden package-local
+  memory primitives for compiler-generated POD initialization and copies;
 - no callback throwing, longjmp, retained host pointers after unload, or direct
   framebuffer refresh hardware access.
 
 The template compiles with hidden visibility, `-fno-exceptions`, `-fno-rtti`,
-section garbage collection, a loader-compatible linker script, and Espressif
-`project_so`. Its post-build finalizer sets ELF `e_entry` to the sole exported
-entry point because `project_so` 1.3.x emits shared objects with entry zero.
+`-fno-builtin`, section garbage collection, a loader-compatible linker script,
+and Espressif `project_so`. Its post-build finalizer sets ELF `e_entry` to the
+sole exported entry point because `project_so` 1.3.x emits shared objects with
+entry zero. The sample build also audits generated ELFs for unresolved symbols
+before packaging.
 
 ## Build and package
 

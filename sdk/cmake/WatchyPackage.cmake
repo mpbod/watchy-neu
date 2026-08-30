@@ -9,6 +9,10 @@ function(watchy_project_so package_name)
   endif()
 
   idf_component_get_property(package_component main COMPONENT_LIB)
+  get_filename_component(watchy_sdk_dir "${WATCHY_PACKAGE_CMAKE_DIR}/.." ABSOLUTE)
+  target_sources(${package_component} PRIVATE
+    "${watchy_sdk_dir}/runtime/package_memory.cpp"
+  )
   target_compile_features(${package_component} PRIVATE cxx_std_17)
   target_compile_options(${package_component} PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
@@ -17,11 +21,11 @@ function(watchy_project_so package_name)
     -ffunction-sections
     -fdata-sections
     -fvisibility=hidden
+    -fno-builtin
   )
 
   # The 1.3.x project_so macro discovers C bridge files itself. The actual C++
   # package is pulled from main's archive by the bridge's entry-point reference.
-  get_filename_component(watchy_sdk_dir "${WATCHY_PACKAGE_CMAKE_DIR}/.." ABSOLUTE)
   set(watchy_linker "${watchy_sdk_dir}/ld/watchy_package_linker.o")
   set(ELF_LIBS
     "${CMAKE_BINARY_DIR}/esp-idf/main/libmain.a"

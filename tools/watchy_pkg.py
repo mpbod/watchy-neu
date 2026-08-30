@@ -101,7 +101,8 @@ def _paths_collide(lhs: str, rhs: str) -> bool:
     return lhs == rhs or lhs.startswith(rhs + "/") or rhs.startswith(lhs + "/")
 
 
-def validate_manifest(value: Any, actual_assets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def validate_manifest(value: Any, actual_assets: list[dict[str, Any]] | None = None,
+                      *, require_sorted: bool = False) -> dict[str, Any]:
     fields = {"abi_major", "abi_minor", "assets", "capabilities", "id",
               "max_runtime_bytes", "name", "type", "version"}
     if not isinstance(value, dict) or set(value) != fields:
@@ -144,6 +145,9 @@ def validate_manifest(value: Any, actual_assets: list[dict[str, Any]] | None = N
         if total > MAX_ASSETS:
             fail("limit", f"aggregate assets exceed {MAX_ASSETS} bytes")
         normalized.append({"path": path, "size": size})
+    if require_sorted and normalized != sorted(
+            normalized, key=lambda entry: entry["path"].encode("utf-8")):
+        fail("manifest", "asset paths must be strictly sorted by UTF-8 bytes")
     normalized.sort(key=lambda entry: entry["path"].encode("utf-8"))
     if actual_assets is not None and normalized != actual_assets:
         fail("assets", "declared assets do not exactly match the asset directory")
@@ -409,8 +413,13 @@ def validate_elf(elf: bytes, declared_runtime: int) -> dict[str, Any]:
             for relocation_offset in range(offset, offset + size, 12):
                 target, relocation_info, _addend = struct.unpack_from("<IIi", elf, relocation_offset)
                 relocation_type = relocation_info & 0xFF
-                if relocation_info >> 8 >= symbol_count or not 2 <= relocation_type <= 5:
+                symbol_index = relocation_info >> 8
+                if symbol_index >= symbol_count or not 2 <= relocation_type <= 5:
                     fail("elf", "unsupported relocation")
+                symbol_offset = sections[link][4] + symbol_index * 16
+                symbol_section = struct.unpack_from("<H", elf, symbol_offset + 14)[0]
+                if symbol_index != 0 and symbol_section == 0:
+                    fail("elf", "relocation references an undefined symbol")
                 if not any((info == 0 or info == target_index) and
                            _loader_section_kind(names[target_index], sections[target_index]) and
                            sections[target_index][5] >= 4 and
@@ -431,6 +440,52 @@ def validate_elf(elf: bytes, declared_runtime: int) -> dict[str, Any]:
     if runtime <= 0 or runtime > declared_runtime or runtime > MAX_RUNTIME:
         fail("limit", f"ELF runtime estimate {runtime} exceeds declared ceiling {declared_runtime}")
     return {"size": len(elf), "runtime_bytes": runtime, "exports": [ENTRY_POINT]}
+
+
+def audit_elf_symbols(elf: bytes) -> dict[str, Any]:
+    """Return the validated dynamic symbol and relocation surface."""
+    validate_elf(elf, MAX_RUNTIME)
+    shoff = struct.unpack_from("<I", elf, 32)[0]
+    shnum, shstrndx = struct.unpack_from("<HH", elf, 48)
+    sections = [struct.unpack_from("<IIIIIIIIII", elf, shoff + index * 40)
+                for index in range(shnum)]
+    shstr_section = sections[shstrndx]
+    shstr = elf[shstr_section[4]:shstr_section[4] + shstr_section[5]]
+    names = [_cstring(shstr, section[0]) for section in sections]
+    dynsym_index = names.index(".dynsym")
+    dynsym = sections[dynsym_index]
+    dynstr = sections[dynsym[6]]
+    strings = elf[dynstr[4]:dynstr[4] + dynstr[5]]
+    symbol_names: list[str] = []
+    undefined: list[str] = []
+    defined_functions: list[str] = []
+    for offset in range(dynsym[4], dynsym[4] + dynsym[5], 16):
+        name_offset, _value, _size, info, _other, section_index = struct.unpack_from(
+            "<IIIBBH", elf, offset)
+        name = _cstring(strings, name_offset)
+        symbol_names.append(name)
+        if name and section_index == 0:
+            undefined.append(name)
+        if name and section_index != 0 and info >> 4 == 1 and info & 0x0F == 2:
+            defined_functions.append(name)
+    symbol_relocations: list[dict[str, Any]] = []
+    for section_name, section in zip(names, sections):
+        if section[1] != 4:
+            continue
+        for offset in range(section[4], section[4] + section[5], 12):
+            _target, relocation_info, _addend = struct.unpack_from("<IIi", elf, offset)
+            symbol_index = relocation_info >> 8
+            if symbol_index:
+                symbol_relocations.append({
+                    "section": section_name,
+                    "symbol": symbol_names[symbol_index],
+                    "type": relocation_info & 0xFF,
+                })
+    return {
+        "defined_global_functions": defined_functions,
+        "undefined_symbols": undefined,
+        "symbol_relocations": symbol_relocations,
+    }
 
 
 def _elf_export_value(elf: bytes) -> int:
@@ -507,7 +562,8 @@ def verify_package(data: bytes) -> dict[str, Any]:
     try:
         if canonical_json(json.loads(manifest_bytes.decode("utf-8"))) != manifest_bytes:
             fail("manifest", "manifest is not canonical sorted compact JSON")
-        manifest = validate_manifest(json.loads(manifest_bytes.decode("utf-8")))
+        manifest = validate_manifest(json.loads(manifest_bytes.decode("utf-8")),
+                                     require_sorted=True)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail("manifest", f"manifest JSON is invalid: {error}")
     elf = data[elf_offset:elf_offset + elf_size]
@@ -609,6 +665,8 @@ def make_parser() -> argparse.ArgumentParser:
     verify.add_argument("package", type=Path)
     finalize = commands.add_parser("finalize-elf", help=argparse.SUPPRESS)
     finalize.add_argument("--elf", required=True, type=Path)
+    audit = commands.add_parser("audit-elf", help="audit package ELF imports and exports")
+    audit.add_argument("--elf", required=True, type=Path)
     return parser
 
 
@@ -631,6 +689,15 @@ def main(arguments: Iterable[str] | None = None) -> int:
         elif args.command == "finalize-elf":
             finalize_elf(args.elf)
             print(f"OK finalized {args.elf}")
+        elif args.command == "audit-elf":
+            try:
+                audit = audit_elf_symbols(args.elf.read_bytes())
+            except OSError as error:
+                fail("io", f"cannot read ELF: {error}")
+            if audit["undefined_symbols"]:
+                fail("elf", "undefined dynamic symbols: " + ",".join(audit["undefined_symbols"]))
+            print(f"OK exports={','.join(audit['defined_global_functions'])} "
+                  f"undefined=0 symbol_relocations={len(audit['symbol_relocations'])}")
         return 0
     except PackageError as error:
         print(f"watchy-pkg:{error.code}: {error.message}", file=sys.stderr)

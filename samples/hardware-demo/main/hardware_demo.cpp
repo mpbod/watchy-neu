@@ -6,6 +6,17 @@ struct State {
     const watchy_host_caps_v1_t *host;
     watchy_request_id_t network_request;
     watchy_request_id_t bluetooth_request;
+    watchy_status_t storage_status;
+    watchy_status_t haptics_status;
+    watchy_status_t network_request_status;
+    watchy_status_t network_poll_status;
+    watchy_async_status_t network_status;
+    watchy_status_t bluetooth_request_status;
+    watchy_status_t bluetooth_poll_status;
+    watchy_async_status_t bluetooth_status;
+    watchy_status_t exit_status;
+    bool network_pending;
+    bool bluetooth_pending;
     unsigned presses;
     bool asset_read;
 };
@@ -16,6 +27,13 @@ watchy_status_t load(const watchy_host_caps_v1_t *host, void **user_data) noexce
         return WATCHY_STATUS_INCOMPATIBLE_ABI;
     state = {};
     state.host = host;
+    state.storage_status = WATCHY_STATUS_UNSUPPORTED;
+    state.haptics_status = WATCHY_STATUS_UNSUPPORTED;
+    state.network_request_status = WATCHY_STATUS_UNSUPPORTED;
+    state.network_poll_status = WATCHY_STATUS_UNSUPPORTED;
+    state.bluetooth_request_status = WATCHY_STATUS_UNSUPPORTED;
+    state.bluetooth_poll_status = WATCHY_STATUS_UNSUPPORTED;
+    state.exit_status = WATCHY_STATUS_UNSUPPORTED;
     *user_data = &state;
     return WATCHY_STATUS_OK;
 }
@@ -41,20 +59,29 @@ watchy_status_t event(void *opaque, const watchy_event_t *event_value) noexcept 
     if (event_value->type != WATCHY_EVENT_BUTTON || !event_value->data.button.pressed)
         return WATCHY_STATUS_OK;
     ++current->presses;
-    watchy::Storage(current->host->storage).write("presses.bin", &current->presses, sizeof(current->presses));
+    current->storage_status = watchy::Storage(current->host->storage).write(
+        "presses.bin", &current->presses, sizeof(current->presses));
     switch (event_value->data.button.button) {
     case WATCHY_BUTTON_CONFIRM:
-        return watchy::Haptics(current->host->haptics).pulse(80u, 180u);
+        current->haptics_status = watchy::Haptics(current->host->haptics).pulse(80u, 180u);
+        break;
     case WATCHY_BUTTON_UP:
-        return watchy::Network(current->host->network).request(WATCHY_NETWORK_CONNECT,
-                                                               &current->network_request);
+        current->network_request_status = watchy::Network(current->host->network).request(
+            WATCHY_NETWORK_CONNECT, &current->network_request);
+        current->network_pending = current->network_request_status == WATCHY_STATUS_OK;
+        break;
     case WATCHY_BUTTON_DOWN:
-        return watchy::Bluetooth(current->host->bluetooth).request(WATCHY_BLUETOOTH_START,
-                                                                   &current->bluetooth_request);
+        current->bluetooth_request_status = watchy::Bluetooth(current->host->bluetooth).request(
+            WATCHY_BLUETOOTH_START, &current->bluetooth_request);
+        current->bluetooth_pending = current->bluetooth_request_status == WATCHY_STATUS_OK;
+        break;
     case WATCHY_BUTTON_BACK:
-        return watchy::System(current->host->system).request_exit();
+        current->exit_status = watchy::System(current->host->system).request_exit();
+        break;
+    default:
+        return WATCHY_STATUS_OK;
     }
-    return WATCHY_STATUS_UNSUPPORTED;
+    return WATCHY_STATUS_OK;
 }
 
 watchy_status_t render(void *opaque, watchy_canvas_t *canvas, watchy_refresh_mode_t *mode) noexcept {
@@ -70,6 +97,20 @@ watchy_status_t render(void *opaque, watchy_canvas_t *canvas, watchy_refresh_mod
     watchy::Network network(current->host->network);
     watchy::Bluetooth bluetooth(current->host->bluetooth);
     watchy::Input input(current->host->input);
+    if (current->network_pending) {
+        current->network_poll_status = network.status(current->network_request,
+                                                       &current->network_status);
+        if (current->network_poll_status != WATCHY_STATUS_OK ||
+            current->network_status.state != WATCHY_ASYNC_PENDING)
+            current->network_pending = false;
+    }
+    if (current->bluetooth_pending) {
+        current->bluetooth_poll_status = bluetooth.status(current->bluetooth_request,
+                                                           &current->bluetooth_status);
+        if (current->bluetooth_poll_status != WATCHY_STATUS_OK ||
+            current->bluetooth_status.state != WATCHY_ASYNC_PENDING)
+            current->bluetooth_pending = false;
+    }
     sample::fill(canvas);
     sample::status_box(canvas, 12, 12, clock_status == WATCHY_STATUS_OK);
     sample::status_box(canvas, 12, 34, motion_status == WATCHY_STATUS_OK);
@@ -77,6 +118,19 @@ watchy_status_t render(void *opaque, watchy_canvas_t *canvas, watchy_refresh_mod
     sample::status_box(canvas, 12, 78, current->asset_read);
     sample::status_box(canvas, 12, 100, network.connected());
     sample::status_box(canvas, 12, 122, bluetooth.enabled());
+    sample::status_box(canvas, 12, 144, current->storage_status == WATCHY_STATUS_OK);
+    sample::status_box(canvas, 12, 166, current->haptics_status == WATCHY_STATUS_OK);
+    sample::status_box(canvas, 164, 100,
+                       current->network_request_status == WATCHY_STATUS_OK &&
+                       (current->network_pending ||
+                        (current->network_poll_status == WATCHY_STATUS_OK &&
+                         current->network_status.result == WATCHY_STATUS_OK)));
+    sample::status_box(canvas, 164, 122,
+                       current->bluetooth_request_status == WATCHY_STATUS_OK &&
+                       (current->bluetooth_pending ||
+                        (current->bluetooth_poll_status == WATCHY_STATUS_OK &&
+                         current->bluetooth_status.result == WATCHY_STATUS_OK)));
+    sample::status_box(canvas, 164, 144, current->exit_status == WATCHY_STATUS_OK);
     for (unsigned button = 0; button < 4; ++button)
         sample::status_box(canvas, 44 + static_cast<int>(button) * 24, 12,
                            input.is_pressed(static_cast<watchy_button_t>(button)));

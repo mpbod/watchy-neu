@@ -231,6 +231,7 @@ static void put_u32le(uint8_t *bytes, size_t offset, uint32_t value) {
 }
 
 #define ELF_FIXTURE_SIZE 444u
+#define UNDEFINED_RELOCATION_ELF_SIZE 504u
 
 static void make_valid_xtensa_elf(uint8_t bytes[ELF_FIXTURE_SIZE]) {
     static const char names[] = "\0.text\0.shstrtab\0.dynstr\0.dynsym\0.rela.text\0";
@@ -314,6 +315,31 @@ static void make_valid_xtensa_elf(uint8_t bytes[ELF_FIXTURE_SIZE]) {
     bytes[441] = 0x01u;
 }
 
+static void make_undefined_relocation_xtensa_elf(
+    uint8_t bytes[UNDEFINED_RELOCATION_ELF_SIZE]) {
+    static const char symbols[] = "\0watchy_package_entry\0memset\0";
+    make_valid_xtensa_elf(bytes);
+    memset(bytes + ELF_FIXTURE_SIZE, 0, UNDEFINED_RELOCATION_ELF_SIZE - ELF_FIXTURE_SIZE);
+
+    /* Move the text, dynamic strings, and relocation to make room for a third
+     * dynamic symbol that is undefined and referenced by GLOB_DAT. */
+    put_u32le(bytes, 56u, 500u);
+    put_u32le(bytes, 140u, 500u);
+    put_u32le(bytes, 220u, 444u);
+    put_u32le(bytes, 224u, (uint32_t)sizeof(symbols));
+    put_u32le(bytes, 264u, 48u);
+    put_u32le(bytes, 300u, 480u);
+    memcpy(bytes + 444u, symbols, sizeof(symbols));
+    memset(bytes + 428u, 0, 16u);
+    put_u32le(bytes, 428u, 22u);
+    bytes[440u] = 0x10u;
+    put_u32le(bytes, 480u, 0x1000u);
+    put_u32le(bytes, 484u, (2u << 8u) | 3u);
+    put_u32le(bytes, 488u, 0u);
+    bytes[500u] = 0x06u;
+    bytes[501u] = 0x01u;
+}
+
 static int test_elf_validator_accepts_only_sane_xtensa_shared_objects(void) {
     uint8_t elf[ELF_FIXTURE_SIZE];
     uint32_t runtime_bytes = 0u;
@@ -361,6 +387,15 @@ static int test_elf_validator_rejects_files_larger_than_64_kib(void) {
     static uint8_t oversized[(64u * 1024u) + 1u];
     CHECK(watchy_package_elf_validate(oversized, sizeof(oversized), 1u, NULL) ==
           WATCHY_PACKAGE_ERR_LIMIT);
+    return 0;
+}
+
+static int test_elf_validator_rejects_relocations_to_undefined_symbols(void) {
+    uint8_t elf[UNDEFINED_RELOCATION_ELF_SIZE];
+
+    make_undefined_relocation_xtensa_elf(elf);
+    CHECK(watchy_package_elf_validate(elf, sizeof(elf), 64u, NULL) ==
+          WATCHY_PACKAGE_ERR_ELF);
     return 0;
 }
 
@@ -831,6 +866,48 @@ static int test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data
     memset(normalized + offsetof(wpk_header_t, package_sha256), 0, WATCHY_PACKAGE_DIGEST_SIZE);
     bytes[size] = 0u;
     CHECK(watchy_package_validate(bytes, size + 1u, &crypto, &package) == WATCHY_PACKAGE_ERR_WPK);
+    return 0;
+}
+
+static int test_complete_wpk_validation_rejects_unsorted_assets(void) {
+    static const char manifest_text[] =
+        "{\"abi_major\":1,\"abi_minor\":1,\"assets\":[{\"path\":\"z.bin\",\"size\":1},"
+        "{\"path\":\"a.bin\",\"size\":2}],\"capabilities\":1,\"id\":\"order.test\","
+        "\"max_runtime_bytes\":64,\"name\":\"Order\",\"type\":\"app\",\"version\":\"1\"}";
+    uint8_t bytes[1024];
+    uint8_t normalized[1024];
+    digest_probe_t probe = {.normalized = normalized};
+    watchy_crypto_api_t crypto = {.sha256 = digest_probe_sha256, .context = &probe};
+    watchy_validated_package_t package;
+    wpk_header_t *header = (wpk_header_t *)bytes;
+    const size_t manifest_size = sizeof(manifest_text) - 1u;
+    const size_t total_size = WPK_HEADER_SIZE + manifest_size + ELF_FIXTURE_SIZE + 3u;
+
+    memset(bytes, 0, total_size);
+    memcpy(header->magic, WPK_MAGIC, sizeof(header->magic));
+    header->format_version = WPK_FORMAT_VERSION;
+    header->header_size = WPK_HEADER_SIZE;
+    header->manifest_offset = WPK_HEADER_SIZE;
+    header->manifest_size = (uint32_t)manifest_size;
+    header->elf_offset = header->manifest_offset + header->manifest_size;
+    header->elf_size = ELF_FIXTURE_SIZE;
+    header->assets_offset = header->elf_offset + header->elf_size;
+    header->assets_size = 3u;
+    header->total_size = (uint32_t)total_size;
+    memcpy(bytes + header->manifest_offset, manifest_text, manifest_size);
+    make_valid_xtensa_elf(bytes + header->elf_offset);
+    memcpy(bytes + header->assets_offset, "ZAA", 3u);
+    for (size_t index = 0u; index < sizeof(probe.digest); ++index) {
+        probe.digest[index] = (uint8_t)(0x80u + index);
+    }
+    memcpy(header->package_sha256, probe.digest, sizeof(probe.digest));
+    memcpy(normalized, bytes, total_size);
+    memset(normalized + offsetof(wpk_header_t, package_sha256), 0,
+           WATCHY_PACKAGE_DIGEST_SIZE);
+    probe.normalized_size = total_size;
+
+    CHECK(watchy_package_validate(bytes, total_size, &crypto, &package) ==
+          WATCHY_PACKAGE_ERR_MANIFEST);
     return 0;
 }
 
@@ -1680,6 +1757,7 @@ int main(void) {
     CHECK(test_manifest_rejects_noncanonical_duplicate_or_unsafe_content() == 0);
     CHECK(test_elf_validator_accepts_only_sane_xtensa_shared_objects() == 0);
     CHECK(test_elf_validator_rejects_files_larger_than_64_kib() == 0);
+    CHECK(test_elf_validator_rejects_relocations_to_undefined_symbols() == 0);
     CHECK(test_elf_validator_rejects_loader_consumed_hostile_structures() == 0);
     CHECK(test_elf_requires_exactly_the_literal_single_export() == 0);
     CHECK(test_elf_rejects_duplicate_and_thousands_of_defined_exports() == 0);
@@ -1694,6 +1772,7 @@ int main(void) {
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
     CHECK(test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data() == 0);
+    CHECK(test_complete_wpk_validation_rejects_unsorted_assets() == 0);
     CHECK(test_selection_is_transactional_when_persistence_fails() == 0);
     CHECK(test_unregister_removes_health_and_all_selection_references_transactionally() == 0);
     CHECK(test_pending_watchface_promotes_after_render_and_rolls_back_on_failure() == 0);
@@ -1707,6 +1786,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 34 package tests");
+    puts("PASS 36 package tests");
     return 0;
 }

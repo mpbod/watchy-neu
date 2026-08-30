@@ -2,7 +2,11 @@
 #include "drawing.hpp"
 
 namespace {
-struct State { const watchy_host_caps_v1_t *host; };
+struct State {
+    const watchy_host_caps_v1_t *host;
+    watchy_status_t clock_status;
+    watchy_status_t battery_status;
+};
 State state{};
 
 watchy_status_t load(const watchy_host_caps_v1_t *host, void **user_data) noexcept {
@@ -28,19 +32,26 @@ watchy_status_t render(void *opaque, watchy_canvas_t *canvas,
     watchy_battery_state_t battery{};
     watchy::Clock clock(current->host->clock);
     watchy::Battery battery_api(current->host->battery);
-    if (clock.now(&now) != WATCHY_STATUS_OK) return WATCHY_STATUS_UNSUPPORTED;
+    current->clock_status = clock.now(&now);
+    current->battery_status = battery_api.read(&battery);
     sample::fill(canvas);
-    sample::digit(canvas, 18, 55, now.hour / 10u);
-    sample::digit(canvas, 55, 55, now.hour % 10u);
-    sample::rect(canvas, 94, 70, 6, 6);
-    sample::rect(canvas, 94, 91, 6, 6);
-    sample::digit(canvas, 109, 55, now.minute / 10u);
-    sample::digit(canvas, 146, 55, now.minute % 10u);
-    sample::number(canvas, 54, 128, static_cast<unsigned>(now.month), 2);
-    sample::number(canvas, 103, 128, static_cast<unsigned>(now.day), 2);
-    if (battery_api.read(&battery) == WATCHY_STATUS_OK)
+    sample::status_box(canvas, 4, 4, current->clock_status == WATCHY_STATUS_OK);
+    sample::status_box(canvas, 184, 4, current->battery_status == WATCHY_STATUS_OK);
+    if (current->clock_status == WATCHY_STATUS_OK) {
+        sample::digit(canvas, 18, 55, now.hour / 10u);
+        sample::digit(canvas, 55, 55, now.hour % 10u);
+        sample::rect(canvas, 94, 70, 6, 6);
+        sample::rect(canvas, 94, 91, 6, 6);
+        sample::digit(canvas, 109, 55, now.minute / 10u);
+        sample::digit(canvas, 146, 55, now.minute % 10u);
+        sample::number(canvas, 54, 128, static_cast<unsigned>(now.month), 2);
+        sample::number(canvas, 103, 128, static_cast<unsigned>(now.day), 2);
+    }
+    if (current->battery_status == WATCHY_STATUS_OK)
         sample::rect(canvas, 20, 180, static_cast<int>(battery.percent) * 16 / 10, 7);
-    *mode = now.minute == 0u ? WATCHY_REFRESH_FULL : WATCHY_REFRESH_PARTIAL;
+    *mode = current->clock_status == WATCHY_STATUS_OK && now.minute == 0u
+                ? WATCHY_REFRESH_FULL
+                : WATCHY_REFRESH_PARTIAL;
     return WATCHY_STATUS_OK;
 }
 

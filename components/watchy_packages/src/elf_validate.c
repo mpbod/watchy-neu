@@ -429,14 +429,28 @@ watchy_package_status_t watchy_package_elf_validate(const uint8_t *elf,
                  (u32(section(elf, shoff, (uint16_t)info) + 8u) & SHF_ALLOC) == 0u)) {
                 return WATCHY_PACKAGE_ERR_ELF;
             }
-            const uint32_t symbol_count = u32(section(elf, shoff, (uint16_t)link) + 20u) / SYM_SIZE;
+            const uint8_t *symbol_section = section(elf, shoff, (uint16_t)link);
+            const uint32_t symbol_offset = u32(symbol_section + 16u);
+            const uint32_t symbol_size = u32(symbol_section + 20u);
+            const uint32_t symbol_count = symbol_size / SYM_SIZE;
+            if (symbol_size % SYM_SIZE != 0u ||
+                !range_fits(elf_size, symbol_offset, symbol_size)) {
+                return WATCHY_PACKAGE_ERR_ELF;
+            }
             for (uint32_t relocation = 0u; relocation < size / RELA_SIZE; ++relocation) {
                 const uint8_t *rela = elf + offset + (size_t)relocation * RELA_SIZE;
-                const uint8_t relocation_type = (uint8_t)u32(rela + 4u);
+                const uint32_t relocation_info = u32(rela + 4u);
+                const uint32_t symbol_index = relocation_info >> 8u;
+                const uint8_t relocation_type = (uint8_t)relocation_info;
                 bool target_found = false;
-                if ((u32(rela + 4u) >> 8u) >= symbol_count ||
+                if (symbol_index >= symbol_count ||
                     relocation_type < R_XTENSA_RTLD ||
                     relocation_type > R_XTENSA_RELATIVE) {
+                    return WATCHY_PACKAGE_ERR_ELF;
+                }
+                if (symbol_index != 0u &&
+                    u16(elf + symbol_offset + (size_t)symbol_index * SYM_SIZE + 14u) ==
+                        SHN_UNDEF) {
                     return WATCHY_PACKAGE_ERR_ELF;
                 }
                 for (uint16_t target_index = 1u; target_index < shnum; ++target_index) {
