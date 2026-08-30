@@ -23,6 +23,7 @@
 #define WATCHY_TIME_NVS_UTC_OFFSET "utc_offset"
 
 static bool s_ready;
+static bool s_initialized;
 static int16_t s_utc_offset_minutes;
 
 static uint8_t to_bcd(uint8_t value) {
@@ -70,7 +71,6 @@ static watchy_status_t persist_utc_offset(int16_t offset) {
 
 watchy_status_t watchy_rtc_init(void) {
     uint8_t registers[7];
-    watchy_time_t utc;
     gpio_config_t interrupt_config = {
         .pin_bit_mask = UINT64_C(1) << WATCHY_PIN_RTC_INTERRUPT,
         .mode = GPIO_MODE_INPUT,
@@ -78,13 +78,19 @@ watchy_status_t watchy_rtc_init(void) {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
+    s_ready = false;
+    s_initialized = false;
     if (!watchy_buses_ready() || gpio_config(&interrupt_config) != ESP_OK ||
-        watchy_bus_rtc_read(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK ||
+        watchy_bus_rtc_read(PCF8563_REG_SECONDS, registers, sizeof(registers)) != ESP_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    s_initialized = true;
+    if (!watchy_rtc_initial_clock_ready(registers) ||
         restore_utc_offset() != WATCHY_STATUS_OK) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_ready = true;
-    return watchy_pcf8563_decode(registers, &utc);
+    return WATCHY_STATUS_OK;
 }
 
 bool watchy_rtc_ready(void) {
@@ -133,7 +139,7 @@ watchy_status_t watchy_rtc_set_local(const watchy_time_t *time) {
     if (time == NULL || !watchy_calendar_valid(time)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    if (!s_ready) {
+    if (!s_initialized) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     if (watchy_calendar_to_unix(time, &unix_seconds) != WATCHY_STATUS_OK ||
@@ -144,6 +150,7 @@ watchy_status_t watchy_rtc_set_local(const watchy_time_t *time) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_utc_offset_minutes = time->utc_offset_minutes;
+    s_ready = true;
     return WATCHY_STATUS_OK;
 }
 
@@ -204,4 +211,5 @@ watchy_status_t watchy_rtc_clear_interrupt_flags(void) {
 
 void watchy_rtc_deinit(void) {
     s_ready = false;
+    s_initialized = false;
 }

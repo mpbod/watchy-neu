@@ -500,3 +500,120 @@ test items.
   policy remains outside this HAL task.
 - BLE diagnostics mode is intentionally minimal, non-connectable advertising;
   it does not implement a diagnostic GATT service.
+
+## Review fix round 2
+
+### Scope and files
+
+This round changed only the adjacent motor sleep-pin and RTC readiness paths:
+
+- `components/watchy_hal/include/watchy/haptics.h`
+- `components/watchy_hal/include/watchy/power.h`
+- `components/watchy_hal/include/watchy/rtc_calendar.h`
+- `components/watchy_hal/src/haptics.c`
+- `components/watchy_hal/src/power.c`
+- `components/watchy_hal/src/power_policy.c`
+- `components/watchy_hal/src/rtc.c`
+- `components/watchy_hal/src/rtc_calendar.c`
+- `tests/host/test_hal.c`
+- `.superpowers/sdd/implementation-plan/task-2-report.md`
+
+### RED/GREEN evidence
+
+The portable tests were added before their policy implementations. Command:
+
+```sh
+/Users/maxb/.platformio/packages/tool-cmake/bin/cmake --build build-host \
+  --target watchy_hal_tests
+```
+
+RED exit code: `2`. Relevant output:
+
+```text
+Undefined symbols for architecture arm64:
+  "_watchy_power_release_pin_for_sleep"
+  "_watchy_rtc_initial_clock_ready"
+cc: error: linker command failed with exit code 1
+```
+
+The motor regression requires GPIO13 to be retained rather than classified as
+a generic reset/released pin, while ordinary display/battery pins remain
+releasable. The RTC regression accepts a valid leap-day register image and
+rejects both the PCF8563 VL flag and an invalid BCD nibble.
+
+After implementing the policies, this command:
+
+```sh
+/Users/maxb/.platformio/packages/tool-cmake/bin/cmake --build build-host \
+  --target watchy_hal_tests && \
+./build-host/tests/host/watchy_hal_tests
+```
+
+exited `0` with:
+
+```text
+PASS 13 HAL tests
+```
+
+The complete host suite was then run:
+
+```sh
+/Users/maxb/.platformio/packages/tool-cmake/bin/cmake -S . -B build-host && \
+/Users/maxb/.platformio/packages/tool-cmake/bin/cmake --build build-host && \
+/Users/maxb/.platformio/packages/tool-cmake/bin/ctest \
+  --test-dir build-host --output-on-failure
+```
+
+Exit code: `0`.
+
+```text
+4/4 Test #4: watchy_hal_tests ................. Passed
+100% tests passed, 0 tests failed out of 4
+```
+
+### Clean ESP-IDF target build
+
+Exact command:
+
+```sh
+/Users/maxb/.platformio/penv/bin/platformio run -e watchy_v2 -t clean && \
+/Users/maxb/.platformio/penv/bin/platformio run -e watchy_v2
+```
+
+Both commands exited `0`. Final output:
+
+```text
+framework-espidf @ 3.50500.0 (5.5.0)
+toolchain-xtensa-esp-elf @ 14.2.0+20241119
+RAM:   [==        ]  17.0% (used 55544 bytes from 327680 bytes)
+Flash: [====      ]  42.9% (used 786395 bytes from 1835008 bytes)
+Successfully created esp32 image.
+========================= [SUCCESS] Took 41.88 seconds =========================
+```
+
+### Implementation and self-review
+
+- GPIO13 is no longer passed to `gpio_reset_pin()` during sleep preparation.
+  The portable release policy is consumed directly by the generic pin-release
+  loop, so the regression tests the production classification boundary.
+- Sleep preparation first propagates motor-off failure, then configures GPIO13
+  output-low, enables its pad hold, and enables ESP32 digital-GPIO deep-sleep
+  hold. Any error returned by the GPIO operations rejects deep sleep.
+- On wake or cold initialization, the haptics service disables the global
+  deep-sleep hold, configures GPIO13 output-low while the per-pad latch still
+  protects the level, releases the per-pad hold, and writes low again. This
+  follows ESP-IDF's documented no-glitch release ordering.
+- RTC now keeps private `initialized` and `ready` states. A successful bus read
+  marks the transport initialized, but `ready` remains false until BCD/VL/date
+  validation and offset restoration succeed. The initialized-invalid state can
+  still be repaired with `watchy_rtc_set_local()`; a successful set marks the
+  clock ready. Reads, alarm/timer setup, and power preparation never claim an
+  invalid initial clock is ready.
+- No SDK/core, runtime, portal, package-tooling, or Arduino code changed.
+
+### Physical uncertainty
+
+The clean build proves the ESP32 hold APIs and sequence compile/link, but no
+device was attached. GPIO13 level continuity, absence of a wake-time motor
+glitch, deep-sleep current, and VL-to-set-local recovery still require physical
+Watchy 2.0 validation.

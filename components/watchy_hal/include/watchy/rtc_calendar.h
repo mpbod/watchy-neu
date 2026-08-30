@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 bool watchy_calendar_valid(const watchy_time_t *time);
+bool watchy_rtc_initial_clock_ready(const uint8_t registers[7]);
 watchy_status_t watchy_calendar_to_unix(const watchy_time_t *time, int64_t *out_unix_seconds);
 watchy_status_t watchy_calendar_from_unix(int64_t unix_seconds,
                                           int16_t utc_offset_minutes,

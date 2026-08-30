@@ -65,8 +65,15 @@ static void release_unused_pins(void) {
         WATCHY_PIN_MOTOR,
     };
     for (size_t index = 0; index < sizeof(pins) / sizeof(pins[0]); ++index) {
-        gpio_reset_pin(pins[index]);
+        if (watchy_power_release_pin_for_sleep((uint8_t)pins[index])) {
+            gpio_reset_pin(pins[index]);
+        }
     }
+}
+
+static bool prepare_motor_for_sleep(void) {
+    return watchy_haptics_deinit() == WATCHY_STATUS_OK &&
+           watchy_haptics_hold_off_for_sleep() == WATCHY_STATUS_OK;
 }
 
 static bool wait_for_wake_sources_inactive(void) {
@@ -109,7 +116,7 @@ watchy_status_t watchy_power_prepare_deep_sleep(bool timer_configured) {
     watchy_sleep_requirements_t requirements = {
         .timer_configured = timer_configured,
         .radios_stopped = watchy_radios_stop_all() == WATCHY_STATUS_OK,
-        .motor_off = watchy_haptics_deinit() == WATCHY_STATUS_OK,
+        .motor_off = prepare_motor_for_sleep(),
         .display_hibernated = watchy_display_ready() &&
                               watchy_display_power_off() == WATCHY_STATUS_OK &&
                               watchy_display_deep_sleep() == WATCHY_STATUS_OK,

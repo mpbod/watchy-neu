@@ -16,6 +16,7 @@ watchy_status_t watchy_haptics_init(void);
 bool watchy_haptics_ready(void);
 watchy_status_t watchy_haptics_pulse(uint16_t duration_ms, uint8_t strength);
 watchy_status_t watchy_haptics_deinit(void);
+watchy_status_t watchy_haptics_hold_off_for_sleep(void);
 
 #ifdef __cplusplus
 }

@@ -34,6 +34,11 @@ bool watchy_calendar_valid(const watchy_time_t *time) {
            time->utc_offset_minutes >= -1439 && time->utc_offset_minutes <= 1439;
 }
 
+bool watchy_rtc_initial_clock_ready(const uint8_t registers[7]) {
+    watchy_time_t utc;
+    return watchy_pcf8563_decode(registers, &utc) == WATCHY_STATUS_OK;
+}
+
 static int64_t days_from_civil(int32_t year, uint32_t month, uint32_t day) {
     const int32_t adjusted_year = year - (month <= 2u ? 1 : 0);
     const int32_t era = (adjusted_year >= 0 ? adjusted_year : adjusted_year - 399) / 400;

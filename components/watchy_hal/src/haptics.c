@@ -16,7 +16,10 @@ watchy_status_t watchy_haptics_init(void) {
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    if (gpio_config(&config) != ESP_OK || gpio_set_level(WATCHY_PIN_MOTOR, 0) != ESP_OK) {
+    gpio_deep_sleep_hold_dis();
+    if (gpio_config(&config) != ESP_OK || gpio_set_level(WATCHY_PIN_MOTOR, 0) != ESP_OK ||
+        gpio_hold_dis(WATCHY_PIN_MOTOR) != ESP_OK ||
+        gpio_set_level(WATCHY_PIN_MOTOR, 0) != ESP_OK) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_ready = true;
@@ -52,4 +55,14 @@ watchy_status_t watchy_haptics_deinit(void) {
                                        : WATCHY_STATUS_INVALID_STATE;
     s_ready = false;
     return status;
+}
+
+watchy_status_t watchy_haptics_hold_off_for_sleep(void) {
+    if (gpio_set_direction(WATCHY_PIN_MOTOR, GPIO_MODE_OUTPUT) != ESP_OK ||
+        gpio_set_level(WATCHY_PIN_MOTOR, 0) != ESP_OK ||
+        gpio_hold_en(WATCHY_PIN_MOTOR) != ESP_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    gpio_deep_sleep_hold_en();
+    return WATCHY_STATUS_OK;
 }

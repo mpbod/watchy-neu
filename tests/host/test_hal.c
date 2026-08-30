@@ -229,6 +229,23 @@ static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
     return 0;
 }
 
+static int test_motor_pin_is_retained_low_instead_of_generically_released(void) {
+    CHECK(!watchy_power_release_pin_for_sleep(WATCHY_PIN_MOTOR));
+    CHECK(watchy_power_release_pin_for_sleep(WATCHY_PIN_DISPLAY_BUSY));
+    CHECK(watchy_power_release_pin_for_sleep(WATCHY_PIN_BATTERY_ADC));
+    return 0;
+}
+
+static int test_rtc_initial_clock_only_becomes_ready_after_valid_decode(void) {
+    uint8_t registers[7] = {0x56, 0x34, 0x12, 0x29, 0x04, 0x02, 0x24};
+    CHECK(watchy_rtc_initial_clock_ready(registers));
+    registers[0] |= 0x80u;
+    CHECK(!watchy_rtc_initial_clock_ready(registers));
+    registers[0] = 0x6au;
+    CHECK(!watchy_rtc_initial_clock_ready(registers));
+    return 0;
+}
+
 static int test_radio_reconnect_is_blocked_while_stopping(void) {
     CHECK(watchy_wifi_should_reconnect(WATCHY_WIFI_STA_STARTING));
     CHECK(watchy_wifi_should_reconnect(WATCHY_WIFI_STA_CONNECTED));
@@ -258,8 +275,10 @@ int main(void) {
     CHECK(test_display_retained_state_controls_boot_refresh_and_commits_only_on_success() == 0);
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
     CHECK(test_sleep_admission_and_wake_source_debounce_are_fail_closed() == 0);
+    CHECK(test_motor_pin_is_retained_low_instead_of_generically_released() == 0);
+    CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 11 HAL tests");
+    puts("PASS 13 HAL tests");
     return 0;
 }
