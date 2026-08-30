@@ -58,14 +58,32 @@ static bool refresh_shell(watchy_shell_t *shell,
                           const watchy_package_catalog_t *catalog,
                           const watchy_diagnostic_report_t *diagnostics,
                           const char *detail,
-                          watchy_refresh_mode_t mode) {
+                          watchy_refresh_mode_t mode,
+                          const watchy_transition_request_v1_t *request) {
     watchy_canvas_t canvas = watchy_display_acquire();
     if (canvas.pixels == NULL) {
+        watchy_display_invalidate_previous();
         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
         return false;
     }
     watchy_shell_render(&canvas, shell, settings, time, battery, catalog, diagnostics, detail);
-    if (watchy_display_refresh(mode) != WATCHY_STATUS_OK) {
+    const watchy_status_t status = watchy_display_present(mode, request);
+    if (status == WATCHY_STATUS_INVALID_STATE) {
+        ESP_LOGE(TAG, "shell display presentation failed; attempting full error target");
+        watchy_display_invalidate_previous();
+        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
+        canvas = watchy_display_acquire();
+        if (canvas.pixels != NULL) {
+            watchy_shell_render(&canvas, shell, settings, time, battery, catalog,
+                                diagnostics, NULL);
+            if (watchy_display_present(WATCHY_REFRESH_FULL, NULL) == WATCHY_STATUS_OK) {
+                return false;
+            }
+        }
+        ESP_LOGE(TAG, "shell display error target failed");
+        return false;
+    }
+    if (status != WATCHY_STATUS_OK) {
         ESP_LOGE(TAG, "shell display refresh failed");
         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
         return false;
@@ -277,6 +295,10 @@ static void run_shell(watchy_shell_t *shell,
         previous = current;
         if (watchy_portal_active()) {
             if ((pressed & WATCHY_BUTTON_MASK_BACK) != 0u || watchy_portal_timed_out()) {
+                const watchy_shell_screen_t before_screen = shell->screen;
+                const watchy_shell_input_t transition_input =
+                    (pressed & WATCHY_BUTTON_MASK_BACK) != 0u
+                        ? WATCHY_SHELL_INPUT_BACK : WATCHY_SHELL_INPUT_IDLE;
                 const watchy_status_t stop_status = watchy_portal_stop();
                 watchy_settings_t reloaded_settings;
                 watchy_shell_input(shell, WATCHY_SHELL_INPUT_BACK);
@@ -288,29 +310,65 @@ static void run_shell(watchy_shell_t *shell,
                 } else if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
                     *settings = reloaded_settings;
                     watchy_shell_set_package_catalog(shell, catalog, true);
-                    if (sync_active_watchface_setting(settings, catalog) != WATCHY_STATUS_OK) {
+                    if (watchy_display_set_partial_limit(settings->partial_refresh_limit) !=
+                            WATCHY_STATUS_OK ||
+                        watchy_display_set_transition_policy(settings->transition_level,
+                                                             true, shell->safe_mode,
+                                                             battery->millivolts) !=
+                            WATCHY_STATUS_OK) {
+                        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
+                    } else if (sync_active_watchface_setting(settings, catalog) !=
+                               WATCHY_STATUS_OK) {
                         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
                     }
                 } else {
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
                 }
+                watchy_transition_request_v1_t request;
+                const watchy_shell_transition_context_t change = {
+                    .from = before_screen,
+                    .to = shell->screen,
+                    .input = transition_input,
+                    .saved = false,
+                    .sleep_requested = shell->sleep_requested,
+                    .safe_mode = shell->safe_mode,
+                };
+                const bool has_request = watchy_shell_transition_for_change(&change, &request);
+                watchy_refresh_mode_t refresh_mode = WATCHY_REFRESH_PARTIAL;
+                if (shell->screen == WATCHY_SHELL_ERROR &&
+                    before_screen != WATCHY_SHELL_ERROR) {
+                    watchy_display_invalidate_previous();
+                    refresh_mode = WATCHY_REFRESH_FULL;
+                }
                 (void)refresh_shell(shell, settings, time, battery, catalog, diagnostics,
-                                    NULL, WATCHY_REFRESH_PARTIAL);
+                                    NULL, refresh_mode, has_request ? &request : NULL);
                 last_activity = milliseconds();
             }
             vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
             continue;
         }
         if (pressed != 0u) {
+            const watchy_shell_input_t shell_input = input_from_mask(pressed);
+            watchy_shell_screen_t transition_from = shell->screen;
+            bool saved = false;
             detail[0] = '\0';
-            watchy_shell_input(shell, input_from_mask(pressed));
+            watchy_shell_input(shell, shell_input);
             last_activity = milliseconds();
             const watchy_shell_action_t action = watchy_shell_take_action(shell);
             switch (action) {
             case WATCHY_SHELL_ACTION_SAVE_SETTINGS:
                 if (shell->selection == 0u) settings->time_24h = !settings->time_24h;
                 else if (shell->selection == 1u) settings->motion_wake = !settings->motion_wake;
-                else if (shell->selection == 6u) {
+                else if (shell->selection == 2u) {
+                    if (!watchy_settings_cycle_transition_level(settings) ||
+                        watchy_display_set_transition_policy(settings->transition_level,
+                                                             true, shell->safe_mode,
+                                                             battery->millivolts) !=
+                            WATCHY_STATUS_OK) {
+                        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
+                        break;
+                    }
+                } else if (shell->selection == 7u) {
                     settings->partial_refresh_limit =
                         settings->partial_refresh_limit >= WATCHY_SETTINGS_PARTIAL_LIMIT_MAX
                             ? 5u : (uint16_t)(settings->partial_refresh_limit + 5u);
@@ -322,7 +380,7 @@ static void run_shell(watchy_shell_t *shell,
                 }
                 if (watchy_settings_save(settings) != WATCHY_STATUS_OK) {
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
-                }
+                } else saved = true;
                 break;
             case WATCHY_SHELL_ACTION_MANUAL_INCREMENT:
             case WATCHY_SHELL_ACTION_MANUAL_DECREMENT:
@@ -332,20 +390,36 @@ static void run_shell(watchy_shell_t *shell,
             case WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME:
                 if (watchy_rtc_set_local(time) != WATCHY_STATUS_OK) {
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_MANUAL_TIME);
-                }
+                } else saved = true;
                 break;
-            case WATCHY_SHELL_ACTION_SYNC_NTP:
+            case WATCHY_SHELL_ACTION_SYNC_NTP: {
                 snprintf(detail, sizeof(detail), "SYNCING");
-                if (refresh_shell(shell, settings, time, battery, catalog, diagnostics,
-                                  detail, WATCHY_REFRESH_PARTIAL) &&
+                watchy_transition_request_v1_t sync_request;
+                const watchy_shell_transition_context_t sync_change = {
+                    .from = transition_from,
+                    .to = shell->screen,
+                    .input = shell_input,
+                    .saved = false,
+                    .sleep_requested = shell->sleep_requested,
+                    .safe_mode = shell->safe_mode,
+                };
+                const bool has_sync_request =
+                    watchy_shell_transition_for_change(&sync_change, &sync_request);
+                const bool sync_visible =
+                    refresh_shell(shell, settings, time, battery, catalog, diagnostics,
+                                  detail, WATCHY_REFRESH_PARTIAL,
+                                  has_sync_request ? &sync_request : NULL);
+                if (sync_visible &&
                     sync_time_ntp(settings) == WATCHY_STATUS_OK &&
                     watchy_rtc_read_local(time) == WATCHY_STATUS_OK) {
                     snprintf(detail, sizeof(detail), "TIME UPDATED");
                 } else if (shell->screen != WATCHY_SHELL_ERROR) {
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_NTP);
                 }
+                transition_from = sync_visible ? WATCHY_SHELL_NTP_SYNC : shell->screen;
                 last_activity = milliseconds();
                 break;
+            }
             case WATCHY_SHELL_ACTION_START_PORTAL_CLIENT:
             case WATCHY_SHELL_ACTION_START_PORTAL_AP: {
                 watchy_portal_session_info_t info;
@@ -407,12 +481,41 @@ static void run_shell(watchy_shell_t *shell,
                 collect_and_log_diagnostics(diagnostics);
                 watchy_shell_set_diagnostic_count(shell, diagnostics->count);
             }
+            watchy_transition_request_v1_t request;
+            const watchy_shell_transition_context_t change = {
+                .from = transition_from,
+                .to = shell->screen,
+                .input = shell_input,
+                .saved = saved,
+                .sleep_requested = shell->sleep_requested,
+                .safe_mode = shell->safe_mode,
+            };
+            const bool has_request = watchy_shell_transition_for_change(&change, &request);
+            watchy_refresh_mode_t refresh_mode = WATCHY_REFRESH_PARTIAL;
+            if (shell->screen == WATCHY_SHELL_ERROR &&
+                transition_from != WATCHY_SHELL_ERROR) {
+                watchy_display_invalidate_previous();
+                refresh_mode = WATCHY_REFRESH_FULL;
+            }
             (void)refresh_shell(shell, settings, time, battery, catalog, diagnostics,
-                                detail[0] == '\0' ? NULL : detail, WATCHY_REFRESH_PARTIAL);
+                                detail[0] == '\0' ? NULL : detail, refresh_mode,
+                                has_request ? &request : NULL);
         } else if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
+            const watchy_shell_screen_t before_screen = shell->screen;
             watchy_shell_input(shell, WATCHY_SHELL_INPUT_IDLE);
+            watchy_transition_request_v1_t request;
+            const watchy_shell_transition_context_t change = {
+                .from = before_screen,
+                .to = shell->screen,
+                .input = WATCHY_SHELL_INPUT_IDLE,
+                .saved = false,
+                .sleep_requested = shell->sleep_requested,
+                .safe_mode = shell->safe_mode,
+            };
+            const bool has_request = watchy_shell_transition_for_change(&change, &request);
             (void)refresh_shell(shell, settings, time, battery, catalog, diagnostics,
-                                NULL, WATCHY_REFRESH_PARTIAL);
+                                NULL, WATCHY_REFRESH_PARTIAL,
+                                has_request ? &request : NULL);
         }
         vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
     }
@@ -471,6 +574,12 @@ void app_main(void) {
                               .weekday = 1u, .utc_offset_minutes = 0};
     }
     (void)watchy_battery_read(&battery);
+    if (watchy_display_set_transition_policy(settings.transition_level,
+                                              wake_cause == WATCHY_WAKE_BUTTON,
+                                              safe_mode, battery.millivolts) !=
+        WATCHY_STATUS_OK) {
+        display_failed = true;
+    }
 
     const watchy_package_status_t package_status = watchy_packages_snapshot(&catalog);
     package_index_readable = package_status == WATCHY_PACKAGE_OK;
@@ -508,10 +617,30 @@ void app_main(void) {
         watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_DISPLAY);
     }
     if (!package_rendered && !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake)) {
+        watchy_transition_request_v1_t request;
+        const watchy_transition_request_v1_t *request_ptr = NULL;
+        if (wake_cause == WATCHY_WAKE_BUTTON) {
+            const watchy_shell_transition_context_t change = {
+                .from = WATCHY_SHELL_WATCHFACE,
+                .to = shell.screen,
+                .input = WATCHY_SHELL_INPUT_MENU,
+                .saved = false,
+                .sleep_requested = shell.sleep_requested,
+                .safe_mode = shell.safe_mode,
+            };
+            if (watchy_shell_transition_for_change(&change, &request)) {
+                request_ptr = &request;
+            }
+        }
+        watchy_refresh_mode_t refresh_mode = wake_cause == WATCHY_WAKE_COLD
+                                                  ? WATCHY_REFRESH_FULL
+                                                  : WATCHY_REFRESH_PARTIAL;
+        if (safe_mode || !rtc_valid || shell.screen == WATCHY_SHELL_ERROR) {
+            watchy_display_invalidate_previous();
+            refresh_mode = WATCHY_REFRESH_FULL;
+        }
         (void)refresh_shell(&shell, &settings, &time, &battery, &catalog, &diagnostics,
-                            safe_mode ? safe_reason : NULL,
-                            wake_cause == WATCHY_WAKE_COLD ? WATCHY_REFRESH_FULL
-                                                           : WATCHY_REFRESH_PARTIAL);
+                            safe_mode ? safe_reason : NULL, refresh_mode, request_ptr);
     }
     if (!shell.sleep_requested &&
         (wake_cause == WATCHY_WAKE_BUTTON || safe_mode || !rtc_valid)) {

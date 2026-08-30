@@ -1,4 +1,4 @@
-# Watchy package SDK (ABI 1.1)
+# Watchy package SDK (ABI 1.2)
 
 ## Compatibility and entry point
 
@@ -20,6 +20,10 @@ is explicit and prior watchface promotion is transactional.
 The binary boundary is the versioned C structs in `sdk.h`. `sdk.hpp` is a
 header-only C++17 convenience layer for `Canvas`, `Clock`, `Input`, `Motion`,
 `Battery`, `Haptics`, `Storage`, `Network`, `Bluetooth`, and `System`.
+ABI 1.2 is prefix-compatible with ABI 1.1: existing 1.1 packages continue to
+render with Cut presentation, while a package that declares 1.1 may use the
+appended transition request only after checking that the host minor is at least
+2. It must not read the appended system callback from a 1.1 host.
 
 ## Lifecycle
 
@@ -36,6 +40,8 @@ Each wake uses a fresh session:
 Only data written through `Storage` persists. Static/global RAM and pointers do
 not survive deep sleep. Callbacks return `WATCHY_STATUS_OK`,
 `INVALID_ARGUMENT`, `INVALID_STATE`, `INCOMPATIBLE_ABI`, or `UNSUPPORTED`.
+Transition submission may additionally return `BUSY` when the package already
+has an unconsumed request.
 Unhandled callback errors, watchdog overruns, invalid pointers/descriptors, and
 repeated incomplete attempts can quarantine a package.
 
@@ -53,8 +59,8 @@ or `Bluetooth::status`; ABI 1.1 does not deliver radio completion events.
 Bluetooth, or system. Inspect only the union member selected by `type`. Button
 events identify Up, Down, Confirm, or Back and press/release state. The host may
 request app exit; apps can request graceful exit through `System::request_exit`.
-Network and Bluetooth remain reserved event tags in ABI 1.1; the current host
-does not emit them, so polling the matching request ID is authoritative.
+Network and Bluetooth remain reserved event tags; the current host does not
+emit them, so polling the matching request ID is authoritative.
 
 ## Capabilities
 
@@ -94,6 +100,60 @@ and format instead of assuming them.
 request refresh through Canvas/System. The kernel has final authority and can
 promote partial to full for cold start, ghosting limits, or policy. There is no
 v1 dirty-rectangle wire API; partial applies to the complete framebuffer.
+
+## ABI 1.2 transition requests
+
+`watchy_system_api_v1_t::request_transition` is appended in ABI 1.2. It accepts
+a `watchy_transition_request_v1_t` during an active event or render callback and
+requests presentation of the next accepted complete render. It does not expose
+the panel, submit an intermediate framebuffer, choose physical refresh modes,
+or override kernel policy. Treat the service as optional: check the negotiated
+ABI and callback, and continue rendering when it is absent or returns
+`WATCHY_STATUS_UNSUPPORTED`.
+
+Initialize the entire request to zero, set `size = sizeof(request)`, then set an
+effect and direction. `WATCHY_TRANSITION_HAS_RECT` declares a signed rectangle;
+the compositor clips a partially visible rectangle to the 200×200 canvas.
+Zero-area and wholly off-canvas rectangles are invalid, and Odometer always
+requires a rectangle. Omitting the flag selects the full canvas for effects that
+allow it. `WATCHY_TRANSITION_PREFER_FULL` asks for a full final target but does
+not prevent the kernel from promoting other writes. Unknown flags, invalid enum
+values, wrong size, or nonzero reserved words return `INVALID_ARGUMENT`.
+
+The host copies one valid request into trusted storage. A second request before
+consumption returns `BUSY` without replacing the first. The request is consumed
+exactly once when the next render is accepted for presentation, whether it was
+submitted by the preceding event or by that render callback. A rejected render,
+stop, unload, or teardown discards it. If optional request presentation is
+rejected as invalid at the final boundary, the accepted target is retried as
+Cut; a real display failure is not masked.
+
+Physical-write budgets count every display transfer after the source already
+visible on the panel:
+
+| Effect | Maximum physical writes |
+| --- | ---: |
+| Cut | 1 |
+| Flash, Dither | 2 |
+| Push, Grow, Odometer, Split | 3 |
+| Wipe | 4 |
+| Fill, Shutter | 5 |
+| Mandatory direct Clear | 2 full writes |
+
+Every intermediate write advances the refresh/ghosting counters and may be
+promoted to full refresh. Between completed optional writes the kernel services
+the watchdog and may cancel on a newly pressed button; the last completed frame
+then becomes the truthful retained source. Direct Clear cannot be cancelled
+between its clearing and target writes.
+
+The display policy applies after validation. Full permits the requested effect
+within the limits above. Reduced keeps Cut but replaces any other optional
+effect with a two-write Flash. Off, safe mode, unattended wakes, retained-source
+loss, and battery voltage below 3550 mV downgrade optional effects to Cut.
+Reaching the partial-refresh ghosting limit takes precedence over those modes:
+the kernel performs a direct two-full-write Clear and ends on the complete
+target. Invalid source state or an intermediate-write failure forces the next
+successful target to a complete full refresh.
 
 ## Persistence and assets
 

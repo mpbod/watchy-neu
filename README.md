@@ -40,6 +40,12 @@ flash firmware over serial. Packages update independently through the portal.
 ## Controls and recovery
 
 - Menu opens/selects, Back returns, and Up/Down navigate.
+- **Settings → Motion Full/Reduced/Off** controls display transition effects.
+  This `motion_fx` preference is independent of **Motion On/Off**, which controls
+  accelerometer wake. Full allows eligible requested effects, Reduced replaces
+  optional multi-write effects with a two-write Flash, and Off uses a one-write
+  Cut. Panel-health Clear remains a mandatory two-write full refresh in every
+  mode.
 - Hold **Back + Down during reset** to enter safe mode. Safe mode never loads a
   third-party ELF and offers diagnostics, individual package removal (or a full
   purge if the index is unreadable), and a normal reboot.
@@ -48,7 +54,10 @@ flash firmware over serial. Packages update independently through the portal.
 
 Wi-Fi and BLE stay off unless an explicit operation needs them. The normal
 minute wake path reloads the selected package, renders, unloads it, shuts down
-peripherals, and returns to deep sleep.
+peripherals, and returns to deep sleep. Minute and other unattended wakes use
+Cut. Safe mode, battery voltage below 3550 mV, or an unknown retained display
+source also downgrades optional effects to Cut; the kernel can always promote a
+write to full refresh for panel health.
 
 ## Package portal
 

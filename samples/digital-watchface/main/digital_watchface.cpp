@@ -6,12 +6,16 @@ struct State {
     const watchy_host_caps_v1_t *host;
     watchy_status_t clock_status;
     watchy_status_t battery_status;
+    uint8_t previous_minute;
+    bool previous_minute_valid;
+    bool button_render_pending;
 };
 State state{};
 
 watchy_status_t load(const watchy_host_caps_v1_t *host, void **user_data) noexcept {
     if (host == nullptr || user_data == nullptr || host->abi.major != WATCHY_ABI_V1_MAJOR ||
-        host->abi.minor < WATCHY_ABI_V1_MINOR) return WATCHY_STATUS_INCOMPATIBLE_ABI;
+        host->abi.minor < 1u) return WATCHY_STATUS_INCOMPATIBLE_ABI;
+    state = {};
     state.host = host;
     *user_data = &state;
     return WATCHY_STATUS_OK;
@@ -19,8 +23,13 @@ watchy_status_t load(const watchy_host_caps_v1_t *host, void **user_data) noexce
 void unload(void *) noexcept { state.host = nullptr; }
 watchy_status_t start(void *) noexcept { return WATCHY_STATUS_OK; }
 void stop(void *) noexcept {}
-watchy_status_t event(void *, const watchy_event_t *value) noexcept {
-    return value != nullptr ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_ARGUMENT;
+watchy_status_t event(void *opaque, const watchy_event_t *value) noexcept {
+    auto *current = static_cast<State *>(opaque);
+    if (current == nullptr || value == nullptr) return WATCHY_STATUS_INVALID_ARGUMENT;
+    if (value->type == WATCHY_EVENT_BUTTON && value->data.button.pressed) {
+        current->button_render_pending = true;
+    }
+    return WATCHY_STATUS_OK;
 }
 
 watchy_status_t render(void *opaque, watchy_canvas_t *canvas,
@@ -34,6 +43,11 @@ watchy_status_t render(void *opaque, watchy_canvas_t *canvas,
     watchy::Battery battery_api(current->host->battery);
     current->clock_status = clock.now(&now);
     current->battery_status = battery_api.read(&battery);
+    const bool request_odometer = current->button_render_pending &&
+                                  current->clock_status == WATCHY_STATUS_OK &&
+                                  current->previous_minute_valid &&
+                                  current->previous_minute != now.minute;
+    current->button_render_pending = false;
     sample::fill(canvas);
     sample::status_box(canvas, 4, 4, current->clock_status == WATCHY_STATUS_OK);
     sample::status_box(canvas, 184, 4, current->battery_status == WATCHY_STATUS_OK);
@@ -49,6 +63,20 @@ watchy_status_t render(void *opaque, watchy_canvas_t *canvas,
     }
     if (current->battery_status == WATCHY_STATUS_OK)
         sample::rect(canvas, 20, 180, static_cast<int>(battery.percent) * 16 / 10, 7);
+    if (request_odometer && current->host->abi.minor >= WATCHY_ABI_V1_MINOR &&
+        current->host->system != nullptr) {
+        watchy_transition_request_v1_t request{};
+        request.size = sizeof(request);
+        request.effect = WATCHY_TRANSITION_ODOMETER;
+        request.direction = WATCHY_TRANSITION_DIRECTION_UP;
+        request.rect = {146, 55, 30, 54};
+        request.flags = WATCHY_TRANSITION_HAS_RECT;
+        (void)watchy::System(current->host->system).request_transition(&request);
+    }
+    if (current->clock_status == WATCHY_STATUS_OK) {
+        current->previous_minute = now.minute;
+        current->previous_minute_valid = true;
+    }
     *mode = current->clock_status == WATCHY_STATUS_OK && now.minute == 0u
                 ? WATCHY_REFRESH_FULL
                 : WATCHY_REFRESH_PARTIAL;
