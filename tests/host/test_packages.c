@@ -6,6 +6,7 @@
 #include "watchy/packages.h"
 #include "watchy/package_host.h"
 #include "watchy/package_runtime.h"
+#include "watchy/factory_seed.h"
 #include "watchy/package_crypto.h"
 #include "watchy/wpk.h"
 
@@ -2646,6 +2647,308 @@ static int test_install_validates_the_exclusive_stage_readback(void) {
     return 0;
 }
 
+typedef struct {
+    uint8_t catalog[WATCHY_FACTORY_SEED_CATALOG_BYTES];
+    uint8_t package_bytes[WATCHY_FACTORY_SEED_COUNT];
+    uint8_t workspace[64];
+    bool file_present[WATCHY_FACTORY_SEED_COUNT];
+    bool installed[WATCHY_FACTORY_SEED_COUNT];
+    bool marker_present;
+    uint16_t marker_version;
+    bool marker_read_fails;
+    bool marker_write_fails;
+    int fail_install_index;
+    unsigned marker_reads;
+    unsigned marker_writes;
+    unsigned catalog_reads;
+    unsigned package_reads;
+    unsigned digest_calls;
+    unsigned install_calls;
+    unsigned remove_calls;
+    unsigned workspace_acquires;
+    unsigned workspace_releases;
+} factory_seed_fake_t;
+
+static void seed_put_u16(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8u);
+}
+
+static void make_seed_catalog(factory_seed_fake_t *fake) {
+    static const char *const names[WATCHY_FACTORY_SEED_COUNT] = {
+        "grid-01.wpk", "grid-02.wpk", "grid-03.wpk", "orbit.wpk",
+        "slab.wpk", "term-01.wpk", "term-02.wpk", "term-03.wpk",
+    };
+    memset(fake, 0, sizeof(*fake));
+    memcpy(fake->catalog, "WFS1", 4u);
+    seed_put_u16(fake->catalog + 4u, WATCHY_FACTORY_SEED_VERSION);
+    seed_put_u16(fake->catalog + 6u, WATCHY_FACTORY_SEED_COUNT);
+    for (size_t index = 0u; index < WATCHY_FACTORY_SEED_COUNT; ++index) {
+        uint8_t *record = fake->catalog + WATCHY_FACTORY_SEED_HEADER_BYTES +
+                          index * WATCHY_FACTORY_SEED_RECORD_BYTES;
+        memcpy(record, names[index], strlen(names[index]));
+        record[WATCHY_FACTORY_SEED_FILENAME_BYTES] = (uint8_t)(index + 1u);
+        fake->package_bytes[index] = (uint8_t)(index + 1u);
+        fake->file_present[index] = true;
+    }
+    fake->fail_install_index = -1;
+}
+
+static int seed_filename_index(const char *filename) {
+    static const char *const names[WATCHY_FACTORY_SEED_COUNT] = {
+        "grid-01.wpk", "grid-02.wpk", "grid-03.wpk", "orbit.wpk",
+        "slab.wpk", "term-01.wpk", "term-02.wpk", "term-03.wpk",
+    };
+    for (size_t index = 0u; index < WATCHY_FACTORY_SEED_COUNT; ++index) {
+        if (strcmp(filename, names[index]) == 0) return (int)index;
+    }
+    return -1;
+}
+
+static watchy_factory_seed_marker_result_t seed_marker_read(void *context,
+                                                             uint16_t *out_version) {
+    factory_seed_fake_t *fake = context;
+    ++fake->marker_reads;
+    if (fake->marker_read_fails) return WATCHY_FACTORY_SEED_MARKER_ERROR;
+    if (!fake->marker_present) return WATCHY_FACTORY_SEED_MARKER_NOT_FOUND;
+    *out_version = fake->marker_version;
+    return WATCHY_FACTORY_SEED_MARKER_FOUND;
+}
+
+static bool seed_marker_write(void *context, uint16_t version) {
+    factory_seed_fake_t *fake = context;
+    ++fake->marker_writes;
+    if (fake->marker_write_fails) return false;
+    fake->marker_present = true;
+    fake->marker_version = version;
+    return true;
+}
+
+static watchy_factory_seed_file_result_t seed_catalog_read(void *context,
+                                                            uint8_t *bytes,
+                                                            size_t capacity,
+                                                            size_t *out_size) {
+    factory_seed_fake_t *fake = context;
+    ++fake->catalog_reads;
+    if (capacity < sizeof(fake->catalog)) return WATCHY_FACTORY_SEED_FILE_ERROR;
+    memcpy(bytes, fake->catalog, sizeof(fake->catalog));
+    *out_size = sizeof(fake->catalog);
+    return WATCHY_FACTORY_SEED_FILE_OK;
+}
+
+static watchy_factory_seed_file_result_t seed_package_read(void *context,
+                                                            const char *filename,
+                                                            uint8_t *bytes,
+                                                            size_t capacity,
+                                                            size_t *out_size) {
+    factory_seed_fake_t *fake = context;
+    const int index = seed_filename_index(filename);
+    ++fake->package_reads;
+    if (index < 0 || !fake->file_present[index]) return WATCHY_FACTORY_SEED_FILE_NOT_FOUND;
+    if (capacity < 1u) return WATCHY_FACTORY_SEED_FILE_ERROR;
+    bytes[0] = fake->package_bytes[index];
+    *out_size = 1u;
+    return WATCHY_FACTORY_SEED_FILE_OK;
+}
+
+static bool seed_package_installed(void *context, const char *filename) {
+    factory_seed_fake_t *fake = context;
+    const int index = seed_filename_index(filename);
+    return index >= 0 && fake->installed[index];
+}
+
+static bool seed_digest(void *context, const uint8_t *bytes, size_t size,
+                        uint8_t out_digest[WATCHY_PACKAGE_DIGEST_SIZE]) {
+    factory_seed_fake_t *fake = context;
+    ++fake->digest_calls;
+    if (size != 1u) return false;
+    memset(out_digest, 0, WATCHY_PACKAGE_DIGEST_SIZE);
+    out_digest[0] = bytes[0];
+    return true;
+}
+
+static watchy_package_status_t seed_install(void *context, uint8_t *bytes, size_t size) {
+    factory_seed_fake_t *fake = context;
+    const int index = size == 1u ? (int)bytes[0] - 1 : -1;
+    ++fake->install_calls;
+    if (index < 0 || index >= (int)WATCHY_FACTORY_SEED_COUNT) {
+        return WATCHY_PACKAGE_ERR_WPK;
+    }
+    if (index == fake->fail_install_index) return WATCHY_PACKAGE_ERR_FILESYSTEM;
+    if (fake->installed[index]) return WATCHY_PACKAGE_ERR_STATE;
+    fake->installed[index] = true;
+    return WATCHY_PACKAGE_OK;
+}
+
+static bool seed_remove(void *context, const char *filename) {
+    factory_seed_fake_t *fake = context;
+    const int index = seed_filename_index(filename);
+    ++fake->remove_calls;
+    if (index < 0) return false;
+    fake->file_present[index] = false;
+    return true;
+}
+
+static bool seed_workspace_acquire(void *context, uint8_t **out_bytes,
+                                   size_t *out_capacity) {
+    factory_seed_fake_t *fake = context;
+    ++fake->workspace_acquires;
+    *out_bytes = fake->workspace;
+    *out_capacity = sizeof(fake->workspace);
+    return true;
+}
+
+static void seed_workspace_release(void *context, uint8_t *bytes) {
+    factory_seed_fake_t *fake = context;
+    fake->workspace_releases = bytes == fake->workspace
+                                   ? fake->workspace_releases + 1u : UINT32_MAX;
+}
+
+static watchy_factory_seed_ops_t seed_ops(factory_seed_fake_t *fake) {
+    return (watchy_factory_seed_ops_t){
+        .read_marker = seed_marker_read,
+        .write_marker = seed_marker_write,
+        .read_catalog = seed_catalog_read,
+        .read_package = seed_package_read,
+        .package_installed = seed_package_installed,
+        .sha256 = seed_digest,
+        .install_package = seed_install,
+        .remove_package = seed_remove,
+        .acquire_workspace = seed_workspace_acquire,
+        .release_workspace = seed_workspace_release,
+        .context = fake,
+    };
+}
+
+static watchy_package_status_t seed_import(factory_seed_fake_t *fake, bool safe_mode) {
+    uint8_t wire[WATCHY_FACTORY_SEED_CATALOG_BYTES];
+    watchy_factory_seed_catalog_t catalog;
+    const watchy_factory_seed_ops_t operations = seed_ops(fake);
+    return watchy_factory_seed_import(safe_mode, &operations, wire, sizeof(wire), &catalog);
+}
+
+static int test_factory_seed_parser_accepts_only_the_fixed_canonical_wfs1_table(void) {
+    factory_seed_fake_t fake;
+    watchy_factory_seed_catalog_t catalog;
+    uint8_t mutated[WATCHY_FACTORY_SEED_CATALOG_BYTES + 1u];
+    make_seed_catalog(&fake);
+    CHECK(watchy_factory_seed_parse(fake.catalog, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(catalog.version == 1u && catalog.count == 8u);
+    CHECK(strcmp(catalog.entries[0].filename, "grid-01.wpk") == 0);
+    CHECK(catalog.entries[7].sha256[0] == 8u);
+
+    memcpy(mutated, fake.catalog, sizeof(fake.catalog));
+    mutated[sizeof(fake.catalog)] = 0u;
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(mutated), &catalog) ==
+          WATCHY_PACKAGE_ERR_WPK);
+    mutated[0] = 'X';
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_WPK);
+    memcpy(mutated, fake.catalog, sizeof(fake.catalog));
+    seed_put_u16(mutated + 4u, 2u);
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_WPK);
+    seed_put_u16(mutated + 4u, 1u);
+    seed_put_u16(mutated + 6u, 7u);
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_WPK);
+
+    memcpy(mutated, fake.catalog, sizeof(fake.catalog));
+    mutated[WATCHY_FACTORY_SEED_HEADER_BYTES + 4u] = '/';
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_PATH);
+    memcpy(mutated, fake.catalog, sizeof(fake.catalog));
+    memset(mutated + WATCHY_FACTORY_SEED_HEADER_BYTES, 'a',
+           WATCHY_FACTORY_SEED_FILENAME_BYTES);
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_PATH);
+    memcpy(mutated, fake.catalog, sizeof(fake.catalog));
+    mutated[WATCHY_FACTORY_SEED_HEADER_BYTES + strlen("grid-01.wpk") + 1u] = 'x';
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_PATH);
+    memcpy(mutated, fake.catalog, sizeof(fake.catalog));
+    memcpy(mutated + WATCHY_FACTORY_SEED_HEADER_BYTES + WATCHY_FACTORY_SEED_RECORD_BYTES,
+           mutated + WATCHY_FACTORY_SEED_HEADER_BYTES, WATCHY_FACTORY_SEED_FILENAME_BYTES);
+    CHECK(watchy_factory_seed_parse(mutated, sizeof(fake.catalog), &catalog) ==
+          WATCHY_PACKAGE_ERR_PATH);
+    return 0;
+}
+
+static int test_factory_seed_safe_mode_and_committed_marker_touch_no_seed_files(void) {
+    factory_seed_fake_t fake;
+    make_seed_catalog(&fake);
+    CHECK(seed_import(&fake, true) == WATCHY_PACKAGE_OK);
+    CHECK(fake.marker_reads == 0u && fake.catalog_reads == 0u && fake.install_calls == 0u);
+
+    fake.marker_present = true;
+    fake.marker_version = WATCHY_FACTORY_SEED_VERSION;
+    fake.installed[0] = false; /* deletion must never resurrect after marker commit */
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_OK);
+    CHECK(fake.marker_reads == 1u && fake.catalog_reads == 0u && fake.install_calls == 0u);
+    CHECK(fake.marker_writes == 0u);
+
+    make_seed_catalog(&fake);
+    fake.marker_present = true;
+    fake.marker_version = 2u;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_ERR_STATE);
+    CHECK(fake.catalog_reads == 0u && fake.marker_writes == 0u);
+    return 0;
+}
+
+static int test_factory_seed_import_is_one_time_and_accepts_existing_packages(void) {
+    factory_seed_fake_t fake;
+    make_seed_catalog(&fake);
+    fake.installed[3] = true;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_OK);
+    CHECK(fake.install_calls == 8u && fake.remove_calls == 8u);
+    CHECK(fake.marker_writes == 1u && fake.marker_version == 1u);
+    CHECK(fake.workspace_acquires == 1u && fake.workspace_releases == 1u);
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_OK);
+    CHECK(fake.install_calls == 8u && fake.marker_writes == 1u);
+    return 0;
+}
+
+static int test_factory_seed_interruption_resumes_removed_installed_entries(void) {
+    factory_seed_fake_t fake;
+    make_seed_catalog(&fake);
+    fake.fail_install_index = 1;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_ERR_FILESYSTEM);
+    CHECK(fake.installed[0] && !fake.file_present[0] && !fake.marker_present);
+    fake.fail_install_index = -1;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_OK);
+    CHECK(fake.installed[7] && fake.marker_present);
+    CHECK(fake.install_calls == 9u); /* 2 first try, then missing installed + remaining 7 */
+    return 0;
+}
+
+static int test_factory_seed_rejects_digest_missing_file_and_marker_io_failures(void) {
+    factory_seed_fake_t fake;
+    make_seed_catalog(&fake);
+    fake.catalog[WATCHY_FACTORY_SEED_HEADER_BYTES + WATCHY_FACTORY_SEED_FILENAME_BYTES] ^= 1u;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_ERR_DIGEST);
+    CHECK(fake.install_calls == 0u && fake.marker_writes == 0u);
+
+    make_seed_catalog(&fake);
+    fake.file_present[4] = false;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_ERR_FILESYSTEM);
+    CHECK(fake.install_calls == 4u && fake.marker_writes == 0u);
+
+    make_seed_catalog(&fake);
+    fake.marker_read_fails = true;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(fake.catalog_reads == 0u);
+
+    make_seed_catalog(&fake);
+    fake.marker_write_fails = true;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(fake.install_calls == 8u && fake.marker_writes == 1u);
+    fake.marker_write_fails = false;
+    CHECK(seed_import(&fake, false) == WATCHY_PACKAGE_OK);
+    CHECK(fake.marker_present && fake.install_calls == 8u);
+    return 0;
+}
+
 int main(void) {
     CHECK(test_package_id_accepts_only_bounded_lowercase_ascii() == 0);
     CHECK(test_package_digest_hashes_the_complete_wpk_with_zeroed_digest() == 0);
@@ -2697,7 +3000,12 @@ int main(void) {
     CHECK(test_install_transaction_reuses_one_buffer_and_rolls_back_nvs_failure() == 0);
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
+    CHECK(test_factory_seed_parser_accepts_only_the_fixed_canonical_wfs1_table() == 0);
+    CHECK(test_factory_seed_safe_mode_and_committed_marker_touch_no_seed_files() == 0);
+    CHECK(test_factory_seed_import_is_one_time_and_accepts_existing_packages() == 0);
+    CHECK(test_factory_seed_interruption_resumes_removed_installed_entries() == 0);
+    CHECK(test_factory_seed_rejects_digest_missing_file_and_marker_io_failures() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 51 package tests");
+    puts("PASS 56 package tests");
     return 0;
 }

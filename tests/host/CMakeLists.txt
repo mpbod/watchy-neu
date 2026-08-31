@@ -94,6 +94,7 @@ add_test(NAME watchy_hal_tests COMMAND watchy_hal_tests)
 
 add_executable(watchy_packages_tests
   test_packages.c
+  ../../components/watchy_packages/src/factory_seed_policy.c
   ../../components/watchy_packages/src/package_format.c
   ../../components/watchy_packages/src/elf_validate.c
   ../../components/watchy_packages/src/package_validate.c

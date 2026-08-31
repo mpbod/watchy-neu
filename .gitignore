@@ -1,5 +1,6 @@
 /build/
 /build-host/
+/factory_seed/
 /.pio/
 /samples/*/.pio/
 /samples/*/managed_components/

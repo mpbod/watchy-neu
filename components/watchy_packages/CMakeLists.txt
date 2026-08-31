@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "src/elf_validate.c"
+        "src/factory_seed_policy.c"
         "src/host_caps.c"
         "src/idf_runtime.c"
         "src/package_format.c"

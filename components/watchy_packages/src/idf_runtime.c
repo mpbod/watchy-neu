@@ -1,6 +1,7 @@
 #include "watchy/package_runtime.h"
 
 #include "watchy/display.h"
+#include "watchy/factory_seed.h"
 #include "watchy/package_host.h"
 #include "watchy/package_crypto.h"
 #include "watchy/storage.h"
@@ -32,6 +33,7 @@
 #define WATCHY_IDF_PATH_MAX 256u
 #define WATCHY_PACKAGE_NVS_NAMESPACE "watchy_pkg"
 #define WATCHY_PACKAGE_NVS_INDEX_KEY "index"
+#define WATCHY_PACKAGE_NVS_FACTORY_SEED_KEY "factory_seed"
 #define WATCHY_REMOVE_DEPTH_MAX (WATCHY_IDF_PATH_MAX / 2u)
 
 typedef struct {
@@ -68,6 +70,9 @@ static char s_remove_path[WATCHY_IDF_PATH_MAX];
 static watchy_package_runtime_init_state_t s_runtime_init_state;
 static atomic_flag s_init_lock = ATOMIC_FLAG_INIT;
 static atomic_flag s_upload_lock = ATOMIC_FLAG_INIT;
+static atomic_flag s_factory_seed_lock = ATOMIC_FLAG_INIT;
+static uint8_t s_factory_seed_catalog_wire[WATCHY_FACTORY_SEED_CATALOG_BYTES];
+static watchy_factory_seed_catalog_t s_factory_seed_catalog;
 
 typedef struct {
     int descriptor;
@@ -966,6 +971,190 @@ watchy_package_status_t watchy_packages_runtime_init(void) {
                                                 &s_runtime_init_ops);
     }
     runtime_init_unlock();
+    return status;
+}
+
+typedef struct {
+    const char *filename;
+    const char *package_ref;
+} factory_seed_identity_t;
+
+static const factory_seed_identity_t s_factory_seed_identities[WATCHY_FACTORY_SEED_COUNT] = {
+    {"grid-01.wpk", "watchy.firstparty.grid01@1.0.0"},
+    {"grid-02.wpk", "watchy.firstparty.grid02@1.0.0"},
+    {"grid-03.wpk", "watchy.firstparty.grid03@1.0.0"},
+    {"orbit.wpk", "watchy.firstparty.orbit@1.0.0"},
+    {"slab.wpk", "watchy.firstparty.slab@1.0.0"},
+    {"term-01.wpk", "watchy.firstparty.term01@1.0.0"},
+    {"term-02.wpk", "watchy.firstparty.term02@1.0.0"},
+    {"term-03.wpk", "watchy.firstparty.term03@1.0.0"},
+};
+
+static watchy_factory_seed_marker_result_t idf_factory_seed_read_marker(
+    void *context,
+    uint16_t *out_version) {
+    nvs_handle_t handle = 0u;
+    esp_err_t error;
+    (void)context;
+    if (out_version == NULL) {
+        return WATCHY_FACTORY_SEED_MARKER_ERROR;
+    }
+    error = nvs_open(WATCHY_PACKAGE_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (error == ESP_ERR_NVS_NOT_FOUND) return WATCHY_FACTORY_SEED_MARKER_NOT_FOUND;
+    if (error != ESP_OK) return WATCHY_FACTORY_SEED_MARKER_ERROR;
+    error = nvs_get_u16(handle, WATCHY_PACKAGE_NVS_FACTORY_SEED_KEY, out_version);
+    nvs_close(handle);
+    if (error == ESP_ERR_NVS_NOT_FOUND) return WATCHY_FACTORY_SEED_MARKER_NOT_FOUND;
+    return error == ESP_OK ? WATCHY_FACTORY_SEED_MARKER_FOUND
+                           : WATCHY_FACTORY_SEED_MARKER_ERROR;
+}
+
+static bool idf_factory_seed_write_marker(void *context, uint16_t version) {
+    nvs_handle_t handle = 0u;
+    esp_err_t error;
+    (void)context;
+    error = nvs_open(WATCHY_PACKAGE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (error == ESP_OK) {
+        error = nvs_set_u16(handle, WATCHY_PACKAGE_NVS_FACTORY_SEED_KEY, version);
+    }
+    if (error == ESP_OK) error = nvs_commit(handle);
+    if (handle != 0u) nvs_close(handle);
+    return error == ESP_OK;
+}
+
+static watchy_factory_seed_file_result_t idf_factory_seed_read_path(
+    const char *path,
+    uint8_t *bytes,
+    size_t capacity,
+    size_t *out_size) {
+    struct stat info;
+    if (path == NULL || bytes == NULL || out_size == NULL) {
+        return WATCHY_FACTORY_SEED_FILE_ERROR;
+    }
+    if (stat(path, &info) != 0) {
+        return errno == ENOENT ? WATCHY_FACTORY_SEED_FILE_NOT_FOUND
+                               : WATCHY_FACTORY_SEED_FILE_ERROR;
+    }
+    if (!S_ISREG(info.st_mode) || S_ISLNK(info.st_mode) || info.st_size <= 0 ||
+        (uintmax_t)info.st_size > capacity ||
+        !idf_read_file(NULL, path, bytes, capacity, out_size)) {
+        return WATCHY_FACTORY_SEED_FILE_ERROR;
+    }
+    return WATCHY_FACTORY_SEED_FILE_OK;
+}
+
+static watchy_factory_seed_file_result_t idf_factory_seed_read_catalog(
+    void *context,
+    uint8_t *bytes,
+    size_t capacity,
+    size_t *out_size) {
+    (void)context;
+    return idf_factory_seed_read_path("/data/factory/seed.bin", bytes, capacity, out_size);
+}
+
+static watchy_factory_seed_file_result_t idf_factory_seed_read_package(
+    void *context,
+    const char *filename,
+    uint8_t *bytes,
+    size_t capacity,
+    size_t *out_size) {
+    char path[WATCHY_IDF_PATH_MAX];
+    (void)context;
+    const int written = filename != NULL
+                            ? snprintf(path, sizeof(path), "/data/factory/%s", filename) : -1;
+    if (written < 0 || written >= (int)sizeof(path)) return WATCHY_FACTORY_SEED_FILE_ERROR;
+    return idf_factory_seed_read_path(path, bytes, capacity, out_size);
+}
+
+static bool idf_factory_seed_package_installed(void *context, const char *filename) {
+    bool installed = false;
+    (void)context;
+    if (xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) return false;
+    for (size_t index = 0u; index < WATCHY_FACTORY_SEED_COUNT; ++index) {
+        if (strcmp(filename, s_factory_seed_identities[index].filename) == 0) {
+            installed = watchy_package_is_installed(
+                &s_index, s_factory_seed_identities[index].package_ref, NULL);
+            break;
+        }
+    }
+    (void)xSemaphoreGive(s_package_mutex);
+    return installed;
+}
+
+static bool idf_factory_seed_sha256(void *context,
+                                    const uint8_t *bytes,
+                                    size_t size,
+                                    uint8_t out_digest[WATCHY_PACKAGE_DIGEST_SIZE]) {
+    const watchy_byte_region_t region = {.bytes = bytes, .size = size};
+    (void)context;
+    return watchy_package_sha256_regions(NULL, &region, 1u, out_digest);
+}
+
+static watchy_package_status_t idf_factory_seed_install(void *context,
+                                                        uint8_t *bytes,
+                                                        size_t size) {
+    char package_ref[WATCHY_PACKAGE_REF_MAX + 1u];
+    (void)context;
+    return watchy_packages_install_blob(bytes, size, package_ref);
+}
+
+static bool idf_factory_seed_remove(void *context, const char *filename) {
+    char path[WATCHY_IDF_PATH_MAX];
+    (void)context;
+    const int written = filename != NULL
+                            ? snprintf(path, sizeof(path), "/data/factory/%s", filename) : -1;
+    return written >= 0 && written < (int)sizeof(path) && unlink(path) == 0;
+}
+
+static bool idf_factory_seed_acquire_workspace(void *context,
+                                               uint8_t **out_bytes,
+                                               size_t *out_capacity) {
+    (void)context;
+    if (out_bytes == NULL || out_capacity == NULL) return false;
+    const size_t capabilities = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    const size_t free_internal = heap_caps_get_free_size(capabilities);
+    const size_t largest_internal = heap_caps_get_largest_free_block(capabilities);
+    if (!watchy_package_upload_heap_allows(WATCHY_PACKAGE_WPK_BYTES_MAX,
+                                           free_internal, largest_internal)) {
+        return false;
+    }
+    *out_bytes = heap_caps_malloc(WATCHY_PACKAGE_WPK_BYTES_MAX, capabilities);
+    if (*out_bytes == NULL) return false;
+    *out_capacity = WATCHY_PACKAGE_WPK_BYTES_MAX;
+    return true;
+}
+
+static void idf_factory_seed_release_workspace(void *context, uint8_t *bytes) {
+    (void)context;
+    free(bytes);
+}
+
+watchy_package_status_t watchy_packages_import_factory_seed(bool safe_mode) {
+    static const watchy_factory_seed_ops_t operations = {
+        .read_marker = idf_factory_seed_read_marker,
+        .write_marker = idf_factory_seed_write_marker,
+        .read_catalog = idf_factory_seed_read_catalog,
+        .read_package = idf_factory_seed_read_package,
+        .package_installed = idf_factory_seed_package_installed,
+        .sha256 = idf_factory_seed_sha256,
+        .install_package = idf_factory_seed_install,
+        .remove_package = idf_factory_seed_remove,
+        .acquire_workspace = idf_factory_seed_acquire_workspace,
+        .release_workspace = idf_factory_seed_release_workspace,
+        .context = NULL,
+    };
+    watchy_package_status_t status;
+    if (safe_mode) return WATCHY_PACKAGE_OK;
+    status = watchy_packages_runtime_init();
+    if (status != WATCHY_PACKAGE_OK) return status;
+    if (atomic_flag_test_and_set_explicit(&s_factory_seed_lock, memory_order_acquire)) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    status = watchy_factory_seed_import(false, &operations,
+                                        s_factory_seed_catalog_wire,
+                                        sizeof(s_factory_seed_catalog_wire),
+                                        &s_factory_seed_catalog);
+    atomic_flag_clear_explicit(&s_factory_seed_lock, memory_order_release);
     return status;
 }
 
