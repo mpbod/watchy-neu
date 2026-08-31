@@ -205,14 +205,26 @@ add_test(NAME watchy_ui_draw_tests COMMAND watchy_ui_draw_tests)
 add_executable(watchy_first_party_face_tests
   test_first_party_faces.cpp
   ../../first_party/watchfaces/common/src/face.cpp
+  ../../first_party/watchfaces/grid-01/main/renderer.cpp
+  ../../first_party/watchfaces/grid-01/main/package.cpp
+  ../../first_party/watchfaces/grid-02/main/renderer.cpp
+  ../../first_party/watchfaces/grid-02/main/package.cpp
+  ../../first_party/watchfaces/grid-03/main/renderer.cpp
+  ../../first_party/watchfaces/grid-03/main/package.cpp
 )
 target_include_directories(watchy_first_party_face_tests PRIVATE
   ../../first_party/watchfaces/common/include
   ../../sdk/include
   ../../components/watchy_packages/include
+  ../../sdk/ui/include
+  ../../sdk/ui/generated
 )
+watchy_package_add_ui_sources(watchy_first_party_face_tests)
 target_compile_features(watchy_first_party_face_tests PRIVATE cxx_std_17)
 target_compile_options(watchy_first_party_face_tests PRIVATE -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fno-threadsafe-statics)
+target_compile_definitions(watchy_first_party_face_tests PRIVATE WATCHY_HOST_TEST=1)
+target_compile_definitions(watchy_first_party_face_tests PRIVATE
+  WATCHY_FACE_GOLDEN_DIR="${CMAKE_CURRENT_LIST_DIR}/../golden/faces")
 add_test(NAME watchy_first_party_face_tests COMMAND watchy_first_party_face_tests)
 
 add_executable(watchy_elf_fixture_validator

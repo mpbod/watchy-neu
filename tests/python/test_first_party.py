@@ -50,7 +50,7 @@ class FirstPartyBuildMatrixTests(unittest.TestCase):
         import tools.build_first_party as builder
         output = io.StringIO()
         with contextlib.redirect_stderr(output):
-            result = builder.main(["--only", "grid-01"])
+            result = builder.main(["--only", "orbit"])
         self.assertNotEqual(result, 0)
         self.assertIn("renderer project is not present", output.getvalue())
 

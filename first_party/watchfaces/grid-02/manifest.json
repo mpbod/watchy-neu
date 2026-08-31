@@ -1,0 +1,11 @@
+{
+  "abi_major": 1,
+  "abi_minor": 2,
+  "assets": [],
+  "capabilities": 515,
+  "id": "watchy.firstparty.grid02",
+  "max_runtime_bytes": 49152,
+  "name": "Grid 02",
+  "type": "watchface",
+  "version": "1.0.0"
+}
