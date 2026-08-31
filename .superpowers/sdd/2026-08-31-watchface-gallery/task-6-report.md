@@ -71,7 +71,8 @@ exit 2; stderr: watchy-build: renderer project is not present: .../grid-01
 
 The fixture tests independently assert two clean/build rounds, real ELF
 discovery, audit/build/verify ordering, deterministic mismatch failure,
-complete-set preservation, and absence of `.staging`/`.work` debris. The
+complete-set preservation, first-rename fault safety, later-rename restore,
+and absence of `.staging`/`.work` debris. The
 existing package tests cover wrong architecture, wrong ELF type, undefined
 relocations, runtime limits, WPK limits, and atomic package writes.
 
@@ -89,7 +90,7 @@ not claimed.
 The active interpreter lacks the pinned font dependencies (`fontTools`), so
 the system-interpreter discovery run cannot execute the already-existing font
 suite. In a temporary venv populated from the pinned requirements, the full
-Python suite ran 41 tests successfully and `generate_fonts.py --check` was
+Python suite ran 43 tests successfully and `generate_fonts.py --check` was
 clean. The stale motion assertion was corrected with the approved label
 evidence above.
 
@@ -101,6 +102,8 @@ evidence above.
 - `a9c326b docs: record Task 6 rescue evidence`
 - `2c6ece2 docs: capture pinned Python verification`
 - `96a56b3 test: keep first-party runner injectable`
+- latest rescue commit: atomic promotion first-rename fault safety and
+  rollback regression coverage
 
 Remaining work is Tasks 7–9 renderer implementation and their real ESP-IDF
 build/audit evidence; this report intentionally does not claim those builds.

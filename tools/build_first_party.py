@@ -143,17 +143,19 @@ def _promote_complete_set(staging: Path, output: Path, expected: Sequence[dict])
     if backup.exists() or backup.is_symlink():
         _remove_tree(backup)
     had_output = output.exists() or output.is_symlink()
+    backup_rename_succeeded = False
+    staging_rename_succeeded = False
     try:
         if had_output:
             os.replace(output, backup)
+            backup_rename_succeeded = True
         os.replace(staging, output)
+        staging_rename_succeeded = True
     except OSError as error:
         try:
-            if output.exists() and not had_output:
+            if staging_rename_succeeded and output.exists():
                 _remove_tree(output)
-            elif output.exists() and had_output:
-                _remove_tree(output)
-            if had_output and backup.exists():
+            if backup_rename_succeeded and backup.exists():
                 os.replace(backup, output)
         except OSError as restore_error:
             raise BuilderError(f"atomic promotion failed ({error}); rollback failed ({restore_error})") from error

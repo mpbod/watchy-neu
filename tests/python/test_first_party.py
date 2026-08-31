@@ -142,6 +142,74 @@ class FirstPartyBuildMatrixTests(unittest.TestCase):
             self.assertFalse((root / ".published.staging").exists())
             self.assertFalse((root / ".published.work").exists())
 
+    def test_first_promotion_rename_failure_preserves_prior_tree_exactly(self):
+        import tools.build_first_party as builder
+        from tests.python.test_watchy_pkg import make_xtensa_so
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "first_party" / "watchfaces" / "grid-01"
+            (project / "assets").mkdir(parents=True)
+            (root / "tools").mkdir()
+            (root / "tools" / "watchy_pkg.py").write_bytes((ROOT / "tools" / "watchy_pkg.py").read_bytes())
+            published = root / "published"
+            (published / "nested").mkdir(parents=True)
+            (published / "prior.wpk").write_bytes(b"prior")
+            (published / "nested" / "catalog").write_bytes(b"catalog")
+            before = {path.relative_to(published).as_posix(): path.read_bytes()
+                      for path in published.rglob("*") if path.is_file()}
+
+            def fixture_runner(command, _cwd):
+                command = [str(item) for item in command]
+                if "idf.py" in " ".join(command):
+                    build_dir = Path(command[command.index("-B") + 1])
+                    build_dir.mkdir(parents=True, exist_ok=True)
+                    if command[-2] == "build":
+                        (build_dir / "real-name.so").write_bytes(make_xtensa_so())
+                elif len(command) > 2 and command[2] == "build":
+                    Path(command[command.index("--output") + 1]).write_bytes(b"verified-artifact")
+
+            with mock.patch.dict("os.environ", {"IDF_PATH": "/fixture-idf"}, clear=False):
+                with mock.patch.object(builder.os, "replace", side_effect=OSError("first rename failed")) as replace:
+                    with self.assertRaisesRegex(builder.BuilderError, "atomic promotion failed"):
+                        builder.build_faces(output_dir=published, only=("grid-01",),
+                                            reproducible=True, runner=fixture_runner, root=root)
+            self.assertEqual(replace.call_count, 1)
+            after = {path.relative_to(published).as_posix(): path.read_bytes()
+                     for path in published.rglob("*") if path.is_file()}
+            self.assertEqual(after, before)
+            self.assertFalse((root / ".published.staging").exists())
+            self.assertFalse((root / ".published.work").exists())
+            self.assertFalse(any("previous-" in path.name for path in root.iterdir()))
+
+    def test_second_promotion_rename_failure_restores_prior_tree(self):
+        import tools.build_first_party as builder
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staging = root / "staging"
+            published = root / "published"
+            staging.mkdir()
+            published.mkdir()
+            (staging / "grid-01.wpk").write_bytes(b"new")
+            (published / "grid-01.wpk").write_bytes(b"old")
+            real_replace = builder.os.replace
+            calls = []
+
+            def fail_second(source, destination):
+                calls.append((source, destination))
+                if len(calls) == 2:
+                    raise OSError("staging rename failed")
+                return real_replace(source, destination)
+
+            with mock.patch.object(builder.os, "replace", side_effect=fail_second):
+                with self.assertRaisesRegex(builder.BuilderError, "atomic promotion failed"):
+                    builder._promote_complete_set(
+                        staging, published, [{"output": "grid-01.wpk"}])
+            self.assertEqual((published / "grid-01.wpk").read_bytes(), b"old")
+            self.assertEqual(len(calls), 3)  # move old, fail new, restore old
+            self.assertFalse(any("previous-" in path.name for path in root.iterdir()))
+
     def test_manifest_is_canonical_and_builder_does_not_claim_missing_renderers(self):
         import tools.build_first_party as builder
         for face in builder.FACES:
