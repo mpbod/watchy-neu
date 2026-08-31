@@ -294,12 +294,22 @@ static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void
     watchy_shell_t shell;
 
     watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    CHECK(WATCHY_SHELL_LAUNCHER_ITEMS == 3u);
+    CHECK(WATCHY_SHELL_VISIBLE_ROWS == 3u);
     CHECK(shell.screen == WATCHY_SHELL_LAUNCHER);
     CHECK(shell.selection == 0u);
 
-    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
-    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
-    CHECK(shell.selection == 2u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_WATCHFACE_SELECTOR);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_LAUNCHER);
+
+    shell.selection = 1u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_PACKAGE_APPS);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+
+    shell.selection = 2u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
     CHECK(shell.selection == 0u);
@@ -307,9 +317,75 @@ static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
     CHECK(shell.screen == WATCHY_SHELL_LAUNCHER);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
-    CHECK(shell.selection == WATCHY_SHELL_LAUNCHER_ITEMS - 1u);
+    CHECK(shell.selection == 2u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
     CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    return 0;
+}
+
+static int test_settings_have_exact_order_routes_and_wrap(void) {
+    watchy_shell_t shell;
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.return_screen = WATCHY_SHELL_LAUNCHER;
+
+    shell.selection = 0u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 9u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u);
+
+    for (uint8_t selection = 0u; selection < 3u; ++selection) {
+        shell.screen = WATCHY_SHELL_SETTINGS;
+        shell.selection = selection;
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+        CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SAVE_SETTINGS);
+    }
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 3u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
+    CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 4u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_NTP_SYNC);
+    CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
+    CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SYNC_NTP);
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 5u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_CONNECTIVITY);
+    CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 6u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_PACKAGE_PORTAL);
+    CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 7u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SAVE_SETTINGS);
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 8u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_DIAGNOSTICS);
+    CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
+
+    shell.screen = WATCHY_SHELL_SETTINGS;
+    shell.selection = 9u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_ABOUT);
+    CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
     return 0;
 }
 
@@ -432,7 +508,10 @@ static int test_package_list_selects_an_installed_app_for_execution(void) {
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_PACKAGE_APPS);
     watchy_shell_set_package_catalog(&shell, &catalog, true);
-    CHECK(shell.package_count == 2u);
+    CHECK(shell.app_count == 2u);
+    CHECK(shell.face_count == 2u);
+    CHECK(shell.app_indices[0] == 1u && shell.app_indices[1] == 2u);
+    CHECK(shell.face_indices[0] == 0u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     size_t catalog_index = 0u;
     CHECK(watchy_shell_selected_package(&shell, &catalog_index));
@@ -452,8 +531,8 @@ static void populate_apps(watchy_package_catalog_t *catalog, size_t count) {
     }
 }
 
-static int test_app_launcher_pages_and_maps_zero_seven_eight_and_sixteen_apps(void) {
-    static const size_t counts[] = {0u, 7u, 8u, 16u};
+static int test_app_launcher_pages_and_maps_zero_three_four_and_sixteen_apps(void) {
+    static const size_t counts[] = {0u, 3u, 4u, 16u};
     watchy_shell_t shell;
     watchy_package_catalog_t catalog;
     for (size_t case_index = 0u; case_index < sizeof(counts) / sizeof(counts[0]); ++case_index) {
@@ -461,7 +540,7 @@ static int test_app_launcher_pages_and_maps_zero_seven_eight_and_sixteen_apps(vo
         watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
         watchy_shell_set_package_catalog(&shell, &catalog, true);
         shell.screen = WATCHY_SHELL_PACKAGE_APPS;
-        CHECK(shell.package_count == counts[case_index]);
+        CHECK(shell.app_count == counts[case_index]);
         CHECK(watchy_shell_package_page_start(&shell) == 0u);
         if (counts[case_index] == 0u) {
             CHECK(!watchy_shell_selected_package(&shell, NULL));
@@ -476,9 +555,202 @@ static int test_app_launcher_pages_and_maps_zero_seven_eight_and_sixteen_apps(vo
         CHECK(watchy_shell_selected_package(&shell, &catalog_index));
         CHECK(catalog_index == counts[case_index] - 1u);
         CHECK(watchy_shell_package_page_start(&shell) ==
-              ((counts[case_index] - 1u) / WATCHY_SHELL_PACKAGE_PAGE_ITEMS) *
-                  WATCHY_SHELL_PACKAGE_PAGE_ITEMS);
+              ((counts[case_index] - 1u) / WATCHY_SHELL_VISIBLE_ROWS) *
+                  WATCHY_SHELL_VISIBLE_ROWS);
     }
+    return 0;
+}
+
+static void populate_faces(watchy_package_catalog_t *catalog, size_t count) {
+    memset(catalog, 0, sizeof(*catalog));
+    catalog->count = count;
+    const size_t bounded = count < WATCHY_PACKAGE_INSTALLED_MAX
+                               ? count : WATCHY_PACKAGE_INSTALLED_MAX;
+    for (size_t index = 0u; index < bounded; ++index) {
+        snprintf(catalog->packages[index].package_ref,
+                 sizeof(catalog->packages[index].package_ref),
+                 "face.%02u@1", (unsigned)index);
+        snprintf(catalog->packages[index].name,
+                 sizeof(catalog->packages[index].name),
+                 "Face %02u", (unsigned)index);
+        strcpy(catalog->packages[index].version, "1.0.0");
+        catalog->packages[index].type = WATCHY_PACKAGE_TYPE_WATCHFACE;
+    }
+}
+
+static int test_catalog_builds_independent_bounded_maps_and_clears_stale_rows(void) {
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog = {0};
+
+    catalog.count = 6u;
+    for (size_t index = 0u; index < catalog.count; ++index) {
+        snprintf(catalog.packages[index].package_ref,
+                 sizeof(catalog.packages[index].package_ref),
+                 "pkg.%02u@1", (unsigned)index);
+        catalog.packages[index].type = (index & 1u) == 0u
+                                           ? WATCHY_PACKAGE_TYPE_WATCHFACE
+                                           : WATCHY_PACKAGE_TYPE_APP;
+    }
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    CHECK(shell.app_count == 3u && shell.face_count == 4u);
+    CHECK(shell.app_indices[0] == 1u && shell.app_indices[1] == 3u &&
+          shell.app_indices[2] == 5u);
+    CHECK(shell.face_indices[0] == 0u && shell.face_indices[1] == 2u &&
+          shell.face_indices[2] == 4u);
+
+    for (size_t index = 0u; index < WATCHY_PACKAGE_INSTALLED_MAX; ++index) {
+        snprintf(catalog.packages[index].package_ref,
+                 sizeof(catalog.packages[index].package_ref),
+                 "overflow.%02u@1", (unsigned)index);
+        catalog.packages[index].type = (index & 1u) == 0u
+                                           ? WATCHY_PACKAGE_TYPE_WATCHFACE
+                                           : WATCHY_PACKAGE_TYPE_APP;
+    }
+    catalog.count = SIZE_MAX;
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    CHECK(shell.app_count == WATCHY_PACKAGE_INSTALLED_MAX / 2u);
+    CHECK(shell.face_count == WATCHY_PACKAGE_INSTALLED_MAX / 2u + 1u);
+    CHECK(shell.recovery_count == WATCHY_PACKAGE_INSTALLED_MAX);
+    CHECK(shell.app_indices[shell.app_count - 1u] == WATCHY_PACKAGE_INSTALLED_MAX - 1u);
+    CHECK(shell.face_indices[shell.face_count - 2u] == WATCHY_PACKAGE_INSTALLED_MAX - 2u);
+
+    watchy_shell_set_package_catalog(&shell, NULL, false);
+    CHECK(!shell.package_index_readable);
+    CHECK(shell.app_count == 0u && shell.face_count == 1u && shell.recovery_count == 0u);
+    CHECK(!watchy_shell_selected_package(&shell, NULL));
+
+    watchy_shell_set_package_catalog(&shell, &catalog, false);
+    CHECK(shell.app_count == 0u && shell.face_count == 1u && shell.recovery_count == 0u);
+    return 0;
+}
+
+static int test_selector_handles_sizes_pages_wrap_and_healthy_active_cursor(void) {
+    static const size_t wpk_counts[] = {0u, 1u, 3u, 4u, WATCHY_PACKAGE_INSTALLED_MAX};
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+
+    for (size_t case_index = 0u;
+         case_index < sizeof(wpk_counts) / sizeof(wpk_counts[0]); ++case_index) {
+        populate_faces(&catalog, wpk_counts[case_index]);
+        watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+        watchy_shell_set_package_catalog(&shell, &catalog, true);
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+        CHECK(shell.screen == WATCHY_SHELL_WATCHFACE_SELECTOR);
+        CHECK(shell.face_count == wpk_counts[case_index] + 1u);
+        CHECK(shell.selection == 0u);
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+        CHECK(shell.selection == shell.face_count - 1u);
+        CHECK(watchy_shell_watchface_page_start(&shell) ==
+              ((shell.face_count - 1u) / WATCHY_SHELL_VISIBLE_ROWS) *
+                  WATCHY_SHELL_VISIBLE_ROWS);
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+        CHECK(shell.selection == 0u);
+    }
+
+    populate_faces(&catalog, 4u);
+    catalog.packages[2].active = true;
+    catalog.packages[3].pending = true;
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.selection == 3u);
+    size_t catalog_index = SIZE_MAX;
+    CHECK(watchy_shell_selected_watchface(&shell, &catalog_index));
+    CHECK(catalog_index == 2u);
+
+    catalog.packages[2].quarantined = true;
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    CHECK(shell.face_count == 5u);
+    CHECK(shell.selection == 0u);
+    catalog.packages[2].active = false;
+    catalog.packages[3].pending = true;
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    CHECK(shell.selection == 0u);
+    return 0;
+}
+
+static int test_selector_actions_are_copied_one_shot_and_back_cancels(void) {
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+    watchy_shell_action_request_t request;
+
+    populate_faces(&catalog, 2u);
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_LAUNCHER);
+    CHECK(!watchy_shell_take_action_request(&shell, &request));
+
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    CHECK(watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_SELECT_BUILTIN);
+    CHECK(!request.has_package);
+    CHECK(!watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_NONE);
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    strcpy(catalog.packages[1].package_ref, "caller.mutated@9");
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    shell.selection = 2u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    watchy_shell_set_package_catalog(&shell, NULL, false);
+    CHECK(watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE);
+    CHECK(request.has_package);
+    CHECK(request.catalog_index == 1u);
+    CHECK(strcmp(request.package_ref, "face.01@1") == 0);
+    CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_NONE);
+    return 0;
+}
+
+static int test_quarantined_faces_stay_visible_but_cannot_activate(void) {
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+    watchy_shell_action_request_t request;
+    size_t catalog_index = SIZE_MAX;
+
+    populate_faces(&catalog, 1u);
+    catalog.packages[0].quarantined = true;
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.face_count == 2u);
+    shell.selection = 1u;
+    CHECK(watchy_shell_selected_watchface(&shell, &catalog_index));
+    CHECK(catalog_index == 0u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_ERROR);
+    CHECK(shell.error == WATCHY_SHELL_ERROR_PACKAGE);
+    CHECK(!watchy_shell_take_action_request(&shell, &request));
+    return 0;
+}
+
+static int test_safe_mode_selector_exposes_only_hairline_and_never_selects_wpk(void) {
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+    watchy_shell_action_request_t request;
+
+    populate_faces(&catalog, 4u);
+    watchy_shell_begin(&shell, WATCHY_WAKE_COLD, true, true, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    CHECK(shell.app_count == 0u);
+    CHECK(shell.face_count == 1u);
+    CHECK(shell.recovery_count == 4u);
+    shell.screen = WATCHY_SHELL_WATCHFACE_SELECTOR;
+    shell.return_screen = WATCHY_SHELL_SAFE_MODE;
+    shell.selection = 0u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_SELECT_BUILTIN);
+    CHECK(request.action != WATCHY_SHELL_ACTION_SELECT_WATCHFACE);
     return 0;
 }
 
@@ -632,13 +904,19 @@ int main(void) {
     failures += test_erased_settings_can_be_provisioned_and_reused_after_reload();
     failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();
     failures += test_button_wake_enters_launcher_and_navigation_is_deterministic();
+    failures += test_settings_have_exact_order_routes_and_wrap();
     failures += test_safe_mode_cold_boot_bypasses_normal_routes();
     failures += test_invalid_rtc_routes_to_manual_recovery_and_timer_safe_mode_is_low_duty();
     failures += test_wake_and_idle_policy_return_to_builtin_watchface_before_sleep();
     failures += test_failed_package_render_keeps_builtin_watchface_with_warning();
     failures += test_manual_time_editor_and_portal_modes_require_explicit_selection();
     failures += test_package_list_selects_an_installed_app_for_execution();
-    failures += test_app_launcher_pages_and_maps_zero_seven_eight_and_sixteen_apps();
+    failures += test_app_launcher_pages_and_maps_zero_three_four_and_sixteen_apps();
+    failures += test_catalog_builds_independent_bounded_maps_and_clears_stale_rows();
+    failures += test_selector_handles_sizes_pages_wrap_and_healthy_active_cursor();
+    failures += test_selector_actions_are_copied_one_shot_and_back_cancels();
+    failures += test_quarantined_faces_stay_visible_but_cannot_activate();
+    failures += test_safe_mode_selector_exposes_only_hairline_and_never_selects_wpk();
     failures += test_package_labels_are_bounded_and_disambiguated();
     failures += test_safe_mode_uses_readable_metadata_for_individual_removal();
     failures += test_all_operation_failures_enter_a_bounded_safe_error_screen();
