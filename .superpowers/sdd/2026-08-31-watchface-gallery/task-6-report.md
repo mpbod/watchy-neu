@@ -76,9 +76,11 @@ existing package tests cover wrong architecture, wrong ELF type, undefined
 relocations, runtime limits, WPK limits, and atomic package writes.
 
 The active interpreter lacks the pinned font dependencies (`fontTools`), so
-the full Python discovery run cannot execute the already-existing font suite.
-The stale motion assertion was corrected with the approved label evidence
-above; the non-font Python tests pass.
+the system-interpreter discovery run cannot execute the already-existing font
+suite. In a temporary venv populated from the pinned requirements, the full
+Python suite ran 41 tests successfully and `generate_fonts.py --check` was
+clean. The stale motion assertion was corrected with the approved label
+evidence above.
 
 ## Commits
 
