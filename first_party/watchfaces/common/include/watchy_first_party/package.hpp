@@ -34,7 +34,9 @@ inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept {
 inline face_context &state() noexcept { static face_context value{nullptr, false}; return value; }
 
 inline watchy_status_t load(const watchy_host_caps_v1_t *caps, void **user_data) noexcept {
-    if (caps == nullptr || user_data == nullptr) return WATCHY_STATUS_INVALID_ARGUMENT;
+    if (user_data == nullptr) return WATCHY_STATUS_INVALID_ARGUMENT;
+    *user_data = nullptr;
+    if (caps == nullptr) return WATCHY_STATUS_INVALID_ARGUMENT;
     if (state().loaded) return WATCHY_STATUS_INVALID_STATE;
     state().host = caps;
     state().loaded = true;
@@ -46,7 +48,10 @@ inline void unload(void *user_data) noexcept {
     state().host = nullptr;
     state().loaded = false;
 }
-inline watchy_status_t start(void *) noexcept { return WATCHY_STATUS_OK; }
+inline watchy_status_t start(void *user_data) noexcept {
+    return user_data == &state() && state().loaded ? WATCHY_STATUS_OK
+                                                    : WATCHY_STATUS_INVALID_STATE;
+}
 inline void stop(void *) noexcept {}
 inline watchy_status_t event(void *, const watchy_event_t *) noexcept { return WATCHY_STATUS_OK; }
 
