@@ -1240,6 +1240,7 @@ static int test_complete_wpk_validation_rejects_unsorted_assets(void) {
 typedef struct {
     watchy_package_index_t persisted;
     bool present;
+    bool fail_load;
     bool fail_save;
     size_t save_calls;
 } fake_index_store_t;
@@ -1247,6 +1248,9 @@ typedef struct {
 static watchy_index_store_result_t fake_index_load(void *context,
                                                    watchy_package_index_t *out_index) {
     fake_index_store_t *store = (fake_index_store_t *)context;
+    if (store->fail_load) {
+        return WATCHY_INDEX_STORE_ERROR;
+    }
     if (!store->present) {
         return WATCHY_INDEX_STORE_NOT_FOUND;
     }
@@ -1271,6 +1275,168 @@ static watchy_package_index_store_t fake_store_api(fake_index_store_t *store) {
         .save = fake_index_save,
         .context = store,
     };
+}
+
+typedef enum {
+    RUNTIME_STORAGE_VALID = 0,
+    RUNTIME_STORAGE_MALFORMED_ELF,
+    RUNTIME_STORAGE_MISSING_ELF,
+    RUNTIME_STORAGE_FILESYSTEM_FAILURE,
+} runtime_storage_fixture_t;
+
+typedef struct {
+    fake_index_store_t store;
+    watchy_package_index_manager_t manager;
+    size_t initialize_calls;
+    size_t reconcile_calls;
+    size_t select_calls;
+    size_t package_so_open_calls;
+    size_t package_so_read_calls;
+    size_t package_so_validate_calls;
+    size_t package_delete_calls;
+    runtime_storage_fixture_t storage_fixture;
+} runtime_init_probe_t;
+
+static watchy_package_status_t runtime_probe_initialize_index(void *context) {
+    runtime_init_probe_t *probe = (runtime_init_probe_t *)context;
+    watchy_package_index_store_t store = fake_store_api(&probe->store);
+    ++probe->initialize_calls;
+    return watchy_package_index_init(&probe->manager, &store);
+}
+
+static watchy_package_status_t runtime_probe_reconcile_storage(void *context) {
+    runtime_init_probe_t *probe = (runtime_init_probe_t *)context;
+    ++probe->reconcile_calls;
+    ++probe->package_so_open_calls;
+    ++probe->package_so_read_calls;
+    ++probe->package_so_validate_calls;
+    ++probe->package_delete_calls;
+    switch (probe->storage_fixture) {
+        case RUNTIME_STORAGE_MALFORMED_ELF:
+            return WATCHY_PACKAGE_ERR_ELF;
+        case RUNTIME_STORAGE_MISSING_ELF:
+        case RUNTIME_STORAGE_FILESYSTEM_FAILURE:
+            return WATCHY_PACKAGE_ERR_FILESYSTEM;
+        default:
+            return WATCHY_PACKAGE_OK;
+    }
+}
+
+static watchy_package_status_t runtime_probe_select_builtin(void *context) {
+    runtime_init_probe_t *probe = (runtime_init_probe_t *)context;
+    ++probe->select_calls;
+    return watchy_package_select_builtin(&probe->manager);
+}
+
+static watchy_package_runtime_init_ops_t runtime_probe_ops(runtime_init_probe_t *probe) {
+    return (watchy_package_runtime_init_ops_t){
+        .initialize_index = runtime_probe_initialize_index,
+        .reconcile_storage = runtime_probe_reconcile_storage,
+        .select_builtin = runtime_probe_select_builtin,
+        .context = probe,
+    };
+}
+
+static void initialize_probe_with_selected_watchface(runtime_init_probe_t *probe) {
+    memset(probe, 0, sizeof(*probe));
+    probe->store.present = true;
+    probe->store.persisted.magic = WATCHY_PACKAGE_INDEX_MAGIC;
+    probe->store.persisted.version = WATCHY_PACKAGE_INDEX_VERSION;
+    probe->store.persisted.installed_count = 1u;
+    strcpy(probe->store.persisted.installed[0], "broken.face@1");
+    probe->store.persisted.installed_types[0] = WATCHY_PACKAGE_TYPE_WATCHFACE;
+    strcpy(probe->store.persisted.active_watchface, "broken.face@1");
+}
+
+static int test_cold_builtin_init_never_reconciles_or_touches_package_files(void) {
+    static const runtime_storage_fixture_t inaccessible_package_fixtures[] = {
+        RUNTIME_STORAGE_MALFORMED_ELF,
+        RUNTIME_STORAGE_MISSING_ELF,
+        RUNTIME_STORAGE_FILESYSTEM_FAILURE,
+    };
+    runtime_init_probe_t probe;
+    watchy_package_runtime_init_state_t state = {0};
+    watchy_package_runtime_init_ops_t ops;
+
+    for (size_t fixture = 0u;
+         fixture < sizeof(inaccessible_package_fixtures) /
+                       sizeof(inaccessible_package_fixtures[0]);
+         ++fixture) {
+        initialize_probe_with_selected_watchface(&probe);
+        probe.storage_fixture = inaccessible_package_fixtures[fixture];
+        state = (watchy_package_runtime_init_state_t){0};
+        ops = runtime_probe_ops(&probe);
+        CHECK(watchy_package_runtime_select_builtin(&state, &ops) == WATCHY_PACKAGE_OK);
+        CHECK(state.index_ready && !state.storage_reconciled);
+        CHECK(probe.initialize_calls == 1u && probe.select_calls == 1u);
+        CHECK(probe.reconcile_calls == 0u);
+        CHECK(probe.package_so_open_calls == 0u && probe.package_so_read_calls == 0u);
+        CHECK(probe.package_so_validate_calls == 0u && probe.package_delete_calls == 0u);
+    }
+
+    initialize_probe_with_selected_watchface(&probe);
+    probe.storage_fixture = RUNTIME_STORAGE_FILESYSTEM_FAILURE;
+    state = (watchy_package_runtime_init_state_t){0};
+    ops = runtime_probe_ops(&probe);
+
+    CHECK(watchy_package_runtime_select_builtin(&state, &ops) == WATCHY_PACKAGE_OK);
+    CHECK(state.index_ready && !state.storage_reconciled);
+    CHECK(probe.initialize_calls == 1u && probe.select_calls == 1u);
+    CHECK(probe.reconcile_calls == 0u);
+    CHECK(probe.package_so_open_calls == 0u && probe.package_so_read_calls == 0u);
+    CHECK(probe.package_so_validate_calls == 0u && probe.package_delete_calls == 0u);
+    CHECK(watchy_package_index_snapshot(&probe.manager)->active_watchface[0] == '\0');
+
+    CHECK(watchy_package_runtime_select_builtin(&state, &ops) == WATCHY_PACKAGE_OK);
+    CHECK(probe.initialize_calls == 1u && probe.select_calls == 2u);
+    CHECK(probe.reconcile_calls == 0u);
+
+    CHECK(watchy_package_runtime_prepare(&state, WATCHY_PACKAGE_INIT_FULL, &ops) ==
+          WATCHY_PACKAGE_ERR_FILESYSTEM);
+    CHECK(state.index_ready && !state.storage_reconciled);
+    CHECK(probe.reconcile_calls == 1u);
+    CHECK(probe.package_so_open_calls == 1u && probe.package_so_read_calls == 1u);
+    CHECK(probe.package_so_validate_calls == 1u && probe.package_delete_calls == 1u);
+
+    probe.storage_fixture = RUNTIME_STORAGE_VALID;
+    CHECK(watchy_package_runtime_prepare(&state, WATCHY_PACKAGE_INIT_FULL, &ops) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(state.index_ready && state.storage_reconciled);
+    CHECK(probe.initialize_calls == 1u && probe.reconcile_calls == 2u);
+    CHECK(watchy_package_runtime_prepare(&state, WATCHY_PACKAGE_INIT_FULL, &ops) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(probe.initialize_calls == 1u && probe.reconcile_calls == 2u);
+    return 0;
+}
+
+static int test_builtin_init_propagates_index_and_commit_failures_precisely(void) {
+    runtime_init_probe_t probe;
+    watchy_package_runtime_init_state_t state = {0};
+    watchy_package_runtime_init_ops_t ops;
+
+    initialize_probe_with_selected_watchface(&probe);
+    probe.store.fail_load = true;
+    ops = runtime_probe_ops(&probe);
+    CHECK(watchy_package_runtime_select_builtin(&state, &ops) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(!state.index_ready && !state.storage_reconciled);
+    CHECK(probe.initialize_calls == 1u && probe.select_calls == 0u &&
+          probe.reconcile_calls == 0u);
+
+    probe.store.fail_load = false;
+    probe.store.fail_save = true;
+    CHECK(watchy_package_runtime_select_builtin(&state, &ops) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(state.index_ready && !state.storage_reconciled);
+    CHECK(probe.initialize_calls == 2u && probe.select_calls == 1u &&
+          probe.reconcile_calls == 0u);
+    CHECK(strcmp(watchy_package_index_snapshot(&probe.manager)->active_watchface,
+                 "broken.face@1") == 0);
+
+    probe.store.fail_save = false;
+    CHECK(watchy_package_runtime_select_builtin(&state, &ops) == WATCHY_PACKAGE_OK);
+    CHECK(probe.initialize_calls == 2u && probe.select_calls == 2u &&
+          probe.reconcile_calls == 0u);
+    CHECK(watchy_package_index_snapshot(&probe.manager)->active_watchface[0] == '\0');
+    return 0;
 }
 
 static void clear_watchface_selection(watchy_package_index_t *index) {
@@ -2511,6 +2677,8 @@ int main(void) {
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
     CHECK(test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data() == 0);
     CHECK(test_complete_wpk_validation_rejects_unsorted_assets() == 0);
+    CHECK(test_cold_builtin_init_never_reconciles_or_touches_package_files() == 0);
+    CHECK(test_builtin_init_propagates_index_and_commit_failures_precisely() == 0);
     CHECK(test_builtin_selection_clears_only_watchface_state_atomically() == 0);
     CHECK(test_catalog_snapshot_exposes_validated_metadata_in_index_order() == 0);
     CHECK(test_catalog_snapshot_accepts_exact_metadata_bounds() == 0);
@@ -2530,6 +2698,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 49 package tests");
+    puts("PASS 51 package tests");
     return 0;
 }

@@ -5,6 +5,46 @@
 #include <stdio.h>
 #include <string.h>
 
+watchy_package_status_t watchy_package_runtime_prepare(
+    watchy_package_runtime_init_state_t *state,
+    watchy_package_runtime_init_mode_t mode,
+    const watchy_package_runtime_init_ops_t *operations) {
+    watchy_package_status_t status;
+    if (state == NULL || operations == NULL || operations->initialize_index == NULL ||
+        (mode != WATCHY_PACKAGE_INIT_INDEX_ONLY && mode != WATCHY_PACKAGE_INIT_FULL) ||
+        (mode == WATCHY_PACKAGE_INIT_FULL && operations->reconcile_storage == NULL)) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    if (!state->index_ready) {
+        status = operations->initialize_index(operations->context);
+        if (status != WATCHY_PACKAGE_OK) {
+            return status;
+        }
+        state->index_ready = true;
+    }
+    if (mode == WATCHY_PACKAGE_INIT_INDEX_ONLY || state->storage_reconciled) {
+        return WATCHY_PACKAGE_OK;
+    }
+    status = operations->reconcile_storage(operations->context);
+    if (status == WATCHY_PACKAGE_OK) {
+        state->storage_reconciled = true;
+    }
+    return status;
+}
+
+watchy_package_status_t watchy_package_runtime_select_builtin(
+    watchy_package_runtime_init_state_t *state,
+    const watchy_package_runtime_init_ops_t *operations) {
+    watchy_package_status_t status;
+    if (operations == NULL || operations->select_builtin == NULL) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    status = watchy_package_runtime_prepare(state, WATCHY_PACKAGE_INIT_INDEX_ONLY,
+                                             operations);
+    return status == WATCHY_PACKAGE_OK
+               ? operations->select_builtin(operations->context) : status;
+}
+
 bool watchy_package_transaction_name_valid(const char *name) {
     static const char hex[] = "0123456789abcdef";
     const size_t prefix_size = sizeof(WATCHY_PACKAGE_TRANSACTION_PREFIX) - 1u;

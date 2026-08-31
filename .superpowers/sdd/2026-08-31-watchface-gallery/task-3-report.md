@@ -96,3 +96,81 @@ git diff --check
 ```
 
 Result: clean.
+
+## Fix Round 1
+
+### Review finding and RED evidence
+
+The original IDF facade called `watchy_packages_runtime_init()` before clearing
+the package watchface selection. On a cold boot that initializer reconciled
+package storage, including opening, reading, validating, and potentially
+deleting an installed `package.so`. A malformed or unavailable package could
+therefore prevent selecting built-in Hairline.
+
+Host tests were added first for a two-phase initialization seam. They require
+cold built-in selection to initialize and persist only the index, while
+malformed-ELF, missing-ELF, and package-filesystem-failure fixtures observe
+zero reconcile, open, read, validate, and delete calls. They also require a
+later full initialization to reconcile exactly once after success, retry after
+failure, avoid repeated initialization, and precisely propagate index-load and
+index-save failures.
+
+Command:
+
+```text
+export PATH="/Users/maxb/.platformio/packages/tool-cmake/bin:/Users/maxb/.platformio/packages/tool-ninja:$PATH"
+cmake --build build/host --target watchy_packages_tests
+```
+
+Expected result observed: exit 1 with 20 compiler errors for the absent
+`watchy_package_runtime_init_ops_t`,
+`watchy_package_runtime_init_state_t`, `watchy_package_runtime_prepare`, and
+`watchy_package_runtime_select_builtin` seam.
+
+### GREEN implementation and evidence
+
+- Split runtime readiness into `index_ready` and `storage_reconciled` phases.
+  Failed index initialization or storage reconciliation remains retryable, and
+  a successful full initialization reconciles only once.
+- Made the IDF built-in facade acquire the init lock, ensure the package mutex,
+  initialize only NVS/index state, and atomically clear/persist the selection
+  under the package mutex. It does not enter storage reconciliation.
+- Standardized ordering as init lock followed by package mutex for full init,
+  built-in selection, and safe-mode purge. This serializes cold built-in/full
+  init races without deadlocking or corrupting the two-phase state.
+- Preserved exact NVS/index and selection-commit errors. A failed commit leaves
+  the active selection unchanged and can be retried without reinitializing the
+  index.
+
+Focused and full host commands:
+
+```text
+cmake --build build/host
+./build/host/tests/host/watchy_packages_tests
+./build/host/tests/host/watchy_portal_tests
+ctest --test-dir build/host --output-on-failure
+```
+
+Result: `PASS 51 package tests`; `portal tests passed`; 10/10 CTest targets
+passed. Failure injection covered malformed and missing ELF fixtures, package
+filesystem failure, index-load failure, selection-save failure, failed full
+reconciliation followed by retry, and repeated successful initialization.
+
+Firmware warning build:
+
+```text
+platformio run -e watchy_v2
+```
+
+Result: success under `-Wall -Wextra -Werror` and
+`-Wframe-larger-than=2048`; firmware uses 1,340,323 of 1,835,008 bytes. Stack
+usage is 32 bytes for each new/refactored init-policy callback, policy entry
+point, IDF init/built-in facade, and safe-mode purge frame.
+
+Whitespace verification:
+
+```text
+git diff --check
+```
+
+Result: clean.

@@ -31,6 +31,23 @@ typedef watchy_package_status_t (*watchy_package_manifest_reader_fn_t)(
     const char *package_ref,
     watchy_package_manifest_t *out_manifest);
 
+typedef enum {
+    WATCHY_PACKAGE_INIT_INDEX_ONLY = 0,
+    WATCHY_PACKAGE_INIT_FULL = 1,
+} watchy_package_runtime_init_mode_t;
+
+typedef struct {
+    bool index_ready;
+    bool storage_reconciled;
+} watchy_package_runtime_init_state_t;
+
+typedef struct {
+    watchy_package_status_t (*initialize_index)(void *context);
+    watchy_package_status_t (*reconcile_storage)(void *context);
+    watchy_package_status_t (*select_builtin)(void *context);
+    void *context;
+} watchy_package_runtime_init_ops_t;
+
 typedef struct {
     watchy_package_status_t (*start)(void *context);
     bool (*active)(void *context);
@@ -51,6 +68,13 @@ bool watchy_package_run_watchface_cycle(const watchy_package_watchface_runner_t 
 watchy_package_status_t watchy_package_dispatch_app_button(
     const watchy_package_app_runner_t *runner,
     watchy_button_t button);
+watchy_package_status_t watchy_package_runtime_prepare(
+    watchy_package_runtime_init_state_t *state,
+    watchy_package_runtime_init_mode_t mode,
+    const watchy_package_runtime_init_ops_t *operations);
+watchy_package_status_t watchy_package_runtime_select_builtin(
+    watchy_package_runtime_init_state_t *state,
+    const watchy_package_runtime_init_ops_t *operations);
 
 watchy_package_status_t watchy_packages_runtime_init(void);
 bool watchy_packages_run_watchface(bool safe_mode);
