@@ -324,12 +324,33 @@ static int test_hairline(void) {
     return 0;
 }
 
+static int test_hairline_date_uses_legible_strike_without_clipping(void) {
+    uint8_t actual[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_canvas_t actual_canvas = canvas(actual);
+    watchy_canvas_t expected_canvas = canvas(expected);
+    watchy_settings_t settings = {.time_24h = true};
+    watchy_time_t time = now();
+    watchy_shell_t shell = {.screen = WATCHY_SHELL_WATCHFACE};
+    const watchy_text_style_t date = {
+        &watchy_font_plex_13_semibold, 1, true, false,
+    };
+
+    draw(&actual_canvas, &shell, &settings, &time, NULL, NULL, NULL, NULL);
+    watchy_ui_draw_text_centered(&expected_canvas, 100, 179, "31 AUG", &date);
+
+    CHECK(same_region(actual, expected, 0, 151, 199, 196));
+    CHECK(centered_text_ink_fits(&date, "31 AUG", 100, 179,
+                                 0, 151, 199, 196));
+    return 0;
+}
+
 static int test_larger_typography_fits_shell_regions(void) {
     const watchy_text_style_t header = {&watchy_font_plex_10_semibold, 1, true, false};
     const watchy_text_style_t primary = {&watchy_font_heros_20_bold, 0, true, false};
     const watchy_text_style_t secondary = {&watchy_font_plex_10_semibold, 1, true, false};
     const watchy_text_style_t clock = {&watchy_font_heros_46_regular, 0, true, false};
-    const watchy_text_style_t date = {&watchy_font_plex_10_semibold, 1, true, false};
+    const watchy_text_style_t date = {&watchy_font_plex_13_semibold, 1, true, false};
     const watchy_text_style_t compact = {&watchy_font_heros_15_bold, 0, true, false};
 
     CHECK(header.font->px == 10u && primary.font->px == 20u &&
@@ -342,7 +363,7 @@ static int test_larger_typography_fits_shell_regions(void) {
                         0, 25, 186, 79));
     CHECK(centered_text_ink_fits(&clock, "12:34", 100, 94,
                                  0, 25, 199, 150));
-    CHECK(centered_text_ink_fits(&date, "31 AUG", 100, 176,
+    CHECK(centered_text_ink_fits(&date, "31 AUG", 100, 179,
                                  0, 151, 199, 196));
     CHECK(text_ink_fits(compact.font, compact.tracking, "REMOVE PACKAGE", 9, 157,
                         0, 139, 199, 166));
@@ -466,6 +487,7 @@ int main(int argc, char **argv) {
     CHECK(test_selector() == 0);
     CHECK(test_settings() == 0);
     CHECK(test_hairline() == 0);
+    CHECK(test_hairline_date_uses_legible_strike_without_clipping() == 0);
     CHECK(test_larger_typography_fits_shell_regions() == 0);
     CHECK(test_legacy_and_guards() == 0);
     CHECK(test_apps_filter_and_page() == 0);

@@ -317,8 +317,8 @@ static void render_hairline(watchy_canvas_t *canvas,
                                  STYLE(&watchy_font_heros_46_regular, 0, true, false));
     if (month < 1u || month > 12u) month = 1u;
     snprintf(value, sizeof(value), "%02u %s", day, months[month - 1u]);
-    watchy_ui_draw_text_centered(canvas, 100, 176, value,
-                                 STYLE(&watchy_font_plex_10_semibold, 1, true, false));
+    watchy_ui_draw_text_centered(canvas, 100, 179, value,
+                                 STYLE(&watchy_font_plex_13_semibold, 1, true, false));
     unsigned percent = battery == NULL ? 0u : battery->percent;
     if (percent > 100u) percent = 0u;
     unsigned width = (percent * PANEL_WIDTH + 50u) / 100u;
