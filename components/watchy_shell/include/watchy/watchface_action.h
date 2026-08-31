@@ -50,6 +50,26 @@ typedef struct {
     bool settings_save_failed;
 } watchy_watchface_catalog_mutation_result_t;
 
+typedef struct {
+    watchy_status_t (*stop_portal)(void *context);
+    watchy_status_t (*load_settings)(void *context,
+                                     watchy_settings_t *out_settings);
+    watchy_package_status_t (*snapshot)(void *context,
+                                        watchy_package_catalog_t *out_catalog);
+    watchy_status_t (*save_settings)(void *context,
+                                     const watchy_settings_t *settings);
+    void *context;
+} watchy_watchface_portal_exit_ops_t;
+
+typedef struct {
+    bool settings_reloaded;
+    bool catalog_refreshed;
+    watchy_shell_error_t error;
+} watchy_watchface_portal_exit_result_t;
+
+typedef bool (*watchy_package_app_run_fn_t)(void *context,
+                                            const char *package_ref);
+
 watchy_status_t watchy_watchface_reconcile_settings(
     watchy_settings_t *settings,
     const watchy_package_catalog_t *catalog,
@@ -72,6 +92,19 @@ watchy_status_t watchy_watchface_reconcile_catalog_mutation(
     void *context,
     watchy_watchface_catalog_mutation_result_t *out_result);
 
+watchy_status_t watchy_watchface_portal_exit(
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    const watchy_watchface_portal_exit_ops_t *operations,
+    watchy_watchface_portal_exit_result_t *out_result);
+
+watchy_status_t watchy_package_app_action_apply(
+    bool safe_mode,
+    bool package_execution_blocked,
+    const char *package_ref,
+    watchy_package_app_run_fn_t run_app,
+    void *context);
+
 watchy_status_t watchy_watchface_boot_prepare(
     bool safe_mode,
     watchy_package_catalog_t *catalog,
@@ -81,6 +114,7 @@ watchy_status_t watchy_watchface_boot_prepare(
 watchy_status_t watchy_watchface_action_apply(
     const watchy_shell_action_request_t *request,
     bool safe_mode,
+    bool package_execution_blocked,
     watchy_settings_t *settings,
     watchy_package_catalog_t *catalog,
     const watchy_watchface_action_ops_t *operations,
@@ -88,6 +122,7 @@ watchy_status_t watchy_watchface_action_apply(
 
 watchy_status_t watchy_watchface_run_active(
     bool safe_mode,
+    bool package_execution_blocked,
     bool force_full_refresh,
     const watchy_package_catalog_t *catalog,
     const watchy_watchface_action_ops_t *operations,

@@ -1278,8 +1278,8 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
         s_runner.manifest.type != installed_type ||
         !validate_installed_elf(absolute_elf_path,
                                 s_runner.manifest.max_runtime_bytes)) {
-        (void)runner_finish(WATCHY_PACKAGE_ERR_STATE);
-        return runner_release_scope(&watchdog_scope, WATCHY_PACKAGE_ERR_STATE);
+        status = runner_finish(WATCHY_PACKAGE_ERR_STATE);
+        return runner_release_scope(&watchdog_scope, status);
     }
     status = watchy_package_host_init(&s_runner.host, &s_runner.manifest);
     if (status == WATCHY_PACKAGE_OK) {
@@ -1297,7 +1297,7 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
         s_runner.active = true;
         status = runner_post_callback();
     } else {
-        (void)runner_finish(status);
+        status = runner_finish(status);
     }
     return runner_release_scope(&watchdog_scope, status);
 }

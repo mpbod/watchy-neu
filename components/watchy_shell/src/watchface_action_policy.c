@@ -93,9 +93,69 @@ watchy_status_t watchy_watchface_reconcile_catalog_mutation(
     return WATCHY_STATUS_OK;
 }
 
+watchy_status_t watchy_watchface_portal_exit(
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    const watchy_watchface_portal_exit_ops_t *operations,
+    watchy_watchface_portal_exit_result_t *out_result) {
+    watchy_settings_t reloaded_settings;
+    watchy_status_t stop_status;
+    watchy_status_t load_status;
+    watchy_package_status_t snapshot_status;
+    watchy_status_t save_status = WATCHY_STATUS_OK;
+    if (settings == NULL || catalog == NULL || operations == NULL ||
+        operations->stop_portal == NULL || operations->load_settings == NULL ||
+        operations->snapshot == NULL || operations->save_settings == NULL ||
+        out_result == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_result = (watchy_watchface_portal_exit_result_t){0};
+    stop_status = operations->stop_portal(operations->context);
+    reloaded_settings = *settings;
+    load_status = operations->load_settings(operations->context,
+                                             &reloaded_settings);
+    if (load_status == WATCHY_STATUS_OK) {
+        *settings = reloaded_settings;
+        out_result->settings_reloaded = true;
+    }
+    snapshot_status = operations->snapshot(operations->context, catalog);
+    if (snapshot_status == WATCHY_PACKAGE_OK) {
+        out_result->catalog_refreshed = true;
+        save_status = watchy_watchface_reconcile_settings(
+            settings, catalog, operations->save_settings, operations->context);
+    }
+    if (save_status != WATCHY_STATUS_OK) {
+        out_result->error = WATCHY_SHELL_ERROR_SETTINGS_SAVE;
+    } else if (snapshot_status != WATCHY_PACKAGE_OK) {
+        out_result->error = WATCHY_SHELL_ERROR_PACKAGE;
+    } else if (load_status != WATCHY_STATUS_OK) {
+        out_result->error = WATCHY_SHELL_ERROR_SETTINGS_LOAD;
+    } else if (stop_status != WATCHY_STATUS_OK) {
+        out_result->error = WATCHY_SHELL_ERROR_PORTAL;
+    }
+    return WATCHY_STATUS_OK;
+}
+
+watchy_status_t watchy_package_app_action_apply(
+    bool safe_mode,
+    bool package_execution_blocked,
+    const char *package_ref,
+    watchy_package_app_run_fn_t run_app,
+    void *context) {
+    if (package_ref == NULL || package_ref[0] == '\0' || run_app == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (safe_mode || package_execution_blocked) {
+        return WATCHY_STATUS_UNSUPPORTED;
+    }
+    return run_app(context, package_ref) ? WATCHY_STATUS_OK
+                                         : WATCHY_STATUS_INVALID_STATE;
+}
+
 watchy_status_t watchy_watchface_action_apply(
     const watchy_shell_action_request_t *request,
     bool safe_mode,
+    bool package_execution_blocked,
     watchy_settings_t *settings,
     watchy_package_catalog_t *catalog,
     const watchy_watchface_action_ops_t *operations,
@@ -118,9 +178,12 @@ watchy_status_t watchy_watchface_action_apply(
             operations->force_full_refresh(operations->context);
         }
     } else if (request->action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE) {
-        if (safe_mode || !request->has_package || request->package_ref[0] == '\0' ||
+        if (!request->has_package || request->package_ref[0] == '\0' ||
             memchr(request->package_ref, '\0', sizeof(request->package_ref)) == NULL) {
             return WATCHY_STATUS_INVALID_ARGUMENT;
+        }
+        if (safe_mode || package_execution_blocked) {
+            return WATCHY_STATUS_UNSUPPORTED;
         }
         package_status = operations->select_watchface(operations->context,
                                                        request->package_ref);
@@ -155,6 +218,7 @@ watchy_status_t watchy_watchface_action_apply(
 
 watchy_status_t watchy_watchface_run_active(
     bool safe_mode,
+    bool package_execution_blocked,
     bool force_full_refresh,
     const watchy_package_catalog_t *catalog,
     const watchy_watchface_action_ops_t *operations,
@@ -165,7 +229,7 @@ watchy_status_t watchy_watchface_run_active(
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     *out_result = (watchy_watchface_run_result_t){0};
-    if (safe_mode) {
+    if (safe_mode || package_execution_blocked) {
         return WATCHY_STATUS_UNSUPPORTED;
     }
     for (size_t index = 0u; index < catalog->count; ++index) {
