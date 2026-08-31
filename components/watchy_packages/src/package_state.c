@@ -479,6 +479,43 @@ watchy_package_status_t watchy_package_finish_attempt(watchy_package_index_manag
     return commit_index(manager, next);
 }
 
+watchy_package_status_t watchy_package_finalize_watchface_attempt(
+    watchy_package_index_manager_t *manager,
+    const char *package_ref,
+    bool pending,
+    bool rendered,
+    watchy_package_status_t lifecycle_status,
+    watchy_package_status_t stop_status) {
+    watchy_package_status_t result = lifecycle_status;
+    watchy_package_status_t status;
+    if (check_manager(manager) != WATCHY_PACKAGE_OK || package_ref == NULL) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    if (result == WATCHY_PACKAGE_OK && pending && !rendered) {
+        result = WATCHY_PACKAGE_ERR_CALLBACK;
+    }
+    if (result == WATCHY_PACKAGE_OK && stop_status != WATCHY_PACKAGE_OK) {
+        result = stop_status;
+    }
+    status = watchy_package_finish_attempt(manager, package_ref,
+                                           result == WATCHY_PACKAGE_OK);
+    if (result == WATCHY_PACKAGE_OK && status != WATCHY_PACKAGE_OK) {
+        result = status;
+    }
+    if (!pending) {
+        return result;
+    }
+    if (result == WATCHY_PACKAGE_OK) {
+        status = watchy_package_promote_pending(manager, package_ref);
+        if (status == WATCHY_PACKAGE_OK) {
+            return WATCHY_PACKAGE_OK;
+        }
+        result = status;
+    }
+    status = watchy_package_rollback_pending(manager, package_ref);
+    return result != WATCHY_PACKAGE_OK ? result : status;
+}
+
 bool watchy_package_is_quarantined(const watchy_package_index_manager_t *manager,
                                    const char *package_ref) {
     const ptrdiff_t record = manager != NULL && manager->initialized && package_ref != NULL

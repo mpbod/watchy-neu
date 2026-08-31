@@ -194,24 +194,6 @@ static bool run_package_app(const char *package_ref) {
     return status == WATCHY_PACKAGE_OK;
 }
 
-static watchy_status_t sync_active_watchface_setting(watchy_settings_t *settings,
-                                                     const watchy_package_catalog_t *catalog) {
-    const char *selected = "";
-    for (size_t index = 0u; index < catalog->count; ++index) {
-        if (catalog->packages[index].pending) {
-            selected = catalog->packages[index].package_ref;
-            break;
-        }
-        if (catalog->packages[index].active) selected = catalog->packages[index].package_ref;
-    }
-    if (strcmp(settings->active_watchface, selected) != 0) {
-        memset(settings->active_watchface, 0, sizeof(settings->active_watchface));
-        memcpy(settings->active_watchface, selected, strlen(selected) + 1u);
-        return watchy_settings_save(settings);
-    }
-    return WATCHY_STATUS_OK;
-}
-
 static watchy_package_status_t action_select_builtin(void *context) {
     (void)context;
     return watchy_packages_select_builtin();
@@ -414,7 +396,8 @@ static void run_shell(watchy_shell_t *shell,
                                                              battery->millivolts);
                     if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
                         watchy_shell_set_package_catalog(shell, catalog, true);
-                        if (sync_active_watchface_setting(settings, catalog) !=
+                        if (watchy_watchface_reconcile_settings(
+                                settings, catalog, action_save_settings, NULL) !=
                             WATCHY_STATUS_OK) {
                             watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
                         }
@@ -555,13 +538,27 @@ static void run_shell(watchy_shell_t *shell,
             case WATCHY_SHELL_ACTION_REMOVE_PACKAGE: {
                 size_t catalog_index;
                 if (watchy_shell_selected_package(shell, &catalog_index) &&
-                    catalog_index < catalog->count &&
-                    watchy_packages_remove(catalog->packages[catalog_index].package_ref) ==
-                        WATCHY_PACKAGE_OK &&
-                    watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
-                    watchy_shell_set_package_catalog(shell, catalog, true);
-                    snprintf(detail, sizeof(detail), "PACKAGE REMOVED");
-                } else watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
+                    catalog_index < catalog->count) {
+                    const watchy_package_status_t remove_status =
+                        watchy_packages_remove(
+                            catalog->packages[catalog_index].package_ref);
+                    if (remove_status != WATCHY_PACKAGE_OK ||
+                        watchy_packages_snapshot(catalog) != WATCHY_PACKAGE_OK) {
+                        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
+                    } else {
+                        watchy_shell_set_package_catalog(shell, catalog, true);
+                        if (watchy_watchface_reconcile_settings(
+                                settings, catalog, action_save_settings, NULL) !=
+                            WATCHY_STATUS_OK) {
+                            watchy_shell_fail(shell,
+                                             WATCHY_SHELL_ERROR_SETTINGS_SAVE);
+                        } else {
+                            snprintf(detail, sizeof(detail), "PACKAGE REMOVED");
+                        }
+                    }
+                } else {
+                    watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
+                }
                 break;
             }
             case WATCHY_SHELL_ACTION_RUN_PACKAGE: {
@@ -580,8 +577,9 @@ static void run_shell(watchy_shell_t *shell,
             case WATCHY_SHELL_ACTION_PURGE_PACKAGES:
                 if (watchy_packages_safe_mode_purge() == WATCHY_PACKAGE_OK) {
                     memset(catalog, 0, sizeof(*catalog));
-                    settings->active_watchface[0] = '\0';
-                    if (watchy_settings_save(settings) == WATCHY_STATUS_OK) {
+                    if (watchy_watchface_reconcile_settings(
+                            settings, catalog, action_save_settings, NULL) ==
+                        WATCHY_STATUS_OK) {
                         snprintf(detail, sizeof(detail), "PACKAGES REMOVED");
                     } else watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
                 } else watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
@@ -603,7 +601,10 @@ static void run_shell(watchy_shell_t *shell,
                     post_action_presentation_needed = false;
                 } else {
                     shell->package_warning = true;
-                    watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
+                    watchy_shell_fail(
+                        shell, run_result.settings_save_failed
+                                   ? WATCHY_SHELL_ERROR_SETTINGS_SAVE
+                                   : WATCHY_SHELL_ERROR_PACKAGE);
                 }
                 last_activity = milliseconds();
                 break;
@@ -642,7 +643,8 @@ static void run_shell(watchy_shell_t *shell,
                         shell->package_warning = true;
                         if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
                             watchy_shell_set_package_catalog(shell, catalog, true);
-                            if (sync_active_watchface_setting(settings, catalog) !=
+                            if (watchy_watchface_reconcile_settings(
+                                    settings, catalog, action_save_settings, NULL) !=
                                 WATCHY_STATUS_OK) {
                                 watchy_shell_fail(shell,
                                                  WATCHY_SHELL_ERROR_SETTINGS_SAVE);
@@ -787,7 +789,9 @@ void app_main(void) {
             package_selected = package_selected || catalog.packages[index].active ||
                                catalog.packages[index].pending;
         }
-        if (!safe_mode && sync_active_watchface_setting(&settings, &catalog) != WATCHY_STATUS_OK) {
+        if (!safe_mode && watchy_watchface_reconcile_settings(
+                              &settings, &catalog, action_save_settings, NULL) !=
+                              WATCHY_STATUS_OK) {
             settings_save_failed = true;
         }
     }
@@ -797,6 +801,14 @@ void app_main(void) {
         package_rendered = watchy_packages_run_watchface(false);
         if (watchy_display_take_cancelled_buttons(&boot_cancelled_buttons)) {
             package_rendered = false;
+        }
+        if (watchy_packages_snapshot(&catalog) != WATCHY_PACKAGE_OK) {
+            package_index_readable = false;
+            package_failed = true;
+        } else if (watchy_watchface_reconcile_settings(
+                       &settings, &catalog, action_save_settings, NULL) !=
+                   WATCHY_STATUS_OK) {
+            settings_save_failed = true;
         }
         package_failed = package_failed ||
                          (!package_rendered && boot_cancelled_buttons == 0u);

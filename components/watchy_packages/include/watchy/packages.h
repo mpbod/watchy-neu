@@ -269,6 +269,13 @@ watchy_package_status_t watchy_package_begin_attempt(watchy_package_index_manage
 watchy_package_status_t watchy_package_finish_attempt(watchy_package_index_manager_t *manager,
                                                       const char *package_ref,
                                                       bool clean_stop);
+watchy_package_status_t watchy_package_finalize_watchface_attempt(
+    watchy_package_index_manager_t *manager,
+    const char *package_ref,
+    bool pending,
+    bool rendered,
+    watchy_package_status_t lifecycle_status,
+    watchy_package_status_t stop_status);
 bool watchy_package_is_quarantined(const watchy_package_index_manager_t *manager,
                                    const char *package_ref);
 watchy_package_status_t watchy_package_register_installed(

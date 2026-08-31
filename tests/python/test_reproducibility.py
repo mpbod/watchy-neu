@@ -67,12 +67,14 @@ class ReproducibilityContracts(unittest.TestCase):
         finish_start = runtime.index("static watchy_package_status_t runner_finish")
         post_start = runtime.index("static watchy_package_status_t runner_post_callback")
         finish = runtime[finish_start:post_start]
-        self.assertIn("return stop_status;", finish)
+        self.assertIn("watchy_package_finalize_watchface_attempt(", finish)
+        self.assertIn("lifecycle_status, stop_status", finish)
+        self.assertIn("return result;", finish)
 
         stop_start = runtime.index("watchy_package_status_t watchy_packages_runner_stop")
         stop_end = runtime.index("bool watchy_packages_runner_active", stop_start)
         stop = runtime[stop_start:stop_end]
-        self.assertIn("status = runner_finish(true);", stop)
+        self.assertIn("status = runner_finish(WATCHY_PACKAGE_OK);", stop)
         self.assertIn("return status;", stop)
 
     def test_runner_watchdog_failure_closes_the_active_session(self) -> None:
@@ -94,7 +96,9 @@ class ReproducibilityContracts(unittest.TestCase):
                 if "watchy_package_session_" in body[body.index("watchy_watchdog_scope_begin"):]
                 else len(body)
             ]
-            self.assertIn("runner_finish(false);", watchdog_failure, start_marker)
+            self.assertIn("runner_finish(WATCHY_PACKAGE_ERR_STATE);",
+                          watchdog_failure, start_marker)
+            self.assertNotIn("runner_finish(false);", watchdog_failure, start_marker)
 
 
 if __name__ == "__main__":

@@ -2,11 +2,16 @@
 
 #include <string.h>
 
-static watchy_status_t sync_active_setting(
+watchy_status_t watchy_watchface_reconcile_settings(
     watchy_settings_t *settings,
     const watchy_package_catalog_t *catalog,
-    const watchy_watchface_action_ops_t *operations) {
+    watchy_status_t (*save_settings)(void *context,
+                                     const watchy_settings_t *settings),
+    void *context) {
     const char *selected = "";
+    if (settings == NULL || catalog == NULL || save_settings == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
     for (size_t index = 0u; index < catalog->count; ++index) {
         if (catalog->packages[index].pending) {
             selected = catalog->packages[index].package_ref;
@@ -21,7 +26,7 @@ static watchy_status_t sync_active_setting(
     }
     memset(settings->active_watchface, 0, sizeof(settings->active_watchface));
     memcpy(settings->active_watchface, selected, strlen(selected) + 1u);
-    return operations->save_settings(operations->context, settings);
+    return save_settings(context, settings);
 }
 
 watchy_status_t watchy_watchface_boot_prepare(
@@ -90,8 +95,11 @@ watchy_status_t watchy_watchface_action_apply(
         return WATCHY_STATUS_INVALID_STATE;
     }
     const watchy_status_t settings_status =
-        sync_active_setting(settings, catalog, operations);
+        watchy_watchface_reconcile_settings(settings, catalog,
+                                            operations->save_settings,
+                                            operations->context);
     if (settings_status != WATCHY_STATUS_OK) {
+        out_result->settings_save_failed = true;
         return settings_status;
     }
     if (out_result->cancelled_buttons != 0u) {

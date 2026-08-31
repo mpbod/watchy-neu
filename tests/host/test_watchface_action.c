@@ -18,6 +18,7 @@ typedef struct {
     bool run_started_after_full_refresh;
     watchy_package_status_t import_status;
     watchy_package_status_t snapshot_status;
+    watchy_status_t save_status;
     unsigned import_calls;
     unsigned boot_snapshot_calls;
     char boot_order[3];
@@ -82,7 +83,7 @@ static watchy_status_t save_settings(void *context,
     fixture_t *fixture = context;
     ++fixture->save_calls;
     fixture->saved_settings = *settings;
-    return WATCHY_STATUS_OK;
+    return fixture->save_status;
 }
 
 static watchy_watchface_action_ops_t operations(fixture_t *fixture) {
@@ -328,6 +329,97 @@ static int test_unreadable_boot_catalog_is_a_bounded_package_warning(void) {
     return 0;
 }
 
+static int test_active_removal_reconciles_to_hairline_setting(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(watchy_watchface_reconcile_settings(
+              &settings, &catalog, save_settings, &fixture) == WATCHY_STATUS_OK);
+    CHECK(settings.active_watchface[0] == '\0');
+    CHECK(fixture.saved_settings.active_watchface[0] == '\0');
+    CHECK(fixture.save_calls == 1u);
+    return 0;
+}
+
+static int test_non_active_removal_leaves_setting_unchanged(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(watchy_watchface_reconcile_settings(
+              &settings, &catalog, save_settings, &fixture) == WATCHY_STATUS_OK);
+    CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
+    CHECK(fixture.save_calls == 0u);
+    return 0;
+}
+
+static int test_rollback_reconciles_persisted_setting_to_prior_active(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.new@1.0.0");
+
+    CHECK(watchy_watchface_reconcile_settings(
+              &settings, &catalog, save_settings, &fixture) == WATCHY_STATUS_OK);
+    CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
+    CHECK(strcmp(fixture.saved_settings.active_watchface,
+                 "face.old@1.0.0") == 0);
+    CHECK(fixture.save_calls == 1u);
+    return 0;
+}
+
+static int test_reconcile_surfaces_settings_save_failure(void) {
+    fixture_t fixture = {.save_status = WATCHY_STATUS_INVALID_STATE};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    catalog_with_active(&catalog, "face.new@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(watchy_watchface_reconcile_settings(
+              &settings, &catalog, save_settings, &fixture) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(strcmp(settings.active_watchface, "face.new@1.0.0") == 0);
+    CHECK(fixture.save_calls == 1u);
+    return 0;
+}
+
+static int test_activation_identifies_settings_save_failure(void) {
+    fixture_t fixture = {
+        .select_status = WATCHY_PACKAGE_OK,
+        .run_result = {.rendered = true},
+        .save_status = WATCHY_STATUS_INVALID_STATE,
+    };
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    watchy_watchface_run_result_t result = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    catalog_with_active(&fixture.snapshot, "face.new@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+    const watchy_shell_action_request_t request = {
+        .action = WATCHY_SHELL_ACTION_SELECT_WATCHFACE,
+        .has_package = true,
+        .package_ref = "face.new@1.0.0",
+    };
+    const watchy_watchface_action_ops_t ops = operations(&fixture);
+
+    CHECK(watchy_watchface_action_apply(&request, false, &settings, &catalog,
+                                        &ops, &result) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(result.rendered && result.settings_save_failed);
+    CHECK(fixture.save_calls == 1u);
+    return 0;
+}
+
 int main(void) {
     CHECK(test_successful_watchface_selection_promotes_and_persists() == 0);
     CHECK(test_failed_render_preserves_previous_watchface() == 0);
@@ -338,6 +430,11 @@ int main(void) {
     CHECK(test_safe_boot_skips_seed_import_but_keeps_recovery_catalog() == 0);
     CHECK(test_seed_failure_is_visible_and_does_not_hide_readable_catalog() == 0);
     CHECK(test_unreadable_boot_catalog_is_a_bounded_package_warning() == 0);
+    CHECK(test_active_removal_reconciles_to_hairline_setting() == 0);
+    CHECK(test_non_active_removal_leaves_setting_unchanged() == 0);
+    CHECK(test_rollback_reconciles_persisted_setting_to_prior_active() == 0);
+    CHECK(test_reconcile_surfaces_settings_save_failure() == 0);
+    CHECK(test_activation_identifies_settings_save_failure() == 0);
     puts("watchface action tests passed");
     return 0;
 }

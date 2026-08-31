@@ -1158,8 +1158,9 @@ watchy_package_status_t watchy_packages_import_factory_seed(bool safe_mode) {
     return status;
 }
 
-static watchy_package_status_t runner_finish(bool clean) {
+static watchy_package_status_t runner_finish(watchy_package_status_t lifecycle_status) {
     watchy_package_status_t stop_status = WATCHY_PACKAGE_OK;
+    watchy_package_status_t result = lifecycle_status;
     if (watchy_package_session_loaded(&s_runner.session)) {
         stop_status = watchy_package_session_stop(&s_runner.session);
     }
@@ -1169,19 +1170,18 @@ static watchy_package_status_t runner_finish(bool clean) {
         s_runner.host_ready = false;
     }
     if (s_runner.attempt_started) {
-        (void)watchy_package_finish_attempt(&s_index,
-                                            s_runner.reference,
-                                            clean && stop_status == WATCHY_PACKAGE_OK);
-    }
-    if (s_runner.pending && (!clean || !s_runner.rendered)) {
-        (void)watchy_package_rollback_pending(&s_index, s_runner.reference);
+        result = watchy_package_finalize_watchface_attempt(
+            &s_index, s_runner.reference, s_runner.pending, s_runner.rendered,
+            lifecycle_status, stop_status);
+    } else if (result == WATCHY_PACKAGE_OK) {
+        result = stop_status;
     }
     s_runner.active = false;
     s_runner.attempt_started = false;
     s_runner.pending = false;
     s_runner.rendered = false;
     memset(s_runner.reference, 0, sizeof(s_runner.reference));
-    return stop_status;
+    return result;
 }
 
 static watchy_package_status_t runner_post_callback(void) {
@@ -1196,15 +1196,14 @@ static watchy_package_status_t runner_post_callback(void) {
     switch (watchy_package_post_action(pump_ok, refresh_requested,
                                        refresh_outcome, exit_requested)) {
     case WATCHY_PACKAGE_POST_FAIL_CLEANUP:
-        runner_finish(false);
-        return pump_ok ? WATCHY_PACKAGE_ERR_CALLBACK : WATCHY_PACKAGE_ERR_STATE;
+        return runner_finish(pump_ok ? WATCHY_PACKAGE_ERR_CALLBACK
+                                     : WATCHY_PACKAGE_ERR_STATE);
     case WATCHY_PACKAGE_POST_CLEAN_EXIT:
-        return runner_finish(true);
+        return runner_finish(WATCHY_PACKAGE_OK);
     case WATCHY_PACKAGE_POST_CONTINUE:
         return WATCHY_PACKAGE_OK;
     }
-    runner_finish(false);
-    return WATCHY_PACKAGE_ERR_STATE;
+    return runner_finish(WATCHY_PACKAGE_ERR_STATE);
 }
 
 watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bool safe_mode) {
@@ -1279,7 +1278,7 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
         s_runner.manifest.type != installed_type ||
         !validate_installed_elf(absolute_elf_path,
                                 s_runner.manifest.max_runtime_bytes)) {
-        runner_finish(false);
+        (void)runner_finish(WATCHY_PACKAGE_ERR_STATE);
         return runner_release_scope(&watchdog_scope, WATCHY_PACKAGE_ERR_STATE);
     }
     status = watchy_package_host_init(&s_runner.host, &s_runner.manifest);
@@ -1298,7 +1297,7 @@ watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bo
         s_runner.active = true;
         status = runner_post_callback();
     } else {
-        runner_finish(false);
+        (void)runner_finish(status);
     }
     return runner_release_scope(&watchdog_scope, status);
 }
@@ -1317,14 +1316,14 @@ watchy_package_status_t watchy_packages_runner_event(const watchy_event_t *event
     if (watchy_watchdog_scope_begin(&watchdog_scope, &s_task_watchdog_ops) !=
             WATCHY_STATUS_OK ||
         !watchdog_ensure_current(&s_runner.host)) {
-        runner_finish(false);
+        (void)runner_finish(WATCHY_PACKAGE_ERR_STATE);
         return runner_release_scope(&watchdog_scope, WATCHY_PACKAGE_ERR_STATE);
     }
     status = watchy_package_session_event(&s_runner.session, event);
     if (status == WATCHY_PACKAGE_OK) {
         status = runner_post_callback();
     } else {
-        runner_finish(false);
+        (void)runner_finish(status);
     }
     return runner_release_scope(&watchdog_scope, status);
 }
@@ -1354,7 +1353,7 @@ watchy_package_status_t watchy_packages_runner_render(void) {
     if (watchy_watchdog_scope_begin(&watchdog_scope, &s_task_watchdog_ops) !=
             WATCHY_STATUS_OK ||
         !watchdog_ensure_current(&s_runner.host)) {
-        runner_finish(false);
+        (void)runner_finish(WATCHY_PACKAGE_ERR_STATE);
         return runner_release_scope(&watchdog_scope, WATCHY_PACKAGE_ERR_STATE);
     }
     canvas = s_runner.host.canvas.acquire(s_runner.host.canvas.context);
@@ -1370,12 +1369,6 @@ watchy_package_status_t watchy_packages_runner_render(void) {
         switch (watchy_package_classify_presentation(display_status)) {
         case WATCHY_PACKAGE_PRESENT_TARGET:
             s_runner.rendered = true;
-            if (s_runner.pending) {
-                status = watchy_package_promote_pending(&s_index, s_runner.reference);
-                if (status == WATCHY_PACKAGE_OK) {
-                    s_runner.pending = false;
-                }
-            }
             break;
         case WATCHY_PACKAGE_PRESENT_CANCELLED:
             break;
@@ -1387,7 +1380,7 @@ watchy_package_status_t watchy_packages_runner_render(void) {
     if (status == WATCHY_PACKAGE_OK) {
         status = runner_post_callback();
     } else {
-        runner_finish(false);
+        status = runner_finish(status);
     }
     return runner_release_scope(&watchdog_scope, status);
 }
@@ -1405,10 +1398,10 @@ watchy_package_status_t watchy_packages_runner_stop(void) {
     if (watchy_watchdog_scope_begin(&watchdog_scope, &s_task_watchdog_ops) !=
             WATCHY_STATUS_OK ||
         !watchdog_ensure_current(&s_runner.host)) {
-        runner_finish(false);
+        (void)runner_finish(WATCHY_PACKAGE_ERR_STATE);
         return runner_release_scope(&watchdog_scope, WATCHY_PACKAGE_ERR_STATE);
     }
-    watchy_package_status_t status = runner_finish(true);
+    watchy_package_status_t status = runner_finish(WATCHY_PACKAGE_OK);
     status = runner_release_scope(&watchdog_scope, status);
     return status;
 }

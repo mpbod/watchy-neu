@@ -12,6 +12,7 @@ extern "C" {
 
 typedef struct {
     bool rendered;
+    bool settings_save_failed;
     watchy_button_mask_t cancelled_buttons;
 } watchy_watchface_run_result_t;
 
@@ -40,6 +41,13 @@ typedef struct {
     bool catalog_readable;
     bool package_warning;
 } watchy_watchface_boot_result_t;
+
+watchy_status_t watchy_watchface_reconcile_settings(
+    watchy_settings_t *settings,
+    const watchy_package_catalog_t *catalog,
+    watchy_status_t (*save_settings)(void *context,
+                                     const watchy_settings_t *settings),
+    void *context);
 
 watchy_status_t watchy_watchface_boot_prepare(
     bool safe_mode,
