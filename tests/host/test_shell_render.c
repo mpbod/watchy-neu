@@ -113,10 +113,15 @@ static int test_menu(void) {
     CHECK(black(fb, 190, 11) && black(fb, 196, 11));
     CHECK(black(fb, 190, 189) && black(fb, 196, 189));
     /* The face icon has a vertical stem only; its dial center stays clear. */
-    CHECK(black(fb, 20, 46) && !black(fb, 17, 53));
-    /* Settings is a 14x14 outline; the diamond center remains white. */
-    CHECK(black(fb, 19, 156) && black(fb, 13, 162));
-    CHECK(!black(fb, 19, 162) && !black(fb, 20, 162));
+    CHECK(black(fb, 21, 42));
+    CHECK(black(fb, 12, 52));
+    CHECK(black(fb, 31, 52));
+    CHECK(black(fb, 21, 61) && black(fb, 20, 45) && black(fb, 21, 51));
+    CHECK(!black(fb, 19, 48) && !black(fb, 23, 48) && !black(fb, 17, 53));
+    /* Settings is a 14px square at 45 degrees: a 20px outline bbox whose center is white. */
+    CHECK(black(fb, 21, 152) && black(fb, 12, 162) && black(fb, 31, 162));
+    CHECK(black(fb, 21, 171) && !black(fb, 21, 161) && !black(fb, 22, 162));
+    CHECK(!black(fb, 11, 162) && !black(fb, 32, 162));
     CHECK(region_ink(fb, 44, 25, 180, 79) > 20);
     CHECK(region_ink(fb, 44, 80, 180, 134) > 20);
     CHECK(region_ink(fb, 44, 135, 180, 189) > 20);
@@ -146,6 +151,10 @@ static int test_menu_selections(void) {
         CHECK(!black(frames[selection], 2, (int)(25u + ((selection + 1u) % 3u) * 55u)));
         const unsigned thumb_top = 20u + (selection * 109u + 1u) / 2u;
         CHECK(black(frames[selection], 194, (int)thumb_top));
+        CHECK(black(frames[selection], 190, (int)thumb_top) &&
+              black(frames[selection], 197, (int)thumb_top));
+        CHECK(!black(frames[selection], 189, (int)thumb_top) &&
+              !black(frames[selection], 198, (int)thumb_top));
         CHECK(black(frames[selection], 194, (int)(thumb_top + 50u)));
         if (thumb_top + 51u < 180u) {
             CHECK(!black(frames[selection], 194, (int)(thumb_top + 51u)));
@@ -178,6 +187,10 @@ static int test_selector(void) {
         const unsigned selector_thumb_top = 20u + (selection * 109u + 2u) / 4u;
         CHECK(black(fb, 194, (int)selector_thumb_top));
         CHECK(black(fb, 194, (int)(selector_thumb_top + 50u)));
+        CHECK(black(fb, 190, (int)selector_thumb_top) &&
+              black(fb, 197, (int)selector_thumb_top));
+        CHECK(!black(fb, 189, (int)selector_thumb_top) &&
+              !black(fb, 198, (int)selector_thumb_top));
     }
     (void)status_contract;
     CHECK(memcmp(status_frames[1], status_frames[2], sizeof(status_frames[1])) != 0);
@@ -225,6 +238,10 @@ static int test_settings(void) {
         const unsigned settings_thumb_top = 20u + (selection * 109u + 4u) / 9u;
         CHECK(black(frames[selection], 194, (int)settings_thumb_top));
         CHECK(black(frames[selection], 194, (int)(settings_thumb_top + 50u)));
+        CHECK(black(frames[selection], 190, (int)settings_thumb_top) &&
+              black(frames[selection], 197, (int)settings_thumb_top));
+        CHECK(!black(frames[selection], 189, (int)settings_thumb_top) &&
+              !black(frames[selection], 198, (int)settings_thumb_top));
         CHECK(strcmp(watchy_shell_render_settings_label(selection), expected_labels[selection]) == 0);
         uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
         watchy_canvas_t expected_canvas = canvas(expected);

@@ -67,12 +67,24 @@ static void draw_rail(watchy_canvas_t *canvas, unsigned selection, unsigned tota
     if (total > 1u) {
         thumb_top += (clamped_selection * travel + (total - 1u) / 2u) / (total - 1u);
     }
-    watchy_ui_rect(canvas, 190, (int16_t)thumb_top, 9, RAIL_THUMB_HEIGHT, true);
+    watchy_ui_rect(canvas, 190, (int16_t)thumb_top, 8, RAIL_THUMB_HEIGHT, true);
 }
 
 static void draw_face_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool black) {
-    watchy_ui_circle(canvas, (int16_t)(x + 9), (int16_t)(y + 11), 8, false, black);
-    watchy_ui_rule(canvas, (int16_t)(x + 9), (int16_t)(y + 4), 1, 14, black);
+    /* HTML's 20px circle/2.5px border becomes a 3px one-bit ring. */
+    for (int row = 0; row < 20; ++row) {
+        for (int column = 0; column < 20; ++column) {
+            const int dx = 2 * column - 19;
+            const int dy = 2 * row - 19;
+            const int distance = dx * dx + dy * dy;
+            if (distance <= 362 && distance > 169) {
+                watchy_ui_pixel(canvas, (int16_t)(x + 1 + column),
+                                 (int16_t)(y + row), black);
+            }
+        }
+    }
+    /* HTML's 2.5x7px stem becomes a centered 3x7px stem. */
+    watchy_ui_rect(canvas, x + 9, y + 3, 3, 7, black);
 }
 
 static void draw_apps_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool black) {
@@ -83,14 +95,20 @@ static void draw_apps_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool b
 }
 
 static void draw_settings_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool black) {
-    /* 14x14 outlined diamond, with the center left untouched. */
-    for (int i = 0; i <= 7; ++i) {
-        if (i < 7) {
-            watchy_ui_pixel(canvas, (int16_t)(x + 8 - i), (int16_t)(y + 4 + i), black);
-            watchy_ui_pixel(canvas, (int16_t)(x + 9 + i), (int16_t)(y + 4 + i), black);
+    /* A 14px square at 45 degrees has a 20px raster bbox. The 2.5px
+     * outline is represented by the three nearest pixels to each edge. */
+    for (int row = 0; row < 20; ++row) {
+        for (int column = 0; column < 20; ++column) {
+            const int dx = 2 * column - 19;
+            const int dy = 2 * row - 19;
+            const int horizontal = dx < 0 ? -dx : dx;
+            const int vertical = dy < 0 ? -dy : dy;
+            const int perimeter = horizontal + vertical;
+            if (perimeter >= 15 && perimeter <= 20) {
+                watchy_ui_pixel(canvas, (int16_t)(x + 1 + column),
+                                 (int16_t)(y + row), black);
+            }
         }
-        watchy_ui_pixel(canvas, (int16_t)(x + 2 + i), (int16_t)(y + 10 + i), black);
-        watchy_ui_pixel(canvas, (int16_t)(x + 15 - i), (int16_t)(y + 10 + i), black);
     }
 }
 
