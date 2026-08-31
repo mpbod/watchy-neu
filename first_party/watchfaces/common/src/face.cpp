@@ -205,17 +205,36 @@ watchy_time_t offset_time(const watchy_time_t &time,
 uint8_t moon_octant(const watchy_time_t &time) noexcept {
     if (!valid_time(time)) return 0u;
 
-    /* Approved UTC epoch: 2000-01-06 18:14.  Signed 64-bit arithmetic keeps
-     * pre-epoch dates and the complete supported calendar range safe. */
-    constexpr int64_t epoch_day = 10962;
-    constexpr int64_t epoch_minute = epoch_day * 1440 + 18 * 60 + 14;
-    constexpr int64_t cycle_seconds = 2551443;
-    const int64_t local_minute = days_since_epoch(time) * 1440 +
-                                 static_cast<int64_t>(time.hour) * 60 +
-                                 time.minute;
-    const int64_t utc_seconds =
-        (local_minute - time.utc_offset_minutes) * 60 + time.second;
-    int64_t phase = utc_seconds - epoch_minute * 60;
+    /* Approved UTC epoch: 2000-01-06 18:14. The supported calendar has fewer
+     * than four million days from Unix epoch, so every intermediate below is
+     * deliberately signed 32-bit. That avoids unsupported 64-bit divide/mod
+     * helpers in the freestanding Xtensa package ELF. */
+    constexpr int32_t epoch_day = 10962;
+    constexpr int32_t cycle_seconds = 2551443;
+    const int32_t day_delta = static_cast<int32_t>(days_since_epoch(time)) - epoch_day;
+    int32_t reduced_day = day_delta % cycle_seconds;
+    if (reduced_day < 0) reduced_day += cycle_seconds;
+
+    /* Modular multiply by 86400 uses at most seventeen bounded iterations;
+     * accumulator and addend remain below twice the lunar cycle. */
+    uint32_t accumulator = 0u;
+    uint32_t addend = static_cast<uint32_t>(reduced_day);
+    uint32_t factor = 86400u;
+    while (factor != 0u) {
+        if ((factor & 1u) != 0u) {
+            accumulator += addend;
+            if (accumulator >= static_cast<uint32_t>(cycle_seconds)) accumulator -= cycle_seconds;
+        }
+        addend += addend;
+        if (addend >= static_cast<uint32_t>(cycle_seconds)) addend -= cycle_seconds;
+        factor >>= 1u;
+    }
+
+    int32_t phase = static_cast<int32_t>(accumulator) +
+                    static_cast<int32_t>(time.hour) * 3600 +
+                    static_cast<int32_t>(time.minute) * 60 + time.second -
+                    static_cast<int32_t>(time.utc_offset_minutes) * 60 -
+                    (18 * 3600 + 14 * 60);
     phase %= cycle_seconds;
     if (phase < 0) phase += cycle_seconds;
     return static_cast<uint8_t>((phase * 8) / cycle_seconds);

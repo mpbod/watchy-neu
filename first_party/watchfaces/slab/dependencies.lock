@@ -1,0 +1,24 @@
+dependencies:
+  espressif/cmake_utilities:
+    dependencies: []
+    source:
+      path: ../../../managed_components/espressif__cmake_utilities
+      type: local
+    version: 0.5.3
+  espressif/elf_loader:
+    dependencies: []
+    source:
+      path: ../../../managed_components/espressif__elf_loader
+      type: local
+    version: 1.3.3
+  idf:
+    source:
+      type: idf
+    version: 5.5.0
+direct_dependencies:
+- espressif/cmake_utilities
+- espressif/elf_loader
+- idf
+manifest_hash: 14c8619248f707d36fe970811eb1d6906bc6425b232cb10a323fbda198baf3d2
+target: esp32
+version: 3.0.0

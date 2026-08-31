@@ -26,6 +26,10 @@ extern "C" watchy_status_t term03_render(void *, watchy_canvas_t *, watchy_refre
 extern "C" const watchy_package_descriptor_v1_t *term01_package_entry(void);
 extern "C" const watchy_package_descriptor_v1_t *term02_package_entry(void);
 extern "C" const watchy_package_descriptor_v1_t *term03_package_entry(void);
+extern "C" watchy_status_t slab_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *);
+extern "C" watchy_status_t orbit_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *);
+extern "C" const watchy_package_descriptor_v1_t *slab_package_entry(void);
+extern "C" const watchy_package_descriptor_v1_t *orbit_package_entry(void);
 
 static watchy_status_t render(void *, watchy_canvas_t *, watchy_refresh_mode_t *) { return WATCHY_STATUS_OK; }
 WATCHY_FIRST_PARTY_FACE_NAMED(test_package_entry, "watchy.test.face", "Test Face", 0x203u, render)
@@ -280,6 +284,97 @@ static int test_term(const watchy_package_descriptor_v1_t *descriptor,
     return 0;
 }
 
+static int test_slab_orbit(const watchy_package_descriptor_v1_t *descriptor,
+                           watchy_status_t (*renderer)(void *, watchy_canvas_t *, watchy_refresh_mode_t *),
+                           const char *golden,
+                           uint32_t capabilities,
+                           bool orbit) {
+    assert(descriptor != nullptr);
+    assert(descriptor->size == sizeof(*descriptor));
+    assert(descriptor->metadata.abi.major == 1u && descriptor->metadata.abi.minor == 2u);
+    assert(descriptor->metadata.version != nullptr && std::strcmp(descriptor->metadata.version, "1.0.0") == 0);
+    assert(descriptor->metadata.flags == capabilities);
+    host_fixture fixture;
+    watchy_host_caps_v1_t caps = fixture_caps(&fixture);
+    void *user = nullptr;
+    assert(descriptor->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
+    assert(descriptor->callbacks.on_start(user) == WATCHY_STATUS_OK);
+    uint8_t framebuffer[5000];
+    std::memset(framebuffer, 0x00, sizeof(framebuffer));
+    watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
+    watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_FULL);
+    if (!orbit) {
+        /* A swap, lost inversion, or incorrect 100px split changes these
+         * independent top/bottom regions before the PBM comparison. */
+        assert(ink(framebuffer, 0, 0, 199, 99) > 1000);
+        assert(ink(framebuffer, 0, 100, 199, 199) > 15000);
+        assert(ink(framebuffer, 50, 10, 150, 95) > 300);
+        assert(ink(framebuffer, 50, 105, 150, 199) > 300);
+        assert(ink(framebuffer, 130, 0, 190, 30) > 10);
+        assert(ink(framebuffer, 8, 165, 85, 199) > 20);
+        assert(ink(framebuffer, 145, 165, 191, 199) > 15);
+    } else {
+        /* The disc is exactly 62px (x/y 14..75) with a two-pixel outline;
+         * the top-right status and 3px rule are independent layout anchors. */
+        assert(ink(framebuffer, 14, 14, 75, 75) > 250);
+        assert(ink(framebuffer, 42, 14, 47, 16) > 3);
+        assert(ink(framebuffer, 14, 42, 16, 47) > 3);
+        assert(ink(framebuffer, 89, 14, 185, 72) > 80);
+        assert(ink(framebuffer, 14, 163, 185, 165) > 450);
+        assert(ink(framebuffer, 14, 173, 185, 194) > 25);
+    }
+    if (std::getenv("WATCHY_UPDATE_GOLDENS") != nullptr) {
+        write_pbm(golden, framebuffer);
+        assert(read_pbm(golden, framebuffer) == 0);
+    } else {
+        assert(read_pbm(golden, framebuffer) == 0);
+    }
+    std::memset(framebuffer, 0x00, sizeof(framebuffer));
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
+    fixture.time.hour = 10u;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_FULL);
+    descriptor->callbacks.on_stop(user);
+    descriptor->callbacks.on_unload(user);
+    return 0;
+}
+
+static void assert_orbit_phase(watchy_time_t phase_time,
+                               int expected_octant,
+                               bool left_black,
+                               bool right_black,
+                               const char *artifact_name) {
+    assert(moon_octant(phase_time) == expected_octant);
+    host_fixture fixture;
+    fixture.time = phase_time;
+    watchy_host_caps_v1_t caps = fixture_caps(&fixture);
+    void *user = nullptr;
+    assert(orbit_package_entry()->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
+    assert(orbit_package_entry()->callbacks.on_start(user) == WATCHY_STATUS_OK);
+    uint8_t framebuffer[5000]{};
+    watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
+    watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
+    assert(orbit_render(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_FULL);
+    /* Interior samples are deliberately away from the 2px outline and phase
+     * terminator: a wrong phase direction or a filled/empty disc fails. */
+    assert(black(framebuffer, 30, 45) == left_black);
+    assert(black(framebuffer, 60, 45) == right_black);
+    assert(ink(framebuffer, 14, 14, 75, 75) > 250);
+    const char *artifact_dir = std::getenv("WATCHY_PHASE_ARTIFACT_DIR");
+    if (artifact_dir != nullptr && artifact_name != nullptr) {
+        char path[192]{};
+        const int written = std::snprintf(path, sizeof(path), "%s/%s.pbm", artifact_dir, artifact_name);
+        assert(written > 0 && static_cast<size_t>(written) < sizeof(path));
+        write_pbm(path, framebuffer);
+    }
+    orbit_package_entry()->callbacks.on_stop(user);
+    orbit_package_entry()->callbacks.on_unload(user);
+}
+
 int main() {
     const watchy_text_style_t grid_heading = grid_heading_style();
     const watchy_text_style_t grid_header = grid_header_style();
@@ -383,5 +478,17 @@ int main() {
                      WATCHY_FACE_GOLDEN_DIR "/term-02.pbm", 531u, 2) == 0);
     assert(test_term(term03_package_entry(), term03_render,
                      WATCHY_FACE_GOLDEN_DIR "/term-03.pbm", 531u, 3) == 0);
+    assert(std::strcmp(slab_package_entry()->metadata.identifier, "watchy.firstparty.slab") == 0);
+    assert(std::strcmp(slab_package_entry()->metadata.name, "Slab") == 0);
+    assert(std::strcmp(orbit_package_entry()->metadata.identifier, "watchy.firstparty.orbit") == 0);
+    assert(std::strcmp(orbit_package_entry()->metadata.name, "Orbit") == 0);
+    assert(test_slab_orbit(slab_package_entry(), slab_render,
+                           WATCHY_FACE_GOLDEN_DIR "/slab.pbm", 531u, false) == 0);
+    assert(test_slab_orbit(orbit_package_entry(), orbit_render,
+                           WATCHY_FACE_GOLDEN_DIR "/orbit.pbm", 531u, true) == 0);
+    assert_orbit_phase(watchy_time_t{2000, 1, 6, 18, 14, 0, 4, 0}, 0, true, true, "orbit-new");
+    assert_orbit_phase(watchy_time_t{2000, 1, 14, 3, 26, 0, 5, 0}, 2, true, false, "orbit-first-quarter");
+    assert_orbit_phase(watchy_time_t{2000, 1, 21, 12, 37, 0, 5, 0}, 4, false, false, "orbit-full");
+    assert_orbit_phase(watchy_time_t{2000, 1, 28, 21, 48, 0, 5, 0}, 6, false, true, "orbit-last-quarter");
     return 0;
 }
