@@ -348,7 +348,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             self.assertEqual(commands[3][commands[3].index("--before") + 1],
                              "default-reset")
             self.assertEqual(commands[4][commands[4].index("--after") + 1],
-                             "hard-reset")
+                             "no-reset")
             self.assertEqual(commands[4][-9:], [
                 "write-flash",
                 "0x1000", str((build / "bootloader.bin").resolve()),
@@ -356,7 +356,39 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 "0x10000", str((build / "firmware.bin").resolve()),
                 "0x1d0000", str(image.resolve()),
             ])
+            self.assertEqual(commands[5][-5:],
+                             ["--before", "no-reset", "--after", "no-reset", "run"])
             self.assertFalse(any("erase-flash" in command for command in commands))
+
+    def test_failed_complete_write_never_runs_application(self):
+        import tools.flash_factory as flash
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = self.write_partition_table(root)
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root)
+            commands = []
+
+            def failing_runner(command, **_kwargs):
+                commands.append([str(item) for item in command])
+                if command[1:4] == ["device", "list", "--json-output"]:
+                    stdout = json.dumps([{"port": "/dev/fake", "description": "USB",
+                                          "hwid": "USB VID:PID=1A86:55D4 SER=ABC"}])
+                elif "chip-id" in command:
+                    stdout = "Chip is ESP32-PICO-D4 (revision v1.0)"
+                else:
+                    stdout = ""
+                if "write-flash" in command:
+                    self.assertEqual(command[command.index("--after") + 1], "no-reset")
+                    raise subprocess.CalledProcessError(2, command)
+                return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+            with self.assertRaisesRegex(flash.FlashSafetyError, "write-flash"):
+                flash.flash_factory("/dev/fake", image, table, runner=failing_runner,
+                                    platformio="platformio", python="python3",
+                                    build_dir=build)
+            self.assertEqual(sum("write-flash" in command for command in commands), 1)
+            self.assertFalse(any(command[-1:] == ["run"] for command in commands))
 
     def test_retained_marker_is_erased_without_reset_before_pristine_seed_write(self):
         import tools.flash_factory as flash
@@ -385,7 +417,10 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                     self.assertTrue(state["mutating"])
                     self.assertEqual(state["marker"], "erased")
                     state["seed"] = "pristine"
-                    self.assertEqual(command[command.index("--after") + 1], "hard-reset")
+                    self.assertEqual(command[command.index("--after") + 1], "no-reset")
+                elif command[-1:] == ["run"]:
+                    self.assertEqual(state["seed"], "pristine")
+                    self.assertEqual(command[command.index("--before") + 1], "no-reset")
                     reset_observations.append((state["marker"], state["seed"]))
                 elif state["mutating"]:
                     self.fail("no command may run between NVS erase and complete image write")
@@ -505,7 +540,8 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             self.assertIn(hashlib.sha256(image.read_bytes()).hexdigest(), rendered)
             self.assertIn("platformio run -e watchy_v2", rendered)
             self.assertIn("--after no-reset erase-region 0x9000 0x6000", rendered)
-            self.assertIn("--after hard-reset write-flash 0x1000", rendered)
+            self.assertIn("--after no-reset write-flash 0x1000", rendered)
+            self.assertIn("--before no-reset --after no-reset run", rendered)
             self.assertIn("write-flash 0x1000", rendered)
             self.assertIn("0x1d0000", rendered)
 

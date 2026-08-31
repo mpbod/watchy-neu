@@ -194,11 +194,13 @@ def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
         chip,
         esptool + ["--after", "no-reset", "erase-region",
                    f"0x{NVS_OFFSET:x}", f"0x{NVS_SIZE:x}"],
-        esptool + ["--after", "hard-reset", "write-flash",
+        esptool + ["--after", "no-reset", "write-flash",
          f"0x{BOOTLOADER_OFFSET:x}", str(build_dir / "bootloader.bin"),
          f"0x{PARTITION_TABLE_OFFSET:x}", str(build_dir / "partitions.bin"),
          f"0x{FACTORY_OFFSET:x}", str(build_dir / "firmware.bin"),
          f"0x{EXPECTED_OFFSET:x}", str(image)],
+        [python, "-m", "esptool", "--chip", "esp32", "--port", port,
+         "--before", "no-reset", "--after", "no-reset", "run"],
     ]
 
 
@@ -262,6 +264,7 @@ def flash_factory(port: str,
     _validate_chip(_run(runner, commands[2]).stdout)
     _run(runner, commands[3])  # exact NVS reset removes factory_seed and settings/index
     _run(runner, commands[4])
+    _run(runner, commands[5])  # success-only, non-mutating handoff to the complete image
     return digest
 
 
