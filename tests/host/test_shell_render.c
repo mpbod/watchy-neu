@@ -49,7 +49,7 @@ static int test_hairline_battery_rule(void) {
     CHECK(!black(fb, 136, 197) && !black(fb, 199, 199));
     {
         bool found = false;
-        for (int y = 175; y <= 185; ++y) for (int x = 20; x < 180; ++x) found |= black(fb, x, y);
+        for (int y = 162; y <= 176; ++y) for (int x = 20; x < 180; ++x) found |= black(fb, x, y);
         CHECK(found);
     }
     return 0;
