@@ -125,7 +125,7 @@ static void draw_primary_row(watchy_canvas_t *canvas,
 static void render_menu(watchy_canvas_t *canvas,
                         const watchy_shell_t *shell,
                         const watchy_time_t *time) {
-    static const char *const labels[] = {"WATCHFACE", "APPS", "SETTINGS"};
+    static const char *const labels[] = {"Watchface", "Apps", "Settings"};
     static const char *const metadata[] = {"CHANGE FACE", "APP GRID", "SYSTEM"};
     draw_header(canvas, "MENU", time);
     for (unsigned row = 0u; row < 3u; ++row) {
@@ -151,7 +151,7 @@ static void render_selector(watchy_canvas_t *canvas,
     draw_header(canvas, "WATCHFACE", time);
     for (unsigned slot = 0u; slot < WATCHY_SHELL_VISIBLE_ROWS; ++slot) {
         const unsigned position = page_start + slot;
-        const char *label = "HAIRLINE";
+        const char *label = "Hairline";
         const char *metadata = "BUILT-IN";
         unsigned icon_kind = 0u;
         if (position > 0u && position < total && catalog != NULL) {
