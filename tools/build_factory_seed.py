@@ -42,14 +42,14 @@ OWNER_BYTES = b"watchy-factory-seed-v1\n"
 # These are the Task 9 outputs that received the package/ELF audit. Updating a
 # first-party face requires a fresh audit and an explicit update to this table.
 AUDITED_WPK_SHA256 = {
-    "grid-01.wpk": "465a34f57d867c580075052d56f3c608c86242528118fb5e4e06c91b87356dc8",
-    "grid-02.wpk": "abb2a52cb898b293c3fbe6da8c0fa432f8f7883c82fb05736c61b460418d2674",
-    "grid-03.wpk": "2c3b978153d6b57bad454a811f877ecab17cde949cfc3a17c9c3d83daccb5687",
-    "orbit.wpk": "8b5c20086e75ab11d9a988cd37f8fb923347f44125ea2ed8177adeaac21e8efa",
-    "slab.wpk": "e1ca5d417205108a38bdc238b65eee180885da02a2d272ec644f506385855ea8",
-    "term-01.wpk": "838f7253e86a71e990f0224b4512a24f321342592a36411f0675f1c6790318c8",
-    "term-02.wpk": "f57c05f0faa807be7a1f67e443971cff1d2da8d0c1859645f9386704993fdf88",
-    "term-03.wpk": "f7365c4bacef2a8d89dc9e88a825ebaf0c9eab3fc6e896bf2aadb2a350da57c4",
+    "grid-01.wpk": "0a224c7b7aeb574b84918c206bf117a98d2c742399d8dcfcb8e59a9b5fee5475",
+    "grid-02.wpk": "a8bba8a3fc1055ee2dc5eff545d02b6e37330d2c70714bbfe173c0b56b363a2c",
+    "grid-03.wpk": "8525387dfadf8bc4907a9e00b2cc07c86b274a11d234f8ac99d0da3c1ad84b57",
+    "orbit.wpk": "2dc17e53213d28fc9c36a8d2e44ebed396af25c79d944fa64ac0e5cdaa9b17ae",
+    "slab.wpk": "bb6e9aec7b5952fb3b1128ee703366e171d269870fb3d1b88af1008faf4d107d",
+    "term-01.wpk": "96b2ac789bed3ecffca32bbe2e6077d47c25d499d0b75150d31571b3b7af9ca5",
+    "term-02.wpk": "47a9f9f3df367e406794afbad34c23c2ee9b615b0c9f2e5e81823b203465cca5",
+    "term-03.wpk": "e91801f680b22aba1191f5b14a8d7202757fb4141c25b9881de432d2cf8a3090",
 }
 
 EXPECTED_IDS = {

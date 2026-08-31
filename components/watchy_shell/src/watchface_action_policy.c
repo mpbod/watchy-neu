@@ -248,3 +248,60 @@ watchy_status_t watchy_watchface_run_active(
     }
     return out_result->rendered ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
 }
+
+watchy_status_t watchy_watchface_return_selected(
+    bool safe_mode,
+    bool package_execution_blocked,
+    bool force_full_refresh,
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    const watchy_watchface_action_ops_t *operations,
+    watchy_watchface_run_result_t *out_result) {
+    watchy_status_t run_status;
+    watchy_status_t settings_status;
+    bool pending_attempted = false;
+    if (settings == NULL || catalog == NULL || operations == NULL ||
+        operations->snapshot == NULL || operations->save_settings == NULL ||
+        out_result == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    for (size_t index = 0u; index < catalog->count; ++index) {
+        pending_attempted = pending_attempted || catalog->packages[index].pending;
+    }
+    run_status = watchy_watchface_run_active(
+        safe_mode, package_execution_blocked, force_full_refresh,
+        catalog, operations, out_result);
+    if (run_status == WATCHY_STATUS_UNSUPPORTED ||
+        run_status == WATCHY_STATUS_INVALID_ARGUMENT) {
+        return run_status;
+    }
+    /* A lifecycle attempt may have promoted or rolled back a portal-created
+     * pending face. Always refresh the controller's catalog and persisted
+     * active-only setting before returning its render/cancellation status. */
+    if (operations->snapshot(operations->context, catalog) != WATCHY_PACKAGE_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (run_status == WATCHY_STATUS_INVALID_STATE && pending_attempted) {
+        bool active_restored = false;
+        for (size_t index = 0u; index < catalog->count; ++index) {
+            active_restored = active_restored || catalog->packages[index].active;
+        }
+        if (active_restored) {
+            /* The runner rolled a failed portal candidate back. Render the
+             * restored active package once before considering Hairline. */
+            run_status = watchy_watchface_run_active(
+                safe_mode, package_execution_blocked, true,
+                catalog, operations, out_result);
+            if (operations->snapshot(operations->context, catalog) != WATCHY_PACKAGE_OK) {
+                return WATCHY_STATUS_INVALID_STATE;
+            }
+        }
+    }
+    settings_status = watchy_watchface_reconcile_settings(
+        settings, catalog, operations->save_settings, operations->context);
+    if (settings_status != WATCHY_STATUS_OK) {
+        out_result->settings_save_failed = true;
+        return settings_status;
+    }
+    return run_status;
+}

@@ -9,6 +9,8 @@ typedef struct {
     watchy_package_catalog_t snapshot;
     watchy_package_status_t select_status;
     watchy_watchface_run_result_t run_result;
+    watchy_watchface_run_result_t retry_run_result;
+    bool use_retry_run_result;
     unsigned select_builtin_calls;
     unsigned select_watchface_calls;
     unsigned run_calls;
@@ -72,7 +74,11 @@ static watchy_watchface_run_result_t run_watchface(void *context, bool safe_mode
     fixture_t *fixture = context;
     ++fixture->run_calls;
     fixture->run_started_after_full_refresh = fixture->force_full_calls != 0u;
-    return safe_mode ? (watchy_watchface_run_result_t){0} : fixture->run_result;
+    if (safe_mode) return (watchy_watchface_run_result_t){0};
+    if (fixture->use_retry_run_result && fixture->run_calls > 1u) {
+        return fixture->retry_run_result;
+    }
+    return fixture->run_result;
 }
 
 static void force_full_refresh(void *context) {
@@ -262,6 +268,80 @@ static int test_active_package_return_forces_full_refresh_before_render(void) {
           WATCHY_STATUS_UNSUPPORTED);
     CHECK(fixture.force_full_calls == 1u);
     CHECK(fixture.run_calls == 1u);
+    return 0;
+}
+
+static int test_idle_return_runs_active_package_and_reconciles_catalog(void) {
+    fixture_t fixture = {
+        .run_result = {.rendered = true},
+    };
+    watchy_package_catalog_t catalog;
+    watchy_settings_t settings = {0};
+    watchy_watchface_run_result_t result = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+    const watchy_watchface_action_ops_t ops = operations(&fixture);
+
+    CHECK(watchy_watchface_return_selected(false, false, true, &settings,
+                                            &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(result.rendered && fixture.run_calls == 1u);
+    CHECK(fixture.force_full_calls == 1u && fixture.run_started_after_full_refresh);
+    CHECK(fixture.snapshot_calls == 1u && fixture.save_calls == 0u);
+    CHECK(catalog.packages[0].active);
+    return 0;
+}
+
+static int test_idle_return_renders_and_promotes_portal_pending_package(void) {
+    fixture_t fixture = {
+        .run_result = {.rendered = true},
+    };
+    watchy_package_catalog_t catalog;
+    watchy_settings_t settings = {0};
+    watchy_watchface_run_result_t result = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    catalog.packages[1].pending = true;
+    catalog_with_active(&fixture.snapshot, "face.new@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+    const watchy_watchface_action_ops_t ops = operations(&fixture);
+
+    CHECK(watchy_watchface_return_selected(false, false, true, &settings,
+                                            &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(result.rendered && fixture.run_calls == 1u && fixture.snapshot_calls == 1u);
+    CHECK(catalog.packages[1].active && !catalog.packages[1].pending);
+    CHECK(strcmp(settings.active_watchface, "face.new@1.0.0") == 0);
+    CHECK(strcmp(fixture.saved_settings.active_watchface,
+                 "face.new@1.0.0") == 0 && fixture.save_calls == 1u);
+    return 0;
+}
+
+static int test_idle_return_rolls_failed_pending_package_back_to_active_package(void) {
+    fixture_t fixture = {
+        .retry_run_result = {.rendered = true},
+        .use_retry_run_result = true,
+    };
+    watchy_package_catalog_t catalog;
+    watchy_settings_t settings = {0};
+    watchy_watchface_run_result_t result = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    catalog.packages[1].pending = true;
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+    const watchy_watchface_action_ops_t ops = operations(&fixture);
+
+    CHECK(watchy_watchface_return_selected(false, false, true, &settings,
+                                            &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(result.rendered && fixture.run_calls == 2u && fixture.snapshot_calls == 2u);
+    CHECK(fixture.force_full_calls == 2u);
+    CHECK(catalog.packages[0].active && !catalog.packages[1].pending);
+    CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
+    CHECK(fixture.save_calls == 0u);
     return 0;
 }
 
@@ -785,6 +865,9 @@ int main(void) {
     CHECK(test_builtin_selection_clears_persisted_package() == 0);
     CHECK(test_cancelled_activation_replays_the_button_without_package_failure() == 0);
     CHECK(test_active_package_return_forces_full_refresh_before_render() == 0);
+    CHECK(test_idle_return_runs_active_package_and_reconciles_catalog() == 0);
+    CHECK(test_idle_return_renders_and_promotes_portal_pending_package() == 0);
+    CHECK(test_idle_return_rolls_failed_pending_package_back_to_active_package() == 0);
     CHECK(test_normal_boot_imports_seed_before_first_catalog_snapshot() == 0);
     CHECK(test_safe_boot_skips_seed_import_but_keeps_recovery_catalog() == 0);
     CHECK(test_seed_failure_is_visible_and_does_not_hide_readable_catalog() == 0);

@@ -78,23 +78,17 @@ inline fixed_text term_day_date(const watchy_time_t &time) noexcept {
 inline fixed_text term_percent(void *user_data) noexcept {
     watchy_battery_state_t battery{};
     if (!term_battery(user_data, &battery)) return fixed_text("--%");
-    fixed_text value;
-    value.value[0] = static_cast<char>('0' + battery.percent / 10u);
-    value.value[1] = static_cast<char>('0' + battery.percent % 10u);
-    value.value[2] = '%';
-    value.value[3] = '\0';
-    return value;
+    return format_percent(battery.percent);
 }
 
 inline void term_time_mode(void *user_data, const watchy_time_t &time,
                            watchy_refresh_mode_t *mode) noexcept {
-    if (mode != nullptr) *mode = full_refresh_for_hour(user_data, time.hour)
-                                       ? WATCHY_REFRESH_FULL : WATCHY_REFRESH_PARTIAL;
+    (void)time;
+    set_routine_refresh(user_data, mode);
 }
 
 inline void term_invalid_mode(void *user_data, watchy_refresh_mode_t *mode) noexcept {
-    if (mode != nullptr) *mode = full_refresh_for_hour(user_data, 0u)
-                                       ? WATCHY_REFRESH_FULL : WATCHY_REFRESH_PARTIAL;
+    set_routine_refresh(user_data, mode);
 }
 
 }  // namespace watchy_first_party

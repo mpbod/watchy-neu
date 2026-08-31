@@ -19,7 +19,6 @@ import sys
 from typing import Callable, Iterable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPABILITIES = 0x203  # Canvas, Clock, System
 FACES = tuple({
     "id": f"watchy.firstparty.{slug}",
     "output": f"{project}.wpk",
@@ -33,14 +32,14 @@ FACES = tuple({
     "max_runtime_bytes": 49152,
     "assets": [],
 } for slug, project, name, capabilities in (
-    ("grid01", "grid-01", "Grid 01", 787),
-    ("grid02", "grid-02", "Grid 02", 515),
-    ("grid03", "grid-03", "Grid 03", 515),
-    ("orbit", "orbit", "Orbit", 531),
-    ("slab", "slab", "Slab", 531),
-    ("term01", "term-01", "Term 01", 771),
-    ("term02", "term-02", "Term 02", 531),
-    ("term03", "term-03", "Term 03", 531),
+    ("grid01", "grid-01", "Grid 01", 275),
+    ("grid02", "grid-02", "Grid 02", 3),
+    ("grid03", "grid-03", "Grid 03", 3),
+    ("orbit", "orbit", "Orbit", 19),
+    ("slab", "slab", "Slab", 19),
+    ("term01", "term-01", "Term 01", 259),
+    ("term02", "term-02", "Term 02", 19),
+    ("term03", "term-03", "Term 03", 19),
 ))
 FACE_BY_PROJECT = {face["project"]: face for face in FACES}
 

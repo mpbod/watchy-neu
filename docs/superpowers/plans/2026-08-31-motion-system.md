@@ -165,7 +165,7 @@ watchy_transition_policy_context_t context = {
 watchy_transition_plan_t plan;
 CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
 CHECK(plan.effect == WATCHY_TRANSITION_WIPE);
-CHECK(plan.write_count == 4u);
+CHECK(plan.write_count == 3u);
 context.level = WATCHY_TRANSITION_LEVEL_REDUCED;
 CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
 CHECK(plan.effect == WATCHY_TRANSITION_FLASH && plan.write_count == 2u);

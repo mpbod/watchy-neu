@@ -203,13 +203,12 @@ inline void grid_draw_rotated_text(watchy_canvas_t *canvas,
 
 inline void grid_time_mode(void *user_data, const watchy_time_t &time,
                            watchy_refresh_mode_t *mode) noexcept {
-    if (mode == nullptr) return;
-    *mode = full_refresh_for_hour(user_data, time.hour) ? WATCHY_REFRESH_FULL : WATCHY_REFRESH_PARTIAL;
+    (void)time;
+    set_routine_refresh(user_data, mode);
 }
 
 inline void grid_invalid_mode(void *user_data, watchy_refresh_mode_t *mode) noexcept {
-    if (mode == nullptr) return;
-    *mode = full_refresh_for_hour(user_data, 0u) ? WATCHY_REFRESH_FULL : WATCHY_REFRESH_PARTIAL;
+    set_routine_refresh(user_data, mode);
 }
 
 inline void grid_footer_rule(watchy_canvas_t *canvas) noexcept {
@@ -225,10 +224,7 @@ inline void grid_draw_battery(watchy_canvas_t *canvas, void *user_data,
     watchy_battery_state_t battery{};
     fixed_text value;
     if (grid_battery(user_data, &battery)) {
-        value.value[0] = static_cast<char>('0' + battery.percent / 10u);
-        value.value[1] = static_cast<char>('0' + battery.percent % 10u);
-        value.value[2] = '%';
-        value.value[3] = '\0';
+        value = format_percent(battery.percent);
     } else {
         value = fixed_text("--%");
     }

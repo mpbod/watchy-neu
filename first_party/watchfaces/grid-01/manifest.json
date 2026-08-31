@@ -2,7 +2,7 @@
   "abi_major": 1,
   "abi_minor": 2,
   "assets": [],
-  "capabilities": 787,
+  "capabilities": 275,
   "id": "watchy.firstparty.grid01",
   "max_runtime_bytes": 49152,
   "name": "Grid 01",

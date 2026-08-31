@@ -311,6 +311,50 @@ static bool reconcile_package_mutation(
     return true;
 }
 
+static bool present_selected_watchface(
+    watchy_shell_t *shell,
+    watchy_shell_presentation_state_t *presentation,
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    bool package_execution_blocked,
+    bool force_full_refresh,
+    bool *out_force_builtin_full) {
+    watchy_watchface_run_result_t result = {0};
+    const watchy_status_t status = watchy_watchface_return_selected(
+        shell->safe_mode, package_execution_blocked, force_full_refresh,
+        settings, catalog, &watchface_action_ops, &result);
+    if (out_force_builtin_full != NULL) *out_force_builtin_full = false;
+    if (status == WATCHY_STATUS_OK) {
+        watchy_shell_set_package_catalog(shell, catalog, true);
+        watchy_shell_presentation_observe(
+            presentation, shell, WATCHY_SHELL_PRESENT_TARGET, 0u);
+        return true;
+    }
+    if (status == WATCHY_STATUS_CANCELLED) {
+        watchy_shell_set_package_catalog(shell, catalog, true);
+        watchy_shell_presentation_observe(
+            presentation, shell, WATCHY_SHELL_PRESENT_CANCELLED,
+            result.cancelled_buttons);
+        return true;
+    }
+    if (status == WATCHY_STATUS_UNSUPPORTED) return false;
+
+    shell->package_warning = true;
+    if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
+        watchy_shell_set_package_catalog(shell, catalog, true);
+        if (watchy_watchface_reconcile_settings(
+                settings, catalog, action_save_settings, NULL) != WATCHY_STATUS_OK) {
+            result.settings_save_failed = true;
+        }
+    }
+    if (result.settings_save_failed) {
+        watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
+    }
+    watchy_display_invalidate_previous();
+    if (out_force_builtin_full != NULL) *out_force_builtin_full = true;
+    return false;
+}
+
 static watchy_status_t sync_time_ntp(const watchy_settings_t *settings) {
     watchy_wifi_sta_config_t wifi = {0};
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(settings->ntp_server);
@@ -440,7 +484,7 @@ static void run_shell(watchy_shell_t *shell,
                 watchy_watchface_portal_exit_result_t portal_result = {0};
                 const watchy_status_t portal_status = watchy_watchface_portal_exit(
                     settings, catalog, &portal_exit_ops, &portal_result);
-                watchy_shell_input(shell, WATCHY_SHELL_INPUT_BACK);
+                watchy_shell_input(shell, transition_input);
                 detail[0] = '\0';
                 watchy_shell_error_t portal_error =
                     portal_status == WATCHY_STATUS_OK
@@ -467,6 +511,15 @@ static void run_shell(watchy_shell_t *shell,
                 if (portal_error != WATCHY_SHELL_ERROR_NONE) {
                     watchy_shell_fail(shell, portal_error);
                 }
+                bool force_builtin_full = false;
+                if (shell->screen == WATCHY_SHELL_WATCHFACE &&
+                    portal_error == WATCHY_SHELL_ERROR_NONE &&
+                    present_selected_watchface(
+                        shell, presentation, settings, catalog,
+                        package_execution_blocked, true, &force_builtin_full)) {
+                    last_activity = milliseconds();
+                    continue;
+                }
                 watchy_transition_request_v1_t request;
                 const watchy_shell_transition_context_t change = {
                     .from = before_screen,
@@ -477,7 +530,9 @@ static void run_shell(watchy_shell_t *shell,
                     .safe_mode = shell->safe_mode,
                 };
                 const bool has_request = watchy_shell_transition_for_change(&change, &request);
-                watchy_refresh_mode_t refresh_mode = WATCHY_REFRESH_PARTIAL;
+                watchy_refresh_mode_t refresh_mode = force_builtin_full
+                                                          ? WATCHY_REFRESH_FULL
+                                                          : WATCHY_REFRESH_PARTIAL;
                 if (shell->screen == WATCHY_SHELL_ERROR &&
                     before_screen != WATCHY_SHELL_ERROR) {
                     watchy_display_invalidate_previous();
@@ -673,35 +728,11 @@ static void run_shell(watchy_shell_t *shell,
             if (post_action_presentation_needed) {
                 bool force_builtin_full = false;
                 if (shell->screen == WATCHY_SHELL_WATCHFACE && !shell->safe_mode) {
-                    watchy_watchface_run_result_t run_result = {0};
-                    const watchy_status_t watchface_status =
-                        watchy_watchface_run_active(
-                            false, package_execution_blocked,
-                            shell_input == WATCHY_SHELL_INPUT_BACK,
-                            catalog, &watchface_action_ops, &run_result);
-                    if (watchface_status == WATCHY_STATUS_OK) {
-                        watchy_shell_presentation_observe(
-                            presentation, shell, WATCHY_SHELL_PRESENT_TARGET, 0u);
-                        post_action_presentation_needed = false;
-                    } else if (watchface_status == WATCHY_STATUS_CANCELLED) {
-                        watchy_shell_presentation_observe(
-                            presentation, shell, WATCHY_SHELL_PRESENT_CANCELLED,
-                            run_result.cancelled_buttons);
-                        post_action_presentation_needed = false;
-                    } else if (watchface_status != WATCHY_STATUS_UNSUPPORTED) {
-                        shell->package_warning = true;
-                        if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
-                            watchy_shell_set_package_catalog(shell, catalog, true);
-                            if (watchy_watchface_reconcile_settings(
-                                    settings, catalog, action_save_settings, NULL) !=
-                                WATCHY_STATUS_OK) {
-                                watchy_shell_fail(shell,
-                                                 WATCHY_SHELL_ERROR_SETTINGS_SAVE);
-                            }
-                        }
-                        watchy_display_invalidate_previous();
-                        force_builtin_full = true;
-                    }
+                    post_action_presentation_needed = !present_selected_watchface(
+                        shell, presentation, settings, catalog,
+                        package_execution_blocked,
+                        shell_input == WATCHY_SHELL_INPUT_BACK,
+                        &force_builtin_full);
                 }
                 if (!post_action_presentation_needed) {
                     last_activity = milliseconds();
@@ -740,6 +771,13 @@ static void run_shell(watchy_shell_t *shell,
         } else if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
             const watchy_shell_screen_t before_screen = shell->screen;
             watchy_shell_input(shell, WATCHY_SHELL_INPUT_IDLE);
+            bool force_builtin_full = false;
+            if (!shell->safe_mode && present_selected_watchface(
+                    shell, presentation, settings, catalog,
+                    package_execution_blocked, true, &force_builtin_full)) {
+                last_activity = milliseconds();
+                continue;
+            }
             watchy_transition_request_v1_t request;
             const watchy_shell_transition_context_t change = {
                 .from = before_screen,
@@ -752,7 +790,8 @@ static void run_shell(watchy_shell_t *shell,
             const bool has_request = watchy_shell_transition_for_change(&change, &request);
             const shell_presentation_result_t result =
                 refresh_shell(shell, settings, time, battery, catalog, diagnostics,
-                              NULL, WATCHY_REFRESH_PARTIAL,
+                              NULL, force_builtin_full ? WATCHY_REFRESH_FULL
+                                                       : WATCHY_REFRESH_PARTIAL,
                               has_request ? &request : NULL);
             watchy_shell_presentation_observe(presentation, shell, result.outcome,
                                               result.cancelled_buttons);

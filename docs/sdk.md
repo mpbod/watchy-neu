@@ -166,6 +166,12 @@ and Orbit are ordinary independent ABI 1.2 watchface packages with IDs
 validation, lifecycle, capability, render-promotion, rollback, watchdog, and
 80 KiB WPK ceiling as developer packages.
 
+These eight renderers deliberately omit System from their capability masks:
+none calls logging, sleep/exit, refresh, or transition services. They use
+Canvas and Clock, adding Battery and Bluetooth only where the handoff displays
+those values. Routine render mode is Partial; controller activation/return and
+the display ghosting policy decide when to force Full.
+
 Weather and calendar services are not part of v1. First-party renderers must
 show their documented placeholders (`--°`, `NO DATA`, `NO EVENT`, `--:--`, or
 `BT·--`) rather than fixture data or implied connectivity. World and

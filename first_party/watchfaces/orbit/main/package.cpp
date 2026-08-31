@@ -2,7 +2,7 @@
 
 extern "C" watchy_status_t orbit_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *) noexcept;
 
-WATCHY_FIRST_PARTY_FACE_NAMED(orbit_package_entry, "watchy.firstparty.orbit", "Orbit", 531u,
+WATCHY_FIRST_PARTY_FACE_NAMED(orbit_package_entry, "watchy.firstparty.orbit", "Orbit", 19u,
                               orbit_render)
 #ifndef WATCHY_HOST_TEST
 extern "C" __attribute__((visibility("default")))

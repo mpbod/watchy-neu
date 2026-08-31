@@ -60,13 +60,16 @@ explicitly pending until the post-review controller run.
 ## First-party gallery — pending live run
 
 Test metadata: board/revision **pending**; board serial **pending**; reviewed
-firmware commit **pending**; pre-flash backup SHA-256 **pending**; battery
+firmware commit **pending**; pre-flash backup **waived for the current
+reinstall-everything run**; battery
 voltage/age **pending**; ambient temperature **pending**; timing/current setup
 **pending**; photographs **pending**.
 
-- [ ] Before destructive factory flashing, record the full-flash backup and its
-      SHA-256, then run `make factory-flash PORT=/dev/...` with the explicitly
-      discovered Watchy 2.0 classic-ESP32 serial port.
+- [ ] Confirm the operator either recorded a full-flash backup and SHA-256 or
+      explicitly waived it (waived for the current run), then run
+      `make factory-flash PORT=/dev/...` with the explicitly discovered Watchy
+      2.0 classic-ESP32 serial port. Confirm the factory workflow resets NVS
+      settings/Wi-Fi/package state and imports the seed from a blank marker.
 - [ ] A blank factory state boots to Hairline and the selector contains exactly
       Grid 01, Grid 02, Grid 03, Term 01, Term 02, Term 03, Slab, and Orbit in
       addition to Hairline; no WPK is implicitly active.

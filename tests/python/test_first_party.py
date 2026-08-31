@@ -29,15 +29,17 @@ class FirstPartyBuildMatrixTests(unittest.TestCase):
         self.assertEqual(len(set(ids)), 8)
         self.assertEqual(len(set(outputs)), 8)
         expected_caps = {
-            "grid01": 787, "grid02": 515, "grid03": 515,
-            "term01": 771, "term02": 531, "term03": 531,
-            "slab": 531, "orbit": 531,
+            "grid01": 275, "grid02": 3, "grid03": 3,
+            "term01": 259, "term02": 19, "term03": 19,
+            "slab": 19, "orbit": 19,
         }
         for face in builder.FACES:
             self.assertEqual(face["abi_major"], 1)
             self.assertEqual(face["abi_minor"], 2)
             self.assertEqual(face["type"], "watchface")
             self.assertEqual(face["capabilities"], expected_caps[face["id"].rsplit(".", 1)[1]])
+            self.assertEqual(face["capabilities"] & (1 << 9), 0,
+                             "first-party renderers do not use the System API")
 
     def test_cli_only_dry_run_is_explicit_and_does_not_require_renderer_projects(self):
         import tools.build_first_party as builder

@@ -128,6 +128,15 @@ watchy_status_t watchy_watchface_run_active(
     const watchy_watchface_action_ops_t *operations,
     watchy_watchface_run_result_t *out_result);
 
+watchy_status_t watchy_watchface_return_selected(
+    bool safe_mode,
+    bool package_execution_blocked,
+    bool force_full_refresh,
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    const watchy_watchface_action_ops_t *operations,
+    watchy_watchface_run_result_t *out_result);
+
 #ifdef __cplusplus
 }
 #endif

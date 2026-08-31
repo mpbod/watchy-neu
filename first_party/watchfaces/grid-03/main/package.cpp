@@ -2,7 +2,7 @@
 
 extern "C" watchy_status_t grid03_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *) noexcept;
 
-WATCHY_FIRST_PARTY_FACE_NAMED(grid03_package_entry, "watchy.firstparty.grid03", "Grid 03", 515u,
+WATCHY_FIRST_PARTY_FACE_NAMED(grid03_package_entry, "watchy.firstparty.grid03", "Grid 03", 3u,
                               grid03_render)
 #ifndef WATCHY_HOST_TEST
 extern "C" __attribute__((visibility("default")))

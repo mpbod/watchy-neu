@@ -31,12 +31,7 @@ fixed_text orbit_percent(void *user_data) noexcept {
     if (caps == nullptr || caps->battery == nullptr || caps->battery->read == nullptr ||
         caps->battery->read(caps->battery->context, &battery) != WATCHY_STATUS_OK ||
         battery.percent > 100u) return fixed_text("--%");
-    fixed_text value;
-    value.value[0] = static_cast<char>('0' + battery.percent / 10u);
-    value.value[1] = static_cast<char>('0' + battery.percent % 10u);
-    value.value[2] = '%';
-    value.value[3] = '\0';
-    return value;
+    return format_percent(battery.percent);
 }
 
 bool phase_black(uint8_t octant, int dx2) noexcept {
@@ -151,10 +146,8 @@ void draw_orbit(watchy_canvas_t *canvas, void *user_data, const watchy_time_t &t
 }
 
 void set_refresh(void *user_data, uint8_t hour, watchy_refresh_mode_t *mode) noexcept {
-    if (mode != nullptr) {
-        *mode = full_refresh_for_hour(user_data, hour) ? WATCHY_REFRESH_FULL
-                                                       : WATCHY_REFRESH_PARTIAL;
-    }
+    (void)hour;
+    set_routine_refresh(user_data, mode);
 }
 }  // namespace
 

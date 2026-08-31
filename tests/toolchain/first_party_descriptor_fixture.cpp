@@ -5,7 +5,7 @@ namespace watchy_first_party {
  * self-contained package image (no undefined symbols). */
 __attribute__((visibility("hidden")))
 face_context &state() noexcept {
-    static face_context value{nullptr, false, false, 0u};
+    static face_context value{nullptr, false};
     return value;
 }
 }  // namespace watchy_first_party
@@ -15,7 +15,7 @@ extern "C" watchy_status_t fixture_render(void *, watchy_canvas_t *,
     return WATCHY_STATUS_OK;
 }
 
-WATCHY_FIRST_PARTY_FACE_NAMED(fixture_package_entry, "fixture.face", "Fixture", 515u,
+WATCHY_FIRST_PARTY_FACE_NAMED(fixture_package_entry, "fixture.face", "Fixture", 3u,
                               fixture_render)
 
 extern "C" __attribute__((visibility("default")))

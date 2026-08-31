@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Explicitly flash firmware and the audited factory LittleFS image.
+"""Explicitly reinstall firmware and the audited factory LittleFS image.
 
 No operation in this module auto-selects a serial port. The caller supplies a
 port that must also appear in PlatformIO's live USB serial discovery result.
+The factory workflow erases only the exact NVS partition, resetting settings,
+Wi-Fi credentials, package index/health state, and the factory-seed marker.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import dataclass
 import hashlib
 import io
 import json
@@ -17,15 +20,48 @@ import re
 import shlex
 import shutil
 import subprocess
+import struct
 import sys
 from typing import Callable, Iterable, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
+NVS_OFFSET = 0x9000
+NVS_SIZE = 0x6000
+BOOTLOADER_OFFSET = 0x1000
+PARTITION_TABLE_OFFSET = 0x8000
+FACTORY_OFFSET = 0x10000
+FACTORY_SIZE = 0x1C0000
 EXPECTED_OFFSET = 0x1D0000
 EXPECTED_SIZE = 0x230000
 DEFAULT_IMAGE = ROOT / "build" / "factory-seed" / "littlefs.bin"
 DEFAULT_PARTITIONS = ROOT / "partitions.csv"
+DEFAULT_BUILD_DIR = ROOT / ".pio" / "build" / "watchy_v2"
+
+EXPECTED_PARTITIONS = (
+    ("nvs", "data", "nvs", NVS_OFFSET, NVS_SIZE, ""),
+    ("phy_init", "data", "phy", 0xF000, 0x1000, ""),
+    ("factory", "app", "factory", FACTORY_OFFSET, FACTORY_SIZE, ""),
+    ("littlefs", "data", "littlefs", EXPECTED_OFFSET, EXPECTED_SIZE, ""),
+)
+
+
+def _make_expected_partition_binary() -> bytes:
+    entry = struct.Struct("<HBBII16sI")
+    type_ids = {"app": 0x00, "data": 0x01}
+    subtype_ids = {"factory": 0x00, "phy": 0x01, "nvs": 0x02, "littlefs": 0x83}
+    table = bytearray()
+    for name, type_name, subtype_name, offset, size, _flags in EXPECTED_PARTITIONS:
+        label = name.encode("ascii")
+        table.extend(entry.pack(0x50AA, type_ids[type_name], subtype_ids[subtype_name],
+                                offset, size, label + bytes(16 - len(label)), 0))
+    table.extend(b"\xeb\xeb" + b"\xff" * 14)
+    table.extend(hashlib.md5(table[:4 * entry.size]).digest())
+    table.extend(b"\xff" * (0xC00 - len(table)))
+    return bytes(table)
+
+
+EXPECTED_PARTITION_BINARY = _make_expected_partition_binary()
 
 
 class FlashSafetyError(Exception):
@@ -33,6 +69,15 @@ class FlashSafetyError(Exception):
 
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+
+@dataclass(frozen=True)
+class FlashImage:
+    label: str
+    offset: int
+    path: Path
+    size: int
+    sha256: str
 
 
 def _parse_number(value: str) -> int:
@@ -54,21 +99,27 @@ def validate_partition_table(path: Path) -> tuple[int, int]:
             row = next(csv.reader(io.StringIO(raw), skipinitialspace=True))
             if len(row) < 5:
                 raise FlashSafetyError("partition row has fewer than five fields")
-            if row[0].strip() == "littlefs":
-                rows.append(row)
+            if len(row) > 6 and any(field.strip() for field in row[6:]):
+                raise FlashSafetyError("partition row has unexpected trailing fields")
+            rows.append(tuple(field.strip() for field in row[:6]))
     except (OSError, UnicodeError, csv.Error) as error:
         raise FlashSafetyError(f"cannot read partition table: {error}") from error
-    if len(rows) != 1:
-        raise FlashSafetyError("partition table must contain exactly one littlefs partition")
-    row = rows[0]
-    if row[1].strip() != "data" or row[2].strip() != "littlefs":
-        raise FlashSafetyError("littlefs partition type/subtype is not data/littlefs")
-    offset, size = _parse_number(row[3]), _parse_number(row[4])
-    if offset != EXPECTED_OFFSET:
-        raise FlashSafetyError(f"littlefs offset is 0x{offset:x}, expected 0x{EXPECTED_OFFSET:x}")
-    if size != EXPECTED_SIZE:
-        raise FlashSafetyError(f"littlefs size is 0x{size:x}, expected 0x{EXPECTED_SIZE:x}")
-    return offset, size
+    if len(rows) != len(EXPECTED_PARTITIONS):
+        raise FlashSafetyError("partition table must contain exactly the four Watchy factory partitions")
+    for row, expected in zip(rows, EXPECTED_PARTITIONS):
+        name, type_name, subtype_name, expected_offset, expected_size, flags = expected
+        if row[:3] != (name, type_name, subtype_name):
+            raise FlashSafetyError(f"{name} partition identity is not exact")
+        offset, size = _parse_number(row[3]), _parse_number(row[4])
+        if offset != expected_offset:
+            raise FlashSafetyError(
+                f"{name} offset is 0x{offset:x}, expected 0x{expected_offset:x}")
+        if size != expected_size:
+            raise FlashSafetyError(
+                f"{name} size is 0x{size:x}, expected 0x{expected_size:x}")
+        if row[5] != flags:
+            raise FlashSafetyError(f"{name} partition flags are not exact")
+    return EXPECTED_OFFSET, EXPECTED_SIZE
 
 
 def validate_image(path: Path) -> tuple[int, str]:
@@ -80,6 +131,9 @@ def validate_image(path: Path) -> tuple[int, str]:
         raise FlashSafetyError("LittleFS image is empty")
     if size > EXPECTED_SIZE:
         raise FlashSafetyError(f"LittleFS image exceeds 0x{EXPECTED_SIZE:x}: {size}")
+    if size != EXPECTED_SIZE:
+        raise FlashSafetyError(
+            f"LittleFS image must be exactly 0x{EXPECTED_SIZE:x} bytes: {size}")
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(65536), b""):
@@ -87,18 +141,65 @@ def validate_image(path: Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def commands_for(port: str, image: Path, *, platformio: str, python: str) -> list[list[str]]:
+def _validate_binary(path: Path, label: str, maximum: int,
+                     expected: bytes | None = None) -> FlashImage:
+    raw_path = Path(path)
+    if raw_path.is_symlink() or not raw_path.is_file():
+        raise FlashSafetyError(f"{label} image is not a regular file: {raw_path}")
+    path = raw_path.resolve()
+    data = path.read_bytes()
+    if not data or len(data) > maximum:
+        raise FlashSafetyError(f"{label} image size is outside its partition: {len(data)}")
+    if expected is not None and data != expected:
+        raise FlashSafetyError(f"{label} image does not match the exact Watchy partition image")
+    return FlashImage(label, 0, path, len(data), hashlib.sha256(data).hexdigest())
+
+
+def validate_flash_images(build_dir: Path, image: Path) -> tuple[FlashImage, ...]:
+    raw_build_dir = Path(build_dir)
+    if raw_build_dir.is_symlink() or not raw_build_dir.is_dir():
+        raise FlashSafetyError(
+            f"firmware build directory is not a regular directory: {raw_build_dir}")
+    build_dir = raw_build_dir.resolve()
+    bootloader = _validate_binary(build_dir / "bootloader.bin", "bootloader",
+                                  PARTITION_TABLE_OFFSET - BOOTLOADER_OFFSET)
+    partitions = _validate_binary(build_dir / "partitions.bin", "partition image",
+                                  NVS_OFFSET - PARTITION_TABLE_OFFSET,
+                                  EXPECTED_PARTITION_BINARY)
+    firmware = _validate_binary(build_dir / "firmware.bin", "factory application",
+                                FACTORY_SIZE)
+    littlefs_size, littlefs_digest = validate_image(image)
+    return (
+        FlashImage(bootloader.label, BOOTLOADER_OFFSET, bootloader.path,
+                   bootloader.size, bootloader.sha256),
+        FlashImage(partitions.label, PARTITION_TABLE_OFFSET, partitions.path,
+                   partitions.size, partitions.sha256),
+        FlashImage(firmware.label, FACTORY_OFFSET, firmware.path,
+                   firmware.size, firmware.sha256),
+        FlashImage("LittleFS", EXPECTED_OFFSET, Path(image).resolve(),
+                   littlefs_size, littlefs_digest),
+    )
+
+
+def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
+                 platformio: str, python: str) -> list[list[str]]:
     if not port or any(character.isspace() for character in port) or not port.startswith("/dev/"):
         raise FlashSafetyError("--port must be one explicit /dev/ serial path without whitespace")
     image = Path(image).resolve()
+    build_dir = Path(build_dir).resolve()
     chip = [python, "-m", "esptool", "--chip", "esp32", "--port", port, "chip-id"]
     return [
+        [platformio, "run", "-e", "watchy_v2"],
         [platformio, "device", "list", "--json-output"],
         chip,
-        [platformio, "run", "-e", "watchy_v2", "-t", "upload", "--upload-port", port],
-        chip.copy(),
         [python, "-m", "esptool", "--chip", "esp32", "--port", port,
-         "write-flash", f"0x{EXPECTED_OFFSET:x}", str(image)],
+         "erase-region", f"0x{NVS_OFFSET:x}", f"0x{NVS_SIZE:x}"],
+        [python, "-m", "esptool", "--chip", "esp32", "--port", port,
+         "write-flash",
+         f"0x{BOOTLOADER_OFFSET:x}", str(build_dir / "bootloader.bin"),
+         f"0x{PARTITION_TABLE_OFFSET:x}", str(build_dir / "partitions.bin"),
+         f"0x{FACTORY_OFFSET:x}", str(build_dir / "firmware.bin"),
+         f"0x{EXPECTED_OFFSET:x}", str(image)],
     ]
 
 
@@ -142,29 +243,38 @@ def flash_factory(port: str,
                   *, runner: Runner = subprocess.run,
                   printer: Callable[[str], None] = print,
                   platformio: str | None = None,
-                  python: str | None = None) -> str:
+                  python: str | None = None,
+                  build_dir: Path = DEFAULT_BUILD_DIR) -> str:
     offset, _ = validate_partition_table(partition_table)
     image = Path(image).resolve()
-    size, digest = validate_image(image)
+    validate_image(image)
     platformio = platformio or shutil.which("platformio") or "platformio"
     python = python or sys.executable
-    commands = commands_for(port, image, platformio=platformio, python=python)
-    printer(f"LittleFS image size={size} sha256={digest} offset=0x{offset:x}")
-    discovery = _run(runner, commands[0])
+    commands = commands_for(port, image, build_dir=build_dir,
+                            platformio=platformio, python=python)
+    _run(runner, commands[0])
+    images = validate_flash_images(build_dir, image)
+    digest = images[-1].sha256
+    printer("; ".join(
+        f"{item.label} size={item.size} sha256={item.sha256} offset=0x{item.offset:x}"
+        for item in images))
+    discovery = _run(runner, commands[1])
     _validate_discovery(discovery.stdout, port)
-    _validate_chip(_run(runner, commands[1]).stdout)
-    _run(runner, commands[2])  # firmware-only PlatformIO upload
-    _validate_chip(_run(runner, commands[3]).stdout)  # re-open and re-identify after reset
+    _validate_chip(_run(runner, commands[2]).stdout)
+    _run(runner, commands[3])  # exact NVS reset removes factory_seed and settings/index
     _run(runner, commands[4])
     return digest
 
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="flash Watchy firmware and factory LittleFS seed")
+    parser = argparse.ArgumentParser(
+        description="factory-reinstall Watchy firmware, NVS state, and LittleFS seed")
     parser.add_argument("--port", required=True,
                         help="explicit serial device; never auto-selected")
     parser.add_argument("--image", type=Path, default=DEFAULT_IMAGE)
     parser.add_argument("--partition-table", type=Path, default=DEFAULT_PARTITIONS)
+    parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR,
+                        help="prebuilt watchy_v2 image directory")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate local inputs and print commands without opening a device")
     return parser
@@ -176,14 +286,19 @@ def main(arguments: Iterable[str] | None = None) -> int:
         offset, _ = validate_partition_table(args.partition_table)
         size, digest = validate_image(args.image)
         platformio = shutil.which("platformio") or "platformio"
-        commands = commands_for(args.port, args.image, platformio=platformio, python=sys.executable)
+        commands = commands_for(args.port, args.image, build_dir=args.build_dir,
+                                platformio=platformio, python=sys.executable)
         if args.dry_run:
-            print(f"DRY RUN LittleFS image size={size} sha256={digest} offset=0x{offset:x}")
+            images = validate_flash_images(args.build_dir, args.image)
+            print("DRY RUN " + "; ".join(
+                f"{item.label} size={item.size} sha256={item.sha256} offset=0x{item.offset:x}"
+                for item in images))
             for command in commands:
                 print(shlex.join(command))
             return 0
         flash_factory(args.port, args.image, args.partition_table,
-                      platformio=platformio, python=sys.executable)
+                      platformio=platformio, python=sys.executable,
+                      build_dir=args.build_dir)
         return 0
     except (FlashSafetyError, OSError) as error:
         print(f"watchy-factory-flash: {error}", file=sys.stderr)

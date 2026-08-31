@@ -30,8 +30,6 @@ using RenderFn = watchy_status_t (*)(void *, watchy_canvas_t *, watchy_refresh_m
 struct face_context {
     const watchy_host_caps_v1_t *host;
     bool loaded;
-    bool rendered;
-    uint8_t last_hour;
 };
 inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept {
     return user_data == nullptr ? nullptr : static_cast<const face_context *>(user_data)->host;
@@ -42,12 +40,10 @@ inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept {
  * defeat the load/render handoff. */
 face_context &state() noexcept;
 
-inline bool full_refresh_for_hour(void *user_data, uint8_t hour) noexcept {
-    if (user_data != &state() || !state().loaded) return true;
-    const bool full = !state().rendered || state().last_hour != hour;
-    state().rendered = true;
-    state().last_hour = hour;
-    return full;
+inline void set_routine_refresh(void *user_data, watchy_refresh_mode_t *mode) noexcept {
+    if (mode != nullptr && user_data == &state() && state().loaded) {
+        *mode = WATCHY_REFRESH_PARTIAL;
+    }
 }
 
 inline watchy_status_t load(const watchy_host_caps_v1_t *caps, void **user_data) noexcept {
@@ -57,8 +53,6 @@ inline watchy_status_t load(const watchy_host_caps_v1_t *caps, void **user_data)
     if (state().loaded) return WATCHY_STATUS_INVALID_STATE;
     state().host = caps;
     state().loaded = true;
-    state().rendered = false;
-    state().last_hour = 0u;
     *user_data = &state();
     return WATCHY_STATUS_OK;
 }
@@ -66,8 +60,6 @@ inline void unload(void *user_data) noexcept {
     (void)user_data;
     state().host = nullptr;
     state().loaded = false;
-    state().rendered = false;
-    state().last_hour = 0u;
 }
 inline watchy_status_t start(void *user_data) noexcept {
     return user_data == &state() && state().loaded ? WATCHY_STATUS_OK

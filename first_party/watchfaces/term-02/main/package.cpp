@@ -2,7 +2,7 @@
 
 extern "C" watchy_status_t term02_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *) noexcept;
 
-WATCHY_FIRST_PARTY_FACE_NAMED(term02_package_entry, "watchy.firstparty.term02", "Term 02", 531u,
+WATCHY_FIRST_PARTY_FACE_NAMED(term02_package_entry, "watchy.firstparty.term02", "Term 02", 19u,
                               term02_render)
 #ifndef WATCHY_HOST_TEST
 extern "C" __attribute__((visibility("default")))

@@ -47,8 +47,8 @@ Token counts below are physical writes triggered after the source already visibl
 | --- | ---: | --- | --- |
 | Cut | 1 | partial or policy-promoted full | Default screen or value change |
 | Tick | 2 | partial | Press feedback, toggle, or confirmation |
-| Step | 3–4 | partial | Directional hierarchy and localized semantic change |
-| Sweep | 4–5 | partial, with target promotable to full | Entering a mode or deliberate progress |
+| Step | 2 | partial | Directional hierarchy and localized semantic change |
+| Sweep | 3 | partial, with target promotable to full | Entering a mode or deliberate progress |
 | Clear | 2 | full | Mandatory ghost purge: clearing/inversion pass, then target |
 
 The display policy may promote any partial write to full. Physical writes, including intermediate writes, advance refresh and ghosting counters individually.
@@ -65,11 +65,11 @@ A Tick effect. It writes an inverted target region and then the target. The regi
 
 ### Wipe
 
-A Sweep effect. It reveals the target from left to right in equal quarters with a two-pixel leading rule. The source remains visible to the right of the edge. The final write is the complete target.
+A Sweep effect. Its two intermediate writes reveal the target at the first and second quarter boundaries with a two-pixel leading rule; the third write is the complete target. The source remains visible to the right of the edge until that final write.
 
 ### Push
 
-A Step effect. It moves the target into the requested direction in thirds of the selected region, with a leading rule separating source and target. It carries parent/child hierarchy.
+A Step effect. One intermediate write moves the target through the first third of the selected region with a leading rule separating source and target; the second write is the complete target. It carries parent/child hierarchy.
 
 ### Dither
 
@@ -77,23 +77,23 @@ A Tick effect for directionless data changes. It writes a deterministic one-pixe
 
 ### Grow
 
-A Step effect. A rectangular target region grows from its center through two bounded intermediate sizes before reaching its final bounds. V1 exposes the compositor primitive, but no notification feature is added by this work.
+A Step effect. A rectangular target region grows from its center through one bounded one-third intermediate before the complete target. V1 exposes the compositor primitive, but no notification feature is added by this work.
 
 ### Odometer
 
-A Step effect restricted to a package- or shell-declared rectangle. Source and target content move vertically in thirds of that rectangle. It is intended for a changed minute digit; the compositor does not infer semantic digits.
+A Step effect restricted to a package- or shell-declared rectangle. Source and target content move vertically through one one-third intermediate before the complete target. It is intended for a changed minute digit; the compositor does not infer semantic digits.
 
 ### Split
 
-A Step effect. Solid edges close from top and bottom in thirds. It is used for user-initiated sleep or lock transitions. The final displayed content remains truthful, and actual deep sleep begins only after completion or safe cancellation.
+A Step effect. Solid edges close from top and bottom through one one-third intermediate before the complete target. It is used for user-initiated sleep or lock transitions. The final displayed content remains truthful, and actual deep sleep begins only after completion or safe cancellation.
 
 ### Fill
 
-A Sweep effect for explicit progress. The declared fill rectangle advances through 25%, 50%, 75%, and 100%, followed by the complete target only when that target differs from the 100% state. Progress is never interpolated by pixels or elapsed time.
+A Sweep effect for explicit progress. The declared fill rectangle advances through bounded 25% and 50% intermediates, followed by the complete target. Progress is never interpolated by pixels or elapsed time.
 
 ### Shutter
 
-A Sweep-class, optional visual prelude consisting of four alternating horizontal bands that close from alternating sides. It may precede a policy-required full target refresh, but it is not the mandatory Clear operation itself. When power, safety, or Motion settings disallow the prelude, the kernel performs the direct two-write Clear operation.
+A Sweep-class, optional visual prelude consisting of four alternating horizontal bands shown at the 25% and 50% boundaries before the complete target. It is not the mandatory Clear operation itself. When power, safety, or Motion settings disallow the prelude, the kernel performs the direct two-write Clear operation.
 
 ## Shell mappings
 
@@ -101,7 +101,7 @@ A Sweep-class, optional visual prelude consisting of four alternating horizontal
 - Menu into a child screen: directional Push.
 - Back to a parent screen: reverse-direction Push.
 - Confirmation and saved state: localized Flash.
-- Explicit synchronization progress: Fill in quarter steps.
+- Explicit synchronization progress: Fill at bounded quarter and half steps.
 - User-initiated sleep or lock: Split.
 - Ghost-budget purge: direct Clear; optional Shutter prelude only in Full mode when policy permits.
 - Ordinary row-selection movement: Cut.

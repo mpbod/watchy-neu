@@ -119,8 +119,9 @@ Weather, calendar, and unavailable Bluetooth data are deliberately honest
 placeholders (`--°`, `NO DATA`, `NO EVENT`, `--:--`, and `BT·--`). World and
 second-city clocks use declared fixed UTC offsets; v1 does not apply daylight
 saving time. Orbit computes moon phase locally and performs no network request.
-The faces use ABI 1.2 transition requests, with the kernel retaining final
-refresh-policy authority.
+The faces use ABI 1.2 descriptors but do not request the System capability.
+Routine renders return Partial; the kernel retains activation, transition,
+ghosting, and full-refresh authority.
 
 The committed one-bit typography is generated from vendored IBM Plex Mono
 (SIL Open Font License 1.1) and TeX Gyre Heros (GUST Font License) sources in
@@ -148,9 +149,13 @@ Normal developer upload is firmware-only and preserves LittleFS:
 platformio run -e watchy_v2 -t upload
 ```
 
-Factory flashing writes firmware and the audited LittleFS image. It is
-destructive to package storage and requires an explicit discovered classic
-ESP32 serial device—there is no automatic port selection:
+Factory flashing builds and hashes the firmware images, validates the exact
+Watchy partition table and target identity, erases only the exact 24 KiB NVS
+partition, and writes firmware plus the audited LittleFS image. It resets all
+settings, Wi-Fi credentials, the package index/health state, and the factory
+seed marker before first-boot import. It is destructive to package storage and
+requires an explicit discovered classic ESP32 serial device—there is no
+automatic port selection:
 
 ```sh
 make factory-flash PORT=/dev/ttyUSB0

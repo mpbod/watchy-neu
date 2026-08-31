@@ -14,14 +14,14 @@ ROOT = Path(__file__).resolve().parents[2]
 FIRST_PARTY = ROOT / "build" / "first-party"
 
 EXPECTED_DIGESTS = {
-    "grid-01.wpk": "465a34f57d867c580075052d56f3c608c86242528118fb5e4e06c91b87356dc8",
-    "grid-02.wpk": "abb2a52cb898b293c3fbe6da8c0fa432f8f7883c82fb05736c61b460418d2674",
-    "grid-03.wpk": "2c3b978153d6b57bad454a811f877ecab17cde949cfc3a17c9c3d83daccb5687",
-    "orbit.wpk": "8b5c20086e75ab11d9a988cd37f8fb923347f44125ea2ed8177adeaac21e8efa",
-    "slab.wpk": "e1ca5d417205108a38bdc238b65eee180885da02a2d272ec644f506385855ea8",
-    "term-01.wpk": "838f7253e86a71e990f0224b4512a24f321342592a36411f0675f1c6790318c8",
-    "term-02.wpk": "f57c05f0faa807be7a1f67e443971cff1d2da8d0c1859645f9386704993fdf88",
-    "term-03.wpk": "f7365c4bacef2a8d89dc9e88a825ebaf0c9eab3fc6e896bf2aadb2a350da57c4",
+    "grid-01.wpk": "0a224c7b7aeb574b84918c206bf117a98d2c742399d8dcfcb8e59a9b5fee5475",
+    "grid-02.wpk": "a8bba8a3fc1055ee2dc5eff545d02b6e37330d2c70714bbfe173c0b56b363a2c",
+    "grid-03.wpk": "8525387dfadf8bc4907a9e00b2cc07c86b274a11d234f8ac99d0da3c1ad84b57",
+    "orbit.wpk": "2dc17e53213d28fc9c36a8d2e44ebed396af25c79d944fa64ac0e5cdaa9b17ae",
+    "slab.wpk": "bb6e9aec7b5952fb3b1128ee703366e171d269870fb3d1b88af1008faf4d107d",
+    "term-01.wpk": "96b2ac789bed3ecffca32bbe2e6077d47c25d499d0b75150d31571b3b7af9ca5",
+    "term-02.wpk": "47a9f9f3df367e406794afbad34c23c2ee9b615b0c9f2e5e81823b203465cca5",
+    "term-03.wpk": "e91801f680b22aba1191f5b14a8d7202757fb4141c25b9881de432d2cf8a3090",
 }
 
 
@@ -248,8 +248,28 @@ class FactoryFlashSafetyTests(unittest.TestCase):
         table = root / "partitions.csv"
         table.write_text(
             "# Name,Type,SubType,Offset,Size,Flags\n"
+            "nvs,data,nvs,0x9000,0x6000,\n"
+            "phy_init,data,phy,0xf000,0x1000,\n"
+            "factory,app,factory,0x10000,0x1c0000,\n"
             f"littlefs,data,littlefs,{offset},{size},\n", encoding="utf-8")
         return table
+
+    def write_flash_images(self, root: Path, *, partition_bytes=None) -> Path:
+        import tools.flash_factory as flash
+        build = root / "watchy_v2"
+        build.mkdir()
+        (build / "bootloader.bin").write_bytes(b"bootloader")
+        (build / "partitions.bin").write_bytes(
+            flash.EXPECTED_PARTITION_BINARY if partition_bytes is None else partition_bytes)
+        (build / "firmware.bin").write_bytes(b"firmware")
+        return build
+
+    def write_seed_image(self, root: Path) -> Path:
+        import tools.flash_factory as flash
+        image = root / "littlefs.bin"
+        with image.open("wb") as output:
+            output.truncate(flash.EXPECTED_SIZE)
+        return image
 
     def test_partition_parser_requires_the_exact_named_range(self):
         import tools.flash_factory as flash
@@ -261,21 +281,25 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 flash.validate_partition_table(self.write_partition_table(root, offset="0x1c0000"))
             with self.assertRaisesRegex(flash.FlashSafetyError, "size"):
                 flash.validate_partition_table(self.write_partition_table(root, size="0x220000"))
+            table = self.write_partition_table(root)
+            table.write_text(table.read_text().replace("0x6000", "0x5000"), encoding="utf-8")
+            with self.assertRaisesRegex(flash.FlashSafetyError, "nvs"):
+                flash.validate_partition_table(table)
+            table = self.write_partition_table(root)
+            table.write_text(table.read_text() + "extra,data,nvs,0x400000,0x1000,\n",
+                             encoding="utf-8")
+            with self.assertRaisesRegex(flash.FlashSafetyError, "exactly"):
+                flash.validate_partition_table(table)
 
-    def test_fake_serial_run_constructs_verified_firmware_then_littlefs_commands(self):
+    def test_fake_serial_run_builds_then_erases_only_exact_nvs_before_all_images(self):
         import tools.flash_factory as flash
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             table = self.write_partition_table(root)
-            image = root / "littlefs.bin"
-            image.write_bytes(b"seed-image")
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root)
             commands = []
             messages = []
-
-            chip_responses = iter((
-                "Chip is ESP32-PICO-D4 (revision v1.0)",
-                "Chip type: ESP32-PICO-V3-02 (revision v3.1)",
-            ))
 
             def fake_runner(command, **kwargs):
                 commands.append([str(item) for item in command])
@@ -283,7 +307,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                     stdout = json.dumps([{"port": "/dev/fake-watchy", "description": "USB Serial",
                                           "hwid": "USB VID:PID=1A86:55D4 SER=ABC"}])
                 elif "chip-id" in command:
-                    stdout = next(chip_responses)
+                    stdout = "Chip is ESP32-PICO-D4 (revision v1.0)"
                 else:
                     stdout = ""
                 return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -291,16 +315,21 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             result = flash.flash_factory(
                 port="/dev/fake-watchy", image=image, partition_table=table,
                 runner=fake_runner, printer=messages.append,
-                platformio="platformio", python="python3")
-            self.assertEqual(result, hashlib.sha256(b"seed-image").hexdigest())
+                platformio="platformio", python="python3", build_dir=build)
+            self.assertEqual(result, hashlib.sha256(image.read_bytes()).hexdigest())
             self.assertIn(result, messages[0])  # digest is emitted before any write command
-            self.assertEqual(commands[0], ["platformio", "device", "list", "--json-output"])
-            self.assertIn("chip-id", commands[1])
-            self.assertEqual(commands[2], ["platformio", "run", "-e", "watchy_v2", "-t", "upload",
-                                           "--upload-port", "/dev/fake-watchy"])
-            self.assertIn("chip-id", commands[3])
-            self.assertEqual(commands[4][-3:],
-                             ["write-flash", "0x1d0000", str(image.resolve())])
+            self.assertEqual(commands[0], ["platformio", "run", "-e", "watchy_v2"])
+            self.assertEqual(commands[1], ["platformio", "device", "list", "--json-output"])
+            self.assertIn("chip-id", commands[2])
+            self.assertEqual(commands[3][-3:], ["erase-region", "0x9000", "0x6000"])
+            self.assertEqual(commands[4][-9:], [
+                "write-flash",
+                "0x1000", str((build / "bootloader.bin").resolve()),
+                "0x8000", str((build / "partitions.bin").resolve()),
+                "0x10000", str((build / "firmware.bin").resolve()),
+                "0x1d0000", str(image.resolve()),
+            ])
+            self.assertFalse(any("erase-flash" in command for command in commands))
 
     def test_chip_identity_accepts_complete_classic_set_and_rejects_new_families(self):
         import tools.flash_factory as flash
@@ -344,19 +373,22 @@ class FactoryFlashSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             table = self.write_partition_table(root)
+            build = self.write_flash_images(root)
             image = root / "littlefs.bin"
             with image.open("wb") as output:
                 output.truncate(0x230001)
             called = []
             with self.assertRaisesRegex(flash.FlashSafetyError, "exceeds"):
-                flash.flash_factory("/dev/fake", image, table, runner=lambda *a, **k: called.append(a))
+                flash.flash_factory("/dev/fake", image, table,
+                                    runner=lambda *a, **k: called.append(a), build_dir=build)
             self.assertEqual(called, [])
 
-            image.write_bytes(b"ok")
+            image = self.write_seed_image(root)
             def no_device(command, **_kwargs):
                 return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
             with self.assertRaisesRegex(flash.FlashSafetyError, "not discovered"):
-                flash.flash_factory("/dev/fake", image, table, runner=no_device)
+                flash.flash_factory("/dev/fake", image, table, runner=no_device,
+                                    build_dir=build)
 
             commands = []
             def wrong_chip(command, **_kwargs):
@@ -365,24 +397,51 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                           if "device" in command else "Chip type: ESP32-S3")
                 return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
             with self.assertRaisesRegex(flash.FlashSafetyError, "ESP32 target"):
-                flash.flash_factory("/dev/fake", image, table, runner=wrong_chip)
-            self.assertFalse(any("upload" in command for command in commands))
+                flash.flash_factory("/dev/fake", image, table, runner=wrong_chip,
+                                    build_dir=build)
+            self.assertFalse(any("erase-region" in command or "write-flash" in command
+                                 for command in commands))
+
+    def test_corrupt_partition_image_fails_preflight_without_device_mutation(self):
+        import tools.flash_factory as flash
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = self.write_partition_table(root)
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root, partition_bytes=b"wrong partition image")
+            commands = []
+
+            def fake_runner(command, **_kwargs):
+                commands.append([str(item) for item in command])
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with self.assertRaisesRegex(flash.FlashSafetyError, "partition image"):
+                flash.flash_factory("/dev/fake", image, table, runner=fake_runner,
+                                    build_dir=build)
+            self.assertEqual(len(commands), 1)
+            self.assertEqual(commands[0][1:], ["run", "-e", "watchy_v2"])
+            self.assertEqual(Path(commands[0][0]).name, "platformio")
+            self.assertFalse(any("erase-region" in command or "write-flash" in command
+                                 for command in commands))
 
     def test_dry_run_prints_safe_commands_and_executes_nothing(self):
         import tools.flash_factory as flash
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             table = self.write_partition_table(root)
-            image = root / "littlefs.bin"
-            image.write_bytes(b"ok")
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root)
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 self.assertEqual(flash.main(["--port", "/dev/fake-watchy", "--image", str(image),
-                                             "--partition-table", str(table), "--dry-run"]), 0)
+                                             "--partition-table", str(table),
+                                             "--build-dir", str(build), "--dry-run"]), 0)
             rendered = output.getvalue()
-            self.assertIn(hashlib.sha256(b"ok").hexdigest(), rendered)
-            self.assertIn("platformio run -e watchy_v2 -t upload", rendered)
-            self.assertIn("write-flash 0x1d0000", rendered)
+            self.assertIn(hashlib.sha256(image.read_bytes()).hexdigest(), rendered)
+            self.assertIn("platformio run -e watchy_v2", rendered)
+            self.assertIn("erase-region 0x9000 0x6000", rendered)
+            self.assertIn("write-flash 0x1000", rendered)
+            self.assertIn("0x1d0000", rendered)
 
 
 if __name__ == "__main__":

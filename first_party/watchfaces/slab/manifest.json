@@ -2,7 +2,7 @@
   "abi_major": 1,
   "abi_minor": 2,
   "assets": [],
-  "capabilities": 531,
+  "capabilities": 19,
   "id": "watchy.firstparty.slab",
   "max_runtime_bytes": 49152,
   "name": "Slab",

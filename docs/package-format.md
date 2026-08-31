@@ -57,6 +57,11 @@ seed access and executes no package.
 input, and `python3 tools/build_factory_seed.py --reproducible` creates the
 staging tree plus `build/factory-seed/littlefs.bin`. A normal
 `platformio run -e watchy_v2 -t upload` does not include LittleFS. The explicit
-`python3 tools/flash_factory.py --port /dev/...` workflow validates the classic
-ESP32 identity, partition offset `0x1d0000`, and maximum size `0x230000` before
-writing firmware and package storage.
+`python3 tools/flash_factory.py --port /dev/...` validates the classic ESP32
+identity, the exact four-partition Watchy layout and binary table, and hashes
+every image before device mutation. It erases only NVS at `0x9000`/`0x6000`
+before writing bootloader, partition table, firmware, and the exact-size
+LittleFS image at `0x1d0000`/`0x230000`. This factory operation resets settings,
+Wi-Fi credentials, package index/health state, and the seed marker; routine
+`platformio run -e watchy_v2 -t upload` remains firmware-only and preserves
+NVS/LittleFS.

@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-31-watchface-gallery-design.md`
 
-**Prerequisite:** Complete `docs/superpowers/plans/2026-08-31-motion-system.md`; first-party faces require ABI v1.2 `System::request_transition` and the kernel compositor.
+**Prerequisite:** Complete `docs/superpowers/plans/2026-08-31-motion-system.md`; first-party faces use ABI v1.2 descriptors while the kernel compositor retains transition and refresh authority.
 
 ## Global Constraints
 
@@ -427,7 +427,7 @@ CHECK(offset_time(value, 540).hour == 11);
 CHECK(moon_octant(value) < 8u);
 ```
 
-Python tests require exactly eight unique IDs/output names, sorted build order, ABI 1.2, type `watchface`, deterministic repeated WPKs, and numeric capabilities that contain Canvas, Clock, and System but no undeclared services.
+Python tests require exactly eight unique IDs/output names, sorted build order, ABI 1.2, type `watchface`, deterministic repeated WPKs, and least-privilege numeric capabilities. The renderers use Canvas and Clock plus Battery/Bluetooth only where documented; they do not call the System API.
 
 - [ ] **Step 2: Run helper/tool tests before files exist**
 
@@ -484,7 +484,7 @@ git commit -m "feat: scaffold first-party watchfaces"
 
 - [ ] **Step 1: Add fixed-data golden tests and manifest assertions**
 
-Use 2026-08-31 09:41, 68% battery, Bluetooth disabled, and UTC+7 local time. Assert `--°`, `BT·--`, `NO EVENT`, `--:--`, `NO DATA`, and the TYO fixed-offset time appear as black pixels at approved regions. Manifests use ABI 1.2, runtime budget 49,152 bytes, and capabilities 787 for Grid 01 and 515 for Grid 02/03.
+Use 2026-08-31 09:41, 68% battery, Bluetooth disabled, and UTC+7 local time. Assert `--°`, `BT·--`, `NO EVENT`, `--:--`, `NO DATA`, and the TYO fixed-offset time appear as black pixels at approved regions. Manifests use ABI 1.2, runtime budget 49,152 bytes, and capabilities 275 for Grid 01 and 3 for Grid 02/03.
 
 - [ ] **Step 2: Run face tests and confirm three missing renderers**
 
@@ -496,7 +496,7 @@ Expected: missing renderer symbols or golden files fail.
 
 Grid 01: tracked 10-pixel mono header, one-pixel rules, 62-pixel Heros time, and three ruled footer cells. Grid 02: 26-pixel vertical date rail, agenda placeholder, 62-pixel bottom-baseline time. Grid 03: large top time and three modular cells for real date, weather placeholder, and fixed-offset TYO.
 
-Every renderer clears the full target, handles failed optional capability reads with placeholders, requests Full on first start/hour boundary and Partial otherwise, and requests only a kernel-approved transition.
+Every renderer clears the full target, handles failed optional capability reads with placeholders, and returns a routine Partial request. Activation, interactive return, ghost thresholds, and any Full promotion remain kernel decisions across the load-render-unload-per-wake lifecycle.
 
 - [ ] **Step 4: Approve PBMs, build, audit, and verify packages**
 
@@ -530,7 +530,7 @@ git commit -m "feat: add Grid first-party watchfaces"
 
 - [ ] **Step 1: Add golden/data assertions**
 
-Assert Term 01 prints `WATCH.LOCAL`, real date/time, `NO DATA --°`, `BT·--`, and a solid cursor. Assert Term 02 prints LON/NYC/TYO fixed-offset clocks, twelve-cell day-progress bars, real date, and 68%. Assert Term 03 uses an all-black canvas, white solid hours, outlined minutes, seven filled battery segments at 68%, `--°`, and TYO time. Capabilities are 771 for Term 01 and 531 for Term 02/03.
+Assert Term 01 prints `WATCH.LOCAL`, real date/time, `NO DATA --°`, `BT·--`, and a solid cursor. Assert Term 02 prints LON/NYC/TYO fixed-offset clocks, twelve-cell day-progress bars, real date, and 68%. Assert Term 03 uses an all-black canvas, white solid hours, outlined minutes, seven filled battery segments at 68%, `--°`, and TYO time. Capabilities are 259 for Term 01 and 19 for Term 02/03.
 
 - [ ] **Step 2: Run face tests before renderers exist**
 
@@ -568,7 +568,7 @@ git commit -m "feat: add Term first-party watchfaces"
 
 **Interfaces:**
 - Consumes: Tasks 2 and 6.
-- Produces: `watchy.firstparty.slab` and `watchy.firstparty.orbit`, both capabilities 531.
+- Produces: `watchy.firstparty.slab` and `watchy.firstparty.orbit`, both capabilities 19.
 
 - [ ] **Step 1: Add fixed-data and astronomical golden tests**
 
@@ -649,7 +649,7 @@ On non-safe boot with no `factory_seed` key in the existing `watchy_pkg` NVS nam
 
 - [ ] **Step 4: Generate the LittleFS target and explicit flash tool**
 
-`build_factory_seed.py` builds the staging tree and invokes the ESP-IDF LittleFS partition image target. `flash_factory.py` first runs the normal firmware flash, verifies the serial target/partition offset, and then writes only the generated LittleFS image at `0x1d0000`. It must reject an image larger than `0x230000` and print SHA-256 before writing. Normal `platformio run -t upload` remains firmware-only.
+`build_factory_seed.py` builds the staging tree and invokes the ESP-IDF LittleFS partition image target. `flash_factory.py` builds and hashes the local images, verifies the exact CSV and binary partition layout plus classic-ESP32 target, erases only NVS at `0x9000`/`0x6000`, then writes bootloader, partition table, firmware, and the exact `0x230000`-byte LittleFS image at `0x1d0000`. This intentionally clears settings, Wi-Fi credentials, package index/health state, and the seed marker so every factory reinstall imports a coherent gallery. Normal `platformio run -e watchy_v2 -t upload` remains firmware-only.
 
 - [ ] **Step 5: Run import, reproducibility, and size tests**
 
@@ -711,7 +711,7 @@ Call `watchy_packages_import_factory_seed(safe_mode)` only after storage/battery
 
 - [ ] **Step 4: Document exact user/developer workflows**
 
-Document the three Menu rows, selector controls/status labels, eight IDs, placeholder meanings, fixed-offset/DST limitation, font sources/licenses, ABI 1.2 motion use, factory versus firmware-only flashing, first-boot import, removal behavior, rollback, safe mode, and Hairline recovery. Add Make targets `first-party`, `factory-seed`, `factory-flash`, and `gallery-test` that call the reviewed Python/CMake commands.
+Document the three Menu rows, selector controls/status labels, eight IDs, placeholder meanings, fixed-offset/DST limitation, font sources/licenses, ABI 1.2 lifecycle behavior, factory versus firmware-only flashing, first-boot import, removal behavior, rollback, safe mode, and Hairline recovery. Add Make targets `first-party`, `factory-seed`, `factory-flash`, and `gallery-test` that call the reviewed Python/CMake commands.
 
 - [ ] **Step 5: Run complete automated acceptance**
 
@@ -725,13 +725,13 @@ Run: `python3 tools/build_first_party.py --reproducible`
 
 Run: `python3 tools/build_factory_seed.py --reproducible`
 
-Run: `platformio run -e watchy`
+Run: `platformio run -e watchy_v2`
 
 Expected: all tests pass; ten package builds (two samples plus eight first-party) audit/verify; firmware fits 0x1c0000; seed fits 0x230000; worktree has no regenerated diffs.
 
 - [ ] **Step 6: Perform Watchy hardware UAT**
 
-Back up full flash, record its SHA-256, then use `tools/flash_factory.py` with the discovered serial port. Verify Hairline first boot; exactly eight selectable first-party WPKs; all Menu/selector buttons and wrap/cancel; every face against the approved PBM/handoff; typography at arm's length; partial/full ghosting; activation persistence across minute wake/reset; pending-render rollback; removal non-resurrection; firmware-only flash preserving LittleFS; safe mode Hairline with no package execution; and recovery from corrupt package state. Record results, timing, current, and photographs in `docs/hardware-acceptance.md`.
+If the operator requests preservation, back up full flash and record its SHA-256; the current reinstall-everything UAT explicitly waives that optional backup. Use `tools/flash_factory.py` with the discovered serial port. Verify Hairline first boot; exactly eight selectable first-party WPKs; all Menu/selector buttons and wrap/cancel; every face against the approved PBM/handoff; typography at arm's length; partial/full ghosting; activation persistence across minute wake/reset; pending-render rollback; removal non-resurrection; firmware-only flash preserving LittleFS; safe mode Hairline with no package execution; and recovery from corrupt package state. Record results, timing, current, and photographs in `docs/hardware-acceptance.md`.
 
 - [ ] **Step 7: Commit integrated gallery and UAT evidence**
 

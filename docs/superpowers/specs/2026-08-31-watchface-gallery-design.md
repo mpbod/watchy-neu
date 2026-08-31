@@ -114,6 +114,11 @@ The eight WPKs have stable identifiers under a first-party namespace and indepen
 - Bluetooth only where an honest enabled-state indicator is shown;
 - Storage only if generated font data is packaged as an asset rather than linked read-only data.
 
+The renderers do not call the System API. Routine renders return Partial through
+the Canvas render contract; activation, interactive return, ghosting promotion,
+and Full refresh remain kernel decisions. System is therefore deliberately not
+granted to any first-party manifest.
+
 The common face library supplies clipped pixels, rectangles, rules, circles, text layout, glyph drawing, outlined text, and date/UTC helpers. It must not allocate across the ABI boundary or rely on exceptions, RTTI, STL ownership, or unsupported runtime symbols.
 
 ## Factory provisioning

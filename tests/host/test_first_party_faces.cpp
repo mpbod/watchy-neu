@@ -32,7 +32,7 @@ extern "C" const watchy_package_descriptor_v1_t *slab_package_entry(void);
 extern "C" const watchy_package_descriptor_v1_t *orbit_package_entry(void);
 
 static watchy_status_t render(void *, watchy_canvas_t *, watchy_refresh_mode_t *) { return WATCHY_STATUS_OK; }
-WATCHY_FIRST_PARTY_FACE_NAMED(test_package_entry, "watchy.test.face", "Test Face", 0x203u, render)
+WATCHY_FIRST_PARTY_FACE_NAMED(test_package_entry, "watchy.test.face", "Test Face", 0x003u, render)
 
 static bool black(const uint8_t *fb, int x, int y) {
     if (x < 0 || y < 0 || x >= 200 || y >= 200) return false;
@@ -193,7 +193,7 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
     watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
     assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     assert(ink(framebuffer, 0, 0, 199, 199) > 80);
     if (face == 1) {
         assert(ink(framebuffer, 14, 14, 185, 31) > 5);
@@ -215,7 +215,15 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
     assert(mode == WATCHY_REFRESH_PARTIAL);
     fixture.time.hour = 10u;
     assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
+    descriptor->callbacks.on_stop(user);
+    descriptor->callbacks.on_unload(user);
+    user = nullptr;
+    assert(descriptor->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
+    assert(descriptor->callbacks.on_start(user) == WATCHY_STATUS_OK);
+    mode = WATCHY_REFRESH_FULL;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     descriptor->callbacks.on_stop(user);
     descriptor->callbacks.on_unload(user);
     return 0;
@@ -244,7 +252,7 @@ static int test_term(const watchy_package_descriptor_v1_t *descriptor,
     assert(descriptor->metadata.flags == capabilities);
     host_fixture fixture;
     watchy_host_caps_v1_t caps = fixture_caps(&fixture);
-    /* Term 01's 771 capability does not include Battery. Keeping this table
+    /* Term 01's 259 capability does not include Battery. Keeping this table
      * absent catches a renderer that silently treats fixture-only charge data
      * as a granted service. */
     if (face == 1) caps.battery = nullptr;
@@ -256,7 +264,7 @@ static int test_term(const watchy_package_descriptor_v1_t *descriptor,
     watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
     assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     if (face == 1) {
         /* A missing inverse status line, command content, or solid cursor is a layout bug. */
         assert(ink(framebuffer, 12, 12, 187, 25) > 400);
@@ -293,7 +301,15 @@ static int test_term(const watchy_package_descriptor_v1_t *descriptor,
     assert(mode == WATCHY_REFRESH_PARTIAL);
     fixture.time.hour = 10u;
     assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
+    descriptor->callbacks.on_stop(user);
+    descriptor->callbacks.on_unload(user);
+    user = nullptr;
+    assert(descriptor->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
+    assert(descriptor->callbacks.on_start(user) == WATCHY_STATUS_OK);
+    mode = WATCHY_REFRESH_FULL;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     descriptor->callbacks.on_stop(user);
     descriptor->callbacks.on_unload(user);
     return 0;
@@ -319,7 +335,7 @@ static int test_slab_orbit(const watchy_package_descriptor_v1_t *descriptor,
     watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
     assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     if (!orbit) {
         /* A swap, lost inversion, or incorrect 100px split changes these
          * independent top/bottom regions before the PBM comparison. */
@@ -355,7 +371,15 @@ static int test_slab_orbit(const watchy_package_descriptor_v1_t *descriptor,
     assert(mode == WATCHY_REFRESH_PARTIAL);
     fixture.time.hour = 10u;
     assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
+    descriptor->callbacks.on_stop(user);
+    descriptor->callbacks.on_unload(user);
+    user = nullptr;
+    assert(descriptor->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
+    assert(descriptor->callbacks.on_start(user) == WATCHY_STATUS_OK);
+    mode = WATCHY_REFRESH_FULL;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     descriptor->callbacks.on_stop(user);
     descriptor->callbacks.on_unload(user);
     return 0;
@@ -404,7 +428,7 @@ static void assert_orbit_phase(watchy_time_t phase_time,
     watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
     assert(orbit_render(user, &canvas, &mode) == WATCHY_STATUS_OK);
-    assert(mode == WATCHY_REFRESH_FULL);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
     /* Interior samples are deliberately away from the 2px outline and phase
      * terminator: a wrong phase direction or a filled/empty disc fails. */
     assert(black(framebuffer, 30, 45) == left_black);
@@ -475,6 +499,20 @@ int main() {
     assert(format_weekday(value) == fixed_text("MON"));
     assert(format_day_month(value) == fixed_text("31 AUG"));
     assert(format_day_month_year(value) == fixed_text("31 AUG 2026"));
+    assert(format_percent(0u) == fixed_text("0%"));
+    assert(format_percent(9u) == fixed_text("9%"));
+    assert(format_percent(68u) == fixed_text("68%"));
+    assert(format_percent(99u) == fixed_text("99%"));
+    assert(format_percent(100u) == fixed_text("100%"));
+    assert(format_percent(101u) == fixed_text("--%"));
+    const watchy_text_style_t compact_battery{&watchy_font_plex_9_semibold, 1, true, false};
+    const watchy_text_style_t orbit_battery{&watchy_font_plex_9_semibold, 0, true, false};
+    const watchy_text_metrics_t orbit_status_metrics =
+        watchy_ui_measure_text(&orbit_battery, "--° · 100%");
+    assert(text_ink_fits(grid_value, "100%", 76, 196, 67, 158, 132, 199));
+    assert(right_text_ink_fits(compact_battery, "100%", 191, 191,
+                               145, 165, 191, 199));
+    assert(92 + orbit_status_metrics.width <= 187);
     assert(format_weekday(watchy_time_t{2000, 1, 1, 0, 0, 0, 6, 0}) == fixed_text("SAT"));
     assert(format_weekday(watchy_time_t{2000, 2, 29, 0, 0, 0, 2, 0}) == fixed_text("TUE"));
     watchy_time_t rollover = offset_time(value, -720);
@@ -510,29 +548,29 @@ int main() {
     assert(std::strcmp(grid02_package_entry()->metadata.identifier, "watchy.firstparty.grid02") == 0);
     assert(std::strcmp(grid03_package_entry()->metadata.identifier, "watchy.firstparty.grid03") == 0);
     assert(test_grid(grid01_package_entry(), grid01_render,
-                     WATCHY_FACE_GOLDEN_DIR "/grid-01.pbm", 787u, 1) == 0);
+                     WATCHY_FACE_GOLDEN_DIR "/grid-01.pbm", 275u, 1) == 0);
     assert(test_grid(grid02_package_entry(), grid02_render,
-                     WATCHY_FACE_GOLDEN_DIR "/grid-02.pbm", 515u, 2) == 0);
+                     WATCHY_FACE_GOLDEN_DIR "/grid-02.pbm", 3u, 2) == 0);
     assert(test_grid(grid03_package_entry(), grid03_render,
-                     WATCHY_FACE_GOLDEN_DIR "/grid-03.pbm", 515u, 3) == 0);
+                     WATCHY_FACE_GOLDEN_DIR "/grid-03.pbm", 3u, 3) == 0);
     assert(std::strcmp(term01_package_entry()->metadata.identifier, "watchy.firstparty.term01") == 0);
     assert(std::strcmp(term01_package_entry()->metadata.name, "Term 01") == 0);
     assert(std::strcmp(term02_package_entry()->metadata.identifier, "watchy.firstparty.term02") == 0);
     assert(std::strcmp(term03_package_entry()->metadata.identifier, "watchy.firstparty.term03") == 0);
     assert(test_term(term01_package_entry(), term01_render,
-                     WATCHY_FACE_GOLDEN_DIR "/term-01.pbm", 771u, 1) == 0);
+                     WATCHY_FACE_GOLDEN_DIR "/term-01.pbm", 259u, 1) == 0);
     assert(test_term(term02_package_entry(), term02_render,
-                     WATCHY_FACE_GOLDEN_DIR "/term-02.pbm", 531u, 2) == 0);
+                     WATCHY_FACE_GOLDEN_DIR "/term-02.pbm", 19u, 2) == 0);
     assert(test_term(term03_package_entry(), term03_render,
-                     WATCHY_FACE_GOLDEN_DIR "/term-03.pbm", 531u, 3) == 0);
+                     WATCHY_FACE_GOLDEN_DIR "/term-03.pbm", 19u, 3) == 0);
     assert(std::strcmp(slab_package_entry()->metadata.identifier, "watchy.firstparty.slab") == 0);
     assert(std::strcmp(slab_package_entry()->metadata.name, "Slab") == 0);
     assert(std::strcmp(orbit_package_entry()->metadata.identifier, "watchy.firstparty.orbit") == 0);
     assert(std::strcmp(orbit_package_entry()->metadata.name, "Orbit") == 0);
     assert(test_slab_orbit(slab_package_entry(), slab_render,
-                           WATCHY_FACE_GOLDEN_DIR "/slab.pbm", 531u, false) == 0);
+                           WATCHY_FACE_GOLDEN_DIR "/slab.pbm", 19u, false) == 0);
     assert(test_slab_orbit(orbit_package_entry(), orbit_render,
-                           WATCHY_FACE_GOLDEN_DIR "/orbit.pbm", 531u, true) == 0);
+                           WATCHY_FACE_GOLDEN_DIR "/orbit.pbm", 19u, true) == 0);
     assert_orbit_phase(watchy_time_t{2000, 1, 6, 18, 14, 0, 4, 0}, 0, true, true, "orbit-new", "NEW");
     assert_orbit_phase(watchy_time_t{2000, 1, 14, 3, 26, 0, 5, 0}, 2, true, false, "orbit-first-quarter", "FIRST QTR");
     assert_orbit_phase(watchy_time_t{2000, 1, 21, 12, 37, 0, 5, 0}, 4, false, false, "orbit-full", "FULL");

@@ -36,12 +36,7 @@ fixed_text slab_battery(void *user_data) noexcept {
         battery.percent > 100u) {
         return fixed_text("--%");
     }
-    fixed_text result;
-    result.value[0] = static_cast<char>('0' + battery.percent / 10u);
-    result.value[1] = static_cast<char>('0' + battery.percent % 10u);
-    result.value[2] = '%';
-    result.value[3] = '\0';
-    return result;
+    return format_percent(battery.percent);
 }
 
 void draw_slab(watchy_canvas_t *canvas, void *user_data, const watchy_time_t &time) noexcept {
@@ -70,10 +65,8 @@ void draw_slab(watchy_canvas_t *canvas, void *user_data, const watchy_time_t &ti
 }
 
 void set_refresh(void *user_data, uint8_t hour, watchy_refresh_mode_t *mode) noexcept {
-    if (mode != nullptr) {
-        *mode = full_refresh_for_hour(user_data, hour) ? WATCHY_REFRESH_FULL
-                                                       : WATCHY_REFRESH_PARTIAL;
-    }
+    (void)hour;
+    set_routine_refresh(user_data, mode);
 }
 }  // namespace
 

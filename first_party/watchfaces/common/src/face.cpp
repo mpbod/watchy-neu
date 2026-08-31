@@ -136,6 +136,23 @@ fixed_text format_weekday(const watchy_time_t &time) noexcept {
     return valid_time(time) ? fixed_text(names[weekday_for(time)]) : fixed_text();
 }
 
+fixed_text format_percent(uint8_t percent) noexcept {
+    if (percent > 100u) return fixed_text("--%");
+    fixed_text out;
+    uint8_t at = 0u;
+    if (percent == 100u) {
+        out.value[at++] = '1';
+        out.value[at++] = '0';
+        out.value[at++] = '0';
+    } else {
+        if (percent >= 10u) out.value[at++] = static_cast<char>('0' + percent / 10u);
+        out.value[at++] = static_cast<char>('0' + percent % 10u);
+    }
+    out.value[at++] = '%';
+    out.value[at] = '\0';
+    return out;
+}
+
 bool offset_time_checked(const watchy_time_t &time,
                          int16_t target_offset_minutes,
                          watchy_time_t *out) noexcept {
@@ -245,7 +262,7 @@ uint8_t moon_octant(const watchy_time_t &time) noexcept {
  * never becomes a second exported package symbol. */
 __attribute__((visibility("hidden")))
 face_context &state() noexcept {
-    static face_context value{nullptr, false, false, 0u};
+    static face_context value{nullptr, false};
     return value;
 }
 
