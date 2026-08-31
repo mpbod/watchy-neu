@@ -16,9 +16,33 @@ typedef struct {
     unsigned save_calls;
     unsigned force_full_calls;
     bool run_started_after_full_refresh;
+    watchy_package_status_t import_status;
+    watchy_package_status_t snapshot_status;
+    unsigned import_calls;
+    unsigned boot_snapshot_calls;
+    char boot_order[3];
+    size_t boot_order_length;
     char selected_ref[WATCHY_PACKAGE_REF_MAX + 1u];
     watchy_settings_t saved_settings;
 } fixture_t;
+
+static watchy_package_status_t import_factory_seed(void *context) {
+    fixture_t *fixture = context;
+    ++fixture->import_calls;
+    fixture->boot_order[fixture->boot_order_length++] = 'I';
+    fixture->boot_order[fixture->boot_order_length] = '\0';
+    return fixture->import_status;
+}
+
+static watchy_package_status_t boot_snapshot(void *context,
+                                             watchy_package_catalog_t *out_catalog) {
+    fixture_t *fixture = context;
+    ++fixture->boot_snapshot_calls;
+    fixture->boot_order[fixture->boot_order_length++] = 'S';
+    fixture->boot_order[fixture->boot_order_length] = '\0';
+    *out_catalog = fixture->snapshot;
+    return fixture->snapshot_status;
+}
 
 static watchy_package_status_t select_builtin(void *context) {
     fixture_t *fixture = context;
@@ -69,6 +93,14 @@ static watchy_watchface_action_ops_t operations(fixture_t *fixture) {
         .force_full_refresh = force_full_refresh,
         .snapshot = snapshot,
         .save_settings = save_settings,
+        .context = fixture,
+    };
+}
+
+static watchy_watchface_boot_ops_t boot_operations(fixture_t *fixture) {
+    return (watchy_watchface_boot_ops_t){
+        .import_factory_seed = import_factory_seed,
+        .snapshot = boot_snapshot,
         .context = fixture,
     };
 }
@@ -221,12 +253,91 @@ static int test_active_package_return_forces_full_refresh_before_render(void) {
     return 0;
 }
 
+static int test_normal_boot_imports_seed_before_first_catalog_snapshot(void) {
+    fixture_t fixture = {
+        .import_status = WATCHY_PACKAGE_OK,
+        .snapshot_status = WATCHY_PACKAGE_OK,
+    };
+    watchy_package_catalog_t catalog = {0};
+    watchy_watchface_boot_result_t result = {0};
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    const watchy_watchface_boot_ops_t ops = boot_operations(&fixture);
+
+    CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(strcmp(fixture.boot_order, "IS") == 0);
+    CHECK(fixture.import_calls == 1u && fixture.boot_snapshot_calls == 1u);
+    CHECK(result.seed_import_attempted && !result.seed_import_failed);
+    CHECK(result.catalog_readable && !result.package_warning);
+    CHECK(catalog.packages[0].active);
+    return 0;
+}
+
+static int test_safe_boot_skips_seed_import_but_keeps_recovery_catalog(void) {
+    fixture_t fixture = {
+        .import_status = WATCHY_PACKAGE_ERR_STATE,
+        .snapshot_status = WATCHY_PACKAGE_OK,
+    };
+    watchy_package_catalog_t catalog = {0};
+    watchy_watchface_boot_result_t result = {0};
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    const watchy_watchface_boot_ops_t ops = boot_operations(&fixture);
+
+    CHECK(watchy_watchface_boot_prepare(true, &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(strcmp(fixture.boot_order, "S") == 0);
+    CHECK(fixture.import_calls == 0u && fixture.boot_snapshot_calls == 1u);
+    CHECK(!result.seed_import_attempted && !result.seed_import_failed);
+    CHECK(result.catalog_readable && !result.package_warning);
+    CHECK(catalog.packages[0].active);
+    return 0;
+}
+
+static int test_seed_failure_is_visible_and_does_not_hide_readable_catalog(void) {
+    fixture_t fixture = {
+        .import_status = WATCHY_PACKAGE_ERR_DIGEST,
+        .snapshot_status = WATCHY_PACKAGE_OK,
+    };
+    watchy_package_catalog_t catalog = {0};
+    watchy_watchface_boot_result_t result = {0};
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    const watchy_watchface_boot_ops_t ops = boot_operations(&fixture);
+
+    CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(strcmp(fixture.boot_order, "IS") == 0);
+    CHECK(result.seed_import_attempted && result.seed_import_failed);
+    CHECK(result.catalog_readable && result.package_warning);
+    CHECK(catalog.packages[0].active);
+    return 0;
+}
+
+static int test_unreadable_boot_catalog_is_a_bounded_package_warning(void) {
+    fixture_t fixture = {
+        .import_status = WATCHY_PACKAGE_OK,
+        .snapshot_status = WATCHY_PACKAGE_ERR_STORE,
+    };
+    watchy_package_catalog_t catalog = {0};
+    watchy_watchface_boot_result_t result = {0};
+    const watchy_watchface_boot_ops_t ops = boot_operations(&fixture);
+
+    CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(strcmp(fixture.boot_order, "IS") == 0);
+    CHECK(!result.catalog_readable && result.package_warning);
+    return 0;
+}
+
 int main(void) {
     CHECK(test_successful_watchface_selection_promotes_and_persists() == 0);
     CHECK(test_failed_render_preserves_previous_watchface() == 0);
     CHECK(test_builtin_selection_clears_persisted_package() == 0);
     CHECK(test_cancelled_activation_replays_the_button_without_package_failure() == 0);
     CHECK(test_active_package_return_forces_full_refresh_before_render() == 0);
+    CHECK(test_normal_boot_imports_seed_before_first_catalog_snapshot() == 0);
+    CHECK(test_safe_boot_skips_seed_import_but_keeps_recovery_catalog() == 0);
+    CHECK(test_seed_failure_is_visible_and_does_not_hide_readable_catalog() == 0);
+    CHECK(test_unreadable_boot_catalog_is_a_bounded_package_warning() == 0);
     puts("watchface action tests passed");
     return 0;
 }

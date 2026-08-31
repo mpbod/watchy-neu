@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build both ESP32 shared objects, package them, and verify their WPKs."""
+"""Build, audit, package, verify, and size-report both sample WPKs."""
 
 from __future__ import annotations
 
@@ -64,6 +64,7 @@ def main(arguments=None):
              "--manifest", sample / "manifest.json", "--elf", elf,
              "--assets", sample / "assets", "--output", output])
         run([sys.executable, ROOT / "tools" / "watchy_pkg.py", "verify", output])
+        print(f"sample {output_name} size={output.stat().st_size}", flush=True)
     return 0
 
 

@@ -1,4 +1,4 @@
-.PHONY: host-test python-test samples
+.PHONY: host-test python-test samples first-party factory-seed factory-flash gallery-test
 
 host-test:
 	cmake -S . -B build/host -G Ninja
@@ -10,3 +10,16 @@ python-test:
 
 samples:
 	python3 tools/build_samples.py
+
+first-party:
+	python3 tools/build_first_party.py --reproducible
+
+factory-seed: first-party
+	python3 tools/build_factory_seed.py --reproducible
+
+factory-flash: factory-seed
+	@test -n "$(PORT)" || { echo "PORT is required (for example: make factory-flash PORT=/dev/ttyUSB0)" >&2; exit 2; }
+	python3 tools/flash_factory.py --port "$(PORT)"
+
+gallery-test: host-test python-test samples first-party factory-seed
+	platformio run -e watchy_v2

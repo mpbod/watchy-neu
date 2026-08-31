@@ -46,13 +46,14 @@ class FirstPartyBuildMatrixTests(unittest.TestCase):
             self.assertEqual(builder.main(["--only", "grid-01", "--dry-run"]), 0)
         self.assertIn("grid-01", output.getvalue())
 
-    def test_cli_missing_project_is_friendly_nonzero(self):
+    def test_missing_project_is_a_friendly_builder_error(self):
         import tools.build_first_party as builder
-        output = io.StringIO()
-        with contextlib.redirect_stderr(output):
-            result = builder.main(["--only", "orbit"])
-        self.assertNotEqual(result, 0)
-        self.assertIn("renderer project is not present", output.getvalue())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(builder.BuilderError,
+                                        "renderer project is not present"):
+                builder.build_faces(output_dir=root / "published",
+                                    only=("orbit",), root=root)
 
     def test_fixture_build_runs_two_clean_rounds_and_promotes_complete_set(self):
         import tools.build_first_party as builder

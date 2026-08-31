@@ -39,7 +39,9 @@ APPROVED_STRIKES = [
     ("heros_40_regular", "texgyreheros-regular.otf", 40, 150, " 0123456789:"),
     ("heros_46_regular", "texgyreheros-regular.otf", 46, 150, " 0123456789:"),
     ("heros_60_bold", "texgyreheros-bold.otf", 60, 128, " 0123456789:"),
+    ("heros_62_regular", "texgyreheros-regular.otf", 62, 150, " 0123456789:"),
     ("heros_62_bold", "texgyreheros-bold.otf", 62, 128, " 0123456789:"),
+    ("heros_74_regular", "texgyreheros-regular.otf", 74, 150, " 0123456789:"),
     ("heros_72_bold", "texgyreheros-bold.otf", 72, 128, " 0123456789:"),
     ("heros_82_bold", "texgyreheros-bold.otf", 82, 128, " 0123456789"),
 ]

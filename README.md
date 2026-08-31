@@ -39,7 +39,17 @@ flash firmware over serial. Packages update independently through the portal.
 
 ## Controls and recovery
 
-- Menu opens/selects, Back returns, and Up/Down navigate.
+- The top-level Menu has exactly three rows: **Watchface**, **Apps**, and
+  **Settings**. Menu opens/selects, Back cancels or returns, and Up/Down wrap
+  through the current list.
+- **Menu → Watchface** opens the selector. Hairline is always position zero and
+  is labeled `BUILT-IN`. Installed watchfaces show `ACTIVE`, `PENDING`,
+  `QUARANTINED`, or their semantic version; quarantined rows are visible but
+  cannot be activated. Selecting Hairline clears the package selection and
+  returns to the trusted built-in face. Selecting a WPK renders it immediately,
+  promotes it only after success, and performs a full refresh. Back leaves the
+  current selection unchanged and also forces a complete refresh when returning
+  to a package face.
 - **Settings → Motion Full/Reduced/Off** controls display transition effects.
   This `motion_fx` preference is independent of **Motion On/Off**, which controls
   accelerometer wake. Full allows eligible requested effects, Reduced replaces
@@ -50,7 +60,8 @@ flash firmware over serial. Packages update independently through the portal.
   third-party ELF and offers diagnostics, individual package removal (or a full
   purge if the index is unreadable), and a normal reboot.
 - A failing selected watchface is quarantined/rolled back; the built-in
-  watchface and shell remain available.
+  watchface and shell remain available. A failed pending activation preserves
+  the previously active WPK; if it cannot render, Hairline is the fallback.
 
 Wi-Fi and BLE stay off unless an explicit operation needs them. The normal
 minute wake path reloads the selected package, renders, unloads it, shuts down
@@ -91,6 +102,64 @@ Start from [`sdk/package-template`](sdk/package-template), or inspect the
 python3 tools/build_samples.py
 ```
 
+The bundled gallery contains eight independent ABI 1.2 WPKs:
+
+| Face | Package ID |
+| --- | --- |
+| Grid 01 | `watchy.firstparty.grid01` |
+| Grid 02 | `watchy.firstparty.grid02` |
+| Grid 03 | `watchy.firstparty.grid03` |
+| Term 01 | `watchy.firstparty.term01` |
+| Term 02 | `watchy.firstparty.term02` |
+| Term 03 | `watchy.firstparty.term03` |
+| Slab | `watchy.firstparty.slab` |
+| Orbit | `watchy.firstparty.orbit` |
+
+Weather, calendar, and unavailable Bluetooth data are deliberately honest
+placeholders (`--°`, `NO DATA`, `NO EVENT`, `--:--`, and `BT·--`). World and
+second-city clocks use declared fixed UTC offsets; v1 does not apply daylight
+saving time. Orbit computes moon phase locally and performs no network request.
+The faces use ABI 1.2 transition requests, with the kernel retaining final
+refresh-policy authority.
+
+The committed one-bit typography is generated from vendored IBM Plex Mono
+(SIL Open Font License 1.1) and TeX Gyre Heros (GUST Font License) sources in
+[`assets/fonts`](assets/fonts); builds do not consult host-installed fonts.
+
+## Gallery and factory provisioning
+
+Build the audited reproducible first-party set and the reproducible LittleFS
+factory image:
+
+```sh
+make first-party
+make factory-seed
+```
+
+On the first normal boot after a factory flash, firmware validates and imports
+the eight seed WPKs through the normal atomic installer, records the WFS1 v1
+marker, and leaves Hairline active. Import is resumable, but once the marker is
+committed it never runs again: removing a bundled face does not resurrect it on
+reboot. Safe mode skips seed import and all WPK execution.
+
+Normal developer upload is firmware-only and preserves LittleFS:
+
+```sh
+platformio run -e watchy_v2 -t upload
+```
+
+Factory flashing writes firmware and the audited LittleFS image. It is
+destructive to package storage and requires an explicit discovered classic
+ESP32 serial device—there is no automatic port selection:
+
+```sh
+make factory-flash PORT=/dev/ttyUSB0
+```
+
+Do not use `factory-flash` for routine firmware development. See the pending
+[hardware acceptance checklist](docs/hardware-acceptance.md) before treating a
+factory image as device-approved.
+
 Build a WPK directly:
 
 ```sh
@@ -111,6 +180,10 @@ cmake --build build/host
 ctest --test-dir build/host --output-on-failure
 python3 -m unittest discover -s tests/python -v
 ```
+
+The complete software gallery gate is also available as `make gallery-test`;
+it builds and verifies the two samples, all eight reproducible first-party WPKs,
+the reproducible factory seed, and the `watchy_v2` firmware. It never flashes.
 
 Hardware acceptance remains a separate on-device activity; host and target
 build success is not evidence of display, wake, radio, or current performance.

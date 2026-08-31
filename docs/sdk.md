@@ -155,6 +155,36 @@ the kernel performs a direct two-full-write Clear and ends on the complete
 target. Invalid source state or an intermediate-write failure forces the next
 successful target to a complete full refresh.
 
+## First-party gallery contract
+
+The factory gallery is not a privileged runtime. Grid 01–03, Term 01–03, Slab,
+and Orbit are ordinary independent ABI 1.2 watchface packages with IDs
+`watchy.firstparty.grid01`, `watchy.firstparty.grid02`,
+`watchy.firstparty.grid03`, `watchy.firstparty.term01`,
+`watchy.firstparty.term02`, `watchy.firstparty.term03`,
+`watchy.firstparty.slab`, and `watchy.firstparty.orbit`. They use the same
+validation, lifecycle, capability, render-promotion, rollback, watchdog, and
+80 KiB WPK ceiling as developer packages.
+
+Weather and calendar services are not part of v1. First-party renderers must
+show their documented placeholders (`--°`, `NO DATA`, `NO EVENT`, `--:--`, or
+`BT·--`) rather than fixture data or implied connectivity. World and
+second-city clocks use explicit fixed UTC offsets and are not DST-aware. Orbit
+uses local integer moon-phase calculation and makes no network request.
+
+The shared UI data is generated deterministically from vendored IBM Plex Mono
+under SIL OFL 1.1 and TeX Gyre Heros under the GUST Font License. The source
+fonts, licenses, generator configuration, and committed one-bit strikes live
+under `assets/fonts`, `tools/font_strikes.json`, and `sdk/ui/generated`.
+
+Selector activation first records the requested WPK as pending, runs the normal
+fresh-session lifecycle immediately, and promotes it only after a successful
+render. Failure retains the prior active reference; the shell falls back to
+Hairline when no package can render. Selecting Hairline clears active/pending
+package state and persists an empty `active_watchface`. Both activation and a
+Back return to a package face invalidate the retained display source so the
+next accepted face uses a full refresh.
+
 ## Persistence and assets
 
 Storage paths are relative to the package namespace. Mutable state is

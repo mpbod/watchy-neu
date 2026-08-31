@@ -244,6 +244,11 @@ static watchy_package_status_t action_snapshot(void *context,
     return watchy_packages_snapshot(catalog);
 }
 
+static watchy_package_status_t boot_import_factory_seed(void *context) {
+    (void)context;
+    return watchy_packages_import_factory_seed(false);
+}
+
 static watchy_status_t action_save_settings(void *context,
                                              const watchy_settings_t *settings) {
     (void)context;
@@ -257,6 +262,12 @@ static const watchy_watchface_action_ops_t watchface_action_ops = {
     .force_full_refresh = action_force_full_refresh,
     .snapshot = action_snapshot,
     .save_settings = action_save_settings,
+    .context = NULL,
+};
+
+static const watchy_watchface_boot_ops_t watchface_boot_ops = {
+    .import_factory_seed = boot_import_factory_seed,
+    .snapshot = action_snapshot,
     .context = NULL,
 };
 
@@ -720,6 +731,7 @@ void app_main(void) {
     bool settings_load_failed = false;
     bool settings_save_failed = false;
     bool display_failed = false;
+    bool factory_seed_failed = false;
     const char *safe_reason = "BACK+DOWN HELD";
 
     ESP_LOGI(TAG, "boot wake_cause=%d", wake_cause);
@@ -762,9 +774,15 @@ void app_main(void) {
         display_failed = true;
     }
 
-    const watchy_package_status_t package_status = watchy_packages_snapshot(&catalog);
-    package_index_readable = package_status == WATCHY_PACKAGE_OK;
-    if (package_status == WATCHY_PACKAGE_OK) {
+    watchy_watchface_boot_result_t package_boot = {0};
+    const watchy_status_t package_boot_status = watchy_watchface_boot_prepare(
+        safe_mode, &catalog, &watchface_boot_ops, &package_boot);
+    package_index_readable = package_boot_status == WATCHY_STATUS_OK &&
+                             package_boot.catalog_readable;
+    factory_seed_failed = package_boot_status != WATCHY_STATUS_OK ||
+                          package_boot.seed_import_failed;
+    package_failed = package_boot_status != WATCHY_STATUS_OK || package_boot.package_warning;
+    if (package_index_readable) {
         for (size_t index = 0u; index < catalog.count; ++index) {
             package_selected = package_selected || catalog.packages[index].active ||
                                catalog.packages[index].pending;
@@ -772,17 +790,21 @@ void app_main(void) {
         if (!safe_mode && sync_active_watchface_setting(&settings, &catalog) != WATCHY_STATUS_OK) {
             settings_save_failed = true;
         }
-    } else if (!safe_mode) package_failed = true;
+    }
     const bool package_wake = wake_cause != WATCHY_WAKE_BUTTON &&
                               !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake);
-    if (rtc_valid && !safe_mode && package_wake && package_selected) {
+    if (rtc_valid && !safe_mode && !factory_seed_failed && package_wake && package_selected) {
         package_rendered = watchy_packages_run_watchface(false);
         if (watchy_display_take_cancelled_buttons(&boot_cancelled_buttons)) {
             package_rendered = false;
         }
-        package_failed = !package_rendered && boot_cancelled_buttons == 0u;
+        package_failed = package_failed ||
+                         (!package_rendered && boot_cancelled_buttons == 0u);
     }
     watchy_shell_begin(&shell, wake_cause, settings.motion_wake, safe_mode, package_failed);
+    if (factory_seed_failed && !safe_mode) {
+        watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_PACKAGE);
+    }
     if (boot_cancelled_buttons != 0u) {
         watchy_shell_presentation_observe(&presentation, &shell,
                                           WATCHY_SHELL_PRESENT_CANCELLED,

@@ -11,6 +11,10 @@ Builds and host simulations are not physical acceptance evidence. The motion
 checks, measurements, and firmware/device metadata below remain pending for the
 integrated motion-plus-gallery controller run.
 
+No Task 11 factory flash or gallery device run was performed. All gallery
+checkboxes, measurements, firmware/device metadata, and photographs below are
+explicitly pending until the post-review controller run.
+
 ## Display and controls
 
 - [ ] Cold full refresh produces correct 200×200 orientation and polarity.
@@ -52,6 +56,47 @@ integrated motion-plus-gallery controller run.
       and bounded reads without being mistaken for active hardware acceptance.
 - [ ] Separately exercise display, buttons, RTC, BMA423, ADC, motor, Wi-Fi, BLE,
       NVS, and LittleFS on-device and record actionable pass/fail evidence.
+
+## First-party gallery — pending live run
+
+Test metadata: board/revision **pending**; board serial **pending**; reviewed
+firmware commit **pending**; pre-flash backup SHA-256 **pending**; battery
+voltage/age **pending**; ambient temperature **pending**; timing/current setup
+**pending**; photographs **pending**.
+
+- [ ] Before destructive factory flashing, record the full-flash backup and its
+      SHA-256, then run `make factory-flash PORT=/dev/...` with the explicitly
+      discovered Watchy 2.0 classic-ESP32 serial port.
+- [ ] A blank factory state boots to Hairline and the selector contains exactly
+      Grid 01, Grid 02, Grid 03, Term 01, Term 02, Term 03, Slab, and Orbit in
+      addition to Hairline; no WPK is implicitly active.
+- [ ] The top-level Menu contains exactly Watchface, Apps, and Settings. Up and
+      Down wrap; Menu selects; Back cancels without mutation; the selector shows
+      `BUILT-IN`, `ACTIVE`, `PENDING`, `QUARANTINED`, and semantic-version
+      states at the appropriate times.
+- [ ] Compare Hairline and all eight WPKs against the approved native PBMs and
+      handoff. Check typography, baselines, spacing, inversion, one-pixel stems,
+      outlined numerals, and readability at arm's length; attach photographs.
+- [ ] Confirm `--°`, `NO DATA`, `NO EVENT`, `--:--`, and `BT·--` appear when
+      their services are absent, and verify fixed-offset second-city/world times
+      without claiming DST behavior.
+- [ ] Activate every WPK, observe the immediate full refresh, then verify
+      routine minute updates and active selection across minute wake and reset.
+- [ ] Force pending load/start/render/stop failure and confirm promotion does
+      not occur, the prior active WPK remains selected, and Hairline renders if
+      that prior face is unusable.
+- [ ] Remove one imported first-party WPK, reboot repeatedly, and confirm the
+      committed first-import marker prevents resurrection.
+- [ ] Perform a firmware-only `platformio run -e watchy_v2 -t upload` and
+      confirm installed LittleFS packages remain unchanged.
+- [ ] Hold Back+Down during reset and confirm safe mode renders Hairline,
+      performs no factory import, and executes no first- or third-party WPK.
+- [ ] Corrupt the seed/catalog and installed package state in controlled cases;
+      confirm the bounded package error, Hairline recovery, individual removal,
+      and unreadable-index purge paths remain usable.
+- [ ] Record full/partial refresh counts, ghosting observations, activation and
+      minute-render timing, deep-sleep current, and photographs for light,
+      inverted, and outlined faces.
 
 ## E-paper motion system — pending live run
 

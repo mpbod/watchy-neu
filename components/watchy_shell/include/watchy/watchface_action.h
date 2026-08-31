@@ -27,6 +27,26 @@ typedef struct {
     void *context;
 } watchy_watchface_action_ops_t;
 
+typedef struct {
+    watchy_package_status_t (*import_factory_seed)(void *context);
+    watchy_package_status_t (*snapshot)(void *context,
+                                        watchy_package_catalog_t *out_catalog);
+    void *context;
+} watchy_watchface_boot_ops_t;
+
+typedef struct {
+    bool seed_import_attempted;
+    bool seed_import_failed;
+    bool catalog_readable;
+    bool package_warning;
+} watchy_watchface_boot_result_t;
+
+watchy_status_t watchy_watchface_boot_prepare(
+    bool safe_mode,
+    watchy_package_catalog_t *catalog,
+    const watchy_watchface_boot_ops_t *operations,
+    watchy_watchface_boot_result_t *out_result);
+
 watchy_status_t watchy_watchface_action_apply(
     const watchy_shell_action_request_t *request,
     bool safe_mode,

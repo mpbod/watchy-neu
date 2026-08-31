@@ -24,6 +24,29 @@ static watchy_status_t sync_active_setting(
     return operations->save_settings(operations->context, settings);
 }
 
+watchy_status_t watchy_watchface_boot_prepare(
+    bool safe_mode,
+    watchy_package_catalog_t *catalog,
+    const watchy_watchface_boot_ops_t *operations,
+    watchy_watchface_boot_result_t *out_result) {
+    if (catalog == NULL || operations == NULL ||
+        operations->import_factory_seed == NULL || operations->snapshot == NULL ||
+        out_result == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_result = (watchy_watchface_boot_result_t){0};
+    if (!safe_mode) {
+        out_result->seed_import_attempted = true;
+        out_result->seed_import_failed =
+            operations->import_factory_seed(operations->context) != WATCHY_PACKAGE_OK;
+    }
+    out_result->catalog_readable =
+        operations->snapshot(operations->context, catalog) == WATCHY_PACKAGE_OK;
+    out_result->package_warning =
+        !safe_mode && (out_result->seed_import_failed || !out_result->catalog_readable);
+    return WATCHY_STATUS_OK;
+}
+
 watchy_status_t watchy_watchface_action_apply(
     const watchy_shell_action_request_t *request,
     bool safe_mode,

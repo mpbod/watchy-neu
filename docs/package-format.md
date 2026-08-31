@@ -34,3 +34,29 @@ The v1 ceilings are:
 `tools/watchy_pkg.py verify` prints a stable `watchy-pkg:<code>` error on
 failure. The firmware remains authoritative and repeats the header, digest,
 manifest, ABI, exact ELF layout/export, asset, and memory checks on install.
+
+## WFS1 factory seed
+
+Factory provisioning uses a separate deterministic `WFS1` catalog inside the
+LittleFS image; WPK bytes and the WPK1 format are unchanged. Version 1 is
+exactly 520 bytes: an 8-byte little-endian header (`WFS1`, version 1, count 8)
+followed by eight sorted 64-byte records containing a zero-padded 32-byte
+filename and the SHA-256 of that exact WPK. The fixed set is Grid 01–03, Orbit,
+Slab, and Term 01–03.
+
+On the first non-safe boot, after storage/settings/battery prerequisites and
+before the first package snapshot, firmware validates the catalog, digest, and
+normal WPK install contract. Successful packages are removed from the seed
+staging directory as import progresses; the version marker is committed only
+after all eight succeed, so interrupted work resumes safely. Once committed,
+the marker prevents re-import forever for v1, including after a user removes a
+bundled package. Unknown marker versions fail closed. Safe mode performs no
+seed access and executes no package.
+
+`python3 tools/build_first_party.py --reproducible` creates the audited eight-WPK
+input, and `python3 tools/build_factory_seed.py --reproducible` creates the
+staging tree plus `build/factory-seed/littlefs.bin`. A normal
+`platformio run -e watchy_v2 -t upload` does not include LittleFS. The explicit
+`python3 tools/flash_factory.py --port /dev/...` workflow validates the classic
+ESP32 identity, partition offset `0x1d0000`, and maximum size `0x230000` before
+writing firmware and package storage.
