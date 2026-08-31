@@ -163,9 +163,11 @@ def _promote_complete_set(staging: Path, output: Path, expected: Sequence[dict])
 
 
 def build_faces(*, output_dir: Path, only: Iterable[str] | None = None,
-                reproducible: bool = False, runner: Runner = run,
+                reproducible: bool = False, runner: Runner | None = None,
                 root: Path = ROOT) -> None:
     del reproducible  # Two rounds are always required; the flag documents intent for CI/users.
+    if runner is None:
+        runner = run
     faces = _selected_faces(only)
     output_dir = Path(output_dir)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
