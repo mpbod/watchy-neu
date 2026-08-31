@@ -1,5 +1,6 @@
 #include "watchy/display.h"
 #include "watchy/shell_render.h"
+#include "watchy/ui_draw.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +23,20 @@ static int region_ink(const uint8_t *fb, int left, int top, int right, int botto
         for (int x = left; x <= right; ++x)
             ink += black(fb, x, y) ? 1 : 0;
     return ink;
+}
+
+static int same_region(const uint8_t *first,
+                       const uint8_t *second,
+                       int left,
+                       int top,
+                       int right,
+                       int bottom) {
+    for (int y = top; y <= bottom; ++y) {
+        for (int x = left; x <= right; ++x) {
+            if (black(first, x, y) != black(second, x, y)) return 0;
+        }
+    }
+    return 1;
 }
 
 static watchy_canvas_t canvas(uint8_t *fb) {
@@ -49,7 +64,9 @@ static int read_pbm(const char *path, const uint8_t *fb) {
     CHECK(fread(expected, 1u, sizeof(expected), f) == sizeof(expected));
     CHECK(fgetc(f) == EOF);
     fclose(f);
-    CHECK(memcmp(expected, fb, sizeof(expected)) == 0);
+    for (size_t i = 0u; i < sizeof(expected); ++i) {
+        CHECK(expected[i] == (uint8_t)~fb[i]);
+    }
     return 0;
 }
 
@@ -57,7 +74,10 @@ static void write_pbm(const char *path, const uint8_t *fb) {
     FILE *f = fopen(path, "wb");
     if (f == NULL) return;
     (void)fputs("P4\n200 200\n", f);
-    (void)fwrite(fb, 1u, WATCHY_DISPLAY_FRAMEBUFFER_SIZE, f);
+    for (size_t i = 0u; i < WATCHY_DISPLAY_FRAMEBUFFER_SIZE; ++i) {
+        const uint8_t standard_bits = (uint8_t)~fb[i];
+        (void)fwrite(&standard_bits, 1u, 1u, f);
+    }
     (void)fclose(f);
 }
 
@@ -86,11 +106,31 @@ static int test_menu(void) {
     CHECK(black(fb, 0, 0) && black(fb, 186, 24));
     CHECK(!black(fb, 188, 24) && black(fb, 187, 50) && !black(fb, 188, 50));
     CHECK(black(fb, 2, 80) && black(fb, 180, 134));
-    CHECK(!black(fb, 2, 79) && !black(fb, 2, 135));
+    CHECK(black(fb, 2, 79) && black(fb, 2, 134) && !black(fb, 2, 135));
+    CHECK(black(fb, 188, 19) && black(fb, 198, 19));
+    CHECK(black(fb, 188, 180) && black(fb, 198, 180));
+    CHECK(black(fb, 193, 8) && black(fb, 192, 9) && black(fb, 194, 9));
+    CHECK(black(fb, 190, 11) && black(fb, 196, 11));
+    CHECK(black(fb, 190, 189) && black(fb, 196, 189));
+    /* The face icon has a vertical stem only; its dial center stays clear. */
+    CHECK(black(fb, 20, 46) && !black(fb, 17, 53));
+    /* Settings is a 14x14 outline; the diamond center remains white. */
+    CHECK(black(fb, 19, 156) && black(fb, 13, 162));
+    CHECK(!black(fb, 19, 162) && !black(fb, 20, 162));
     CHECK(region_ink(fb, 44, 25, 180, 79) > 20);
     CHECK(region_ink(fb, 44, 80, 180, 134) > 20);
     CHECK(region_ink(fb, 44, 135, 180, 189) > 20);
     CHECK(read_pbm(WATCHY_GOLDEN_DIR "/menu.pbm", fb) == 0);
+    write_pbm("/tmp/watchy-shell-polarity.pbm", fb);
+    FILE *pbm = fopen("/tmp/watchy-shell-polarity.pbm", "rb");
+    CHECK(pbm != NULL);
+    CHECK(fseek(pbm, 11L, SEEK_SET) == 0);
+    int first_byte = fgetc(pbm);
+    CHECK((first_byte & 0x80) != 0); /* P4 bit 1 is black at (0,0). */
+    CHECK(fseek(pbm, 11L + 24L * 25L + 23L, SEEK_SET) == 0);
+    int rail_byte = fgetc(pbm);
+    CHECK((rail_byte & 0x08) == 0); /* P4 bit 0 is white at (188,24). */
+    fclose(pbm);
     return 0;
 }
 
@@ -104,6 +144,12 @@ static int test_menu_selections(void) {
         draw(&c, &s, &settings, &t, NULL, NULL, NULL, NULL);
         CHECK(black(frames[selection], 2, (int)(25u + selection * 55u)));
         CHECK(!black(frames[selection], 2, (int)(25u + ((selection + 1u) % 3u) * 55u)));
+        const unsigned thumb_top = 20u + (selection * 109u + 1u) / 2u;
+        CHECK(black(frames[selection], 194, (int)thumb_top));
+        CHECK(black(frames[selection], 194, (int)(thumb_top + 50u)));
+        if (thumb_top + 51u < 180u) {
+            CHECK(!black(frames[selection], 194, (int)(thumb_top + 51u)));
+        }
     }
     CHECK(memcmp(frames[0], frames[1], sizeof(frames[0])) != 0);
     CHECK(memcmp(frames[1], frames[2], sizeof(frames[1])) != 0);
@@ -129,6 +175,9 @@ static int test_selector(void) {
         memcpy(status_frames[selection], fb, sizeof(fb));
         CHECK(region_ink(fb, 44, 25, 180, 189) > 25);
         CHECK(region_ink(fb, 190, 20, 196, 179) > 15);
+        const unsigned selector_thumb_top = 20u + (selection * 109u + 2u) / 4u;
+        CHECK(black(fb, 194, (int)selector_thumb_top));
+        CHECK(black(fb, 194, (int)(selector_thumb_top + 50u)));
     }
     (void)status_contract;
     CHECK(memcmp(status_frames[1], status_frames[2], sizeof(status_frames[1])) != 0);
@@ -139,10 +188,15 @@ static int test_selector(void) {
         draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
         const unsigned page_start = (position / 3u) * 3u;
         const unsigned slot = position - page_start;
-        const int metadata_ink = region_ink(fb, 44, 25 + (int)slot * 55 + 34,
-                                            180, 25 + (int)slot * 55 + 52);
-        static const int expected_metadata_ink[] = {0, 89, 122, 189, 54};
-        CHECK(metadata_ink == expected_metadata_ink[position]);
+        uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+        watchy_canvas_t expected_canvas = canvas(expected);
+        watchy_ui_draw_text_font(&expected_canvas, 44,
+                                 (int16_t)(25 + slot * 55u + 46u),
+                                 status_contract[position],
+                                 &(watchy_text_style_t){&watchy_font_plex_9_semibold,
+                                                        1, true, false});
+        CHECK(same_region(fb, expected, 44, 25 + (int)slot * 55 + 34,
+                          186, 25 + (int)slot * 55 + 52));
     }
     s.selection = 0u;
     draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
@@ -154,6 +208,10 @@ static int test_selector(void) {
 }
 
 static int test_settings(void) {
+    static const char *const expected_labels[] = {
+        "Clock", "Motion Wake", "Display Motion", "Set Time", "NTP Sync",
+        "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
+    };
     uint8_t frames[10][WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
     watchy_settings_t settings = {.time_24h = true, .motion_wake = true,
                                   .transition_level = WATCHY_TRANSITION_LEVEL_REDUCED,
@@ -164,6 +222,20 @@ static int test_settings(void) {
         watchy_shell_t s = {.screen = WATCHY_SHELL_SETTINGS, .selection = (uint8_t)selection};
         draw(&c, &s, &settings, &t, NULL, NULL, NULL, NULL);
         CHECK(region_ink(frames[selection], 44, 25, 180, 189) > 20);
+        const unsigned settings_thumb_top = 20u + (selection * 109u + 4u) / 9u;
+        CHECK(black(frames[selection], 194, (int)settings_thumb_top));
+        CHECK(black(frames[selection], 194, (int)(settings_thumb_top + 50u)));
+        CHECK(strcmp(watchy_shell_render_settings_label(selection), expected_labels[selection]) == 0);
+        uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+        watchy_canvas_t expected_canvas = canvas(expected);
+        const unsigned slot = selection % WATCHY_SHELL_VISIBLE_ROWS;
+        const int top = 25 + (int)slot * 55;
+        watchy_ui_rect(&expected_canvas, 0, (int16_t)top, 187, 55, true);
+        watchy_ui_draw_text_font(&expected_canvas, 44, (int16_t)(top + 30),
+                                 expected_labels[selection],
+                                 &(watchy_text_style_t){&watchy_font_heros_17_bold, 0,
+                                                        false, false});
+        CHECK(same_region(frames[selection], expected, 44, top, 186, top + 33));
     }
     CHECK(memcmp(frames[0], frames[3], sizeof(frames[0])) != 0);
     CHECK(memcmp(frames[3], frames[6], sizeof(frames[3])) != 0);

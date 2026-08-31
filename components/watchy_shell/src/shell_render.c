@@ -15,7 +15,7 @@ enum {
     RAIL_WIDTH = 13,
     RAIL_TOP = 20,
     RAIL_BOTTOM = 180,
-    RAIL_THUMB_HEIGHT = 32,
+    RAIL_THUMB_HEIGHT = 51,
 };
 
 static watchy_text_style_t text_style(const watchy_font_t *font,
@@ -42,10 +42,10 @@ static void draw_header(watchy_canvas_t *canvas,
 }
 
 static void triangle(watchy_canvas_t *canvas, int center_y, bool up) {
+    static const int half_width[] = {0, 1, 2, 3, 3};
     for (int row = 0; row < 5; ++row) {
-        const int width = row + 1;
-        const int y = up ? center_y + 2 - row : center_y - 2 + row;
-        for (int x = 193 - width / 2; x <= 193 + width / 2; ++x) {
+        const int y = up ? center_y - 2 + row : center_y + 2 - row;
+        for (int x = 193 - half_width[row]; x <= 193 + half_width[row]; ++x) {
             watchy_ui_pixel(canvas, (int16_t)x, (int16_t)y, true);
         }
     }
@@ -58,6 +58,8 @@ static void draw_rail(watchy_canvas_t *canvas, unsigned selection, unsigned tota
     const unsigned travel = track_height - RAIL_THUMB_HEIGHT;
     watchy_ui_rect(canvas, RAIL_X, 0, RAIL_WIDTH, PANEL_HEIGHT, false);
     watchy_ui_rule(canvas, RAIL_X, 0, 1, PANEL_HEIGHT, true);
+    watchy_ui_rule(canvas, RAIL_X + 1, RAIL_TOP - 1, RAIL_WIDTH - 1, 1, true);
+    watchy_ui_rule(canvas, RAIL_X + 1, RAIL_BOTTOM, RAIL_WIDTH - 1, 1, true);
     triangle(canvas, 10, true);
     triangle(canvas, 190, false);
     if (total == 0u) total = 1u;
@@ -65,13 +67,12 @@ static void draw_rail(watchy_canvas_t *canvas, unsigned selection, unsigned tota
     if (total > 1u) {
         thumb_top += (clamped_selection * travel + (total - 1u) / 2u) / (total - 1u);
     }
-    watchy_ui_rect(canvas, 190, (int16_t)thumb_top, 7, RAIL_THUMB_HEIGHT, true);
+    watchy_ui_rect(canvas, 190, (int16_t)thumb_top, 9, RAIL_THUMB_HEIGHT, true);
 }
 
 static void draw_face_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool black) {
     watchy_ui_circle(canvas, (int16_t)(x + 9), (int16_t)(y + 11), 8, false, black);
     watchy_ui_rule(canvas, (int16_t)(x + 9), (int16_t)(y + 4), 1, 14, black);
-    watchy_ui_rule(canvas, (int16_t)(x + 5), (int16_t)(y + 11), 9, 1, black);
 }
 
 static void draw_apps_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool black) {
@@ -82,14 +83,15 @@ static void draw_apps_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool b
 }
 
 static void draw_settings_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, bool black) {
-    /* An angular gear/diamond remains legible at the 22 px icon size. */
-    for (int i = 0; i < 8; ++i) {
-        watchy_ui_pixel(canvas, (int16_t)(x + 10 - i), (int16_t)(y + 10 - i), black);
-        watchy_ui_pixel(canvas, (int16_t)(x + 10 + i), (int16_t)(y + 10 - i), black);
-        watchy_ui_pixel(canvas, (int16_t)(x + 10 - i), (int16_t)(y + 10 + i), black);
-        watchy_ui_pixel(canvas, (int16_t)(x + 10 + i), (int16_t)(y + 10 + i), black);
+    /* 14x14 outlined diamond, with the center left untouched. */
+    for (int i = 0; i <= 7; ++i) {
+        if (i < 7) {
+            watchy_ui_pixel(canvas, (int16_t)(x + 8 - i), (int16_t)(y + 4 + i), black);
+            watchy_ui_pixel(canvas, (int16_t)(x + 9 + i), (int16_t)(y + 4 + i), black);
+        }
+        watchy_ui_pixel(canvas, (int16_t)(x + 2 + i), (int16_t)(y + 10 + i), black);
+        watchy_ui_pixel(canvas, (int16_t)(x + 15 - i), (int16_t)(y + 10 + i), black);
     }
-    watchy_ui_rect(canvas, x + 8, y + 8, 5, 5, !black);
 }
 
 static void draw_icon(watchy_canvas_t *canvas, int16_t x, int16_t y, unsigned kind, bool black) {
@@ -117,6 +119,7 @@ static void draw_primary_row(watchy_canvas_t *canvas,
     if (selected) {
         watchy_ui_rect(canvas, 0, top, CONTENT_WIDTH, ROW_HEIGHT, true);
     }
+    watchy_ui_rule(canvas, 0, (int16_t)(top + ROW_HEIGHT - 1), CONTENT_WIDTH, 1, true);
     draw_icon(canvas, 11, (int16_t)(top + 17), icon_kind, ink);
     watchy_ui_draw_text_font(canvas, 44, (int16_t)(top + 30), label, &primary);
     watchy_ui_draw_text_font(canvas, 44, (int16_t)(top + 46), metadata, &secondary);
@@ -139,6 +142,16 @@ static const char *selector_metadata(const watchy_package_info_t *package) {
     if (package->pending) return "PENDING";
     if (package->active) return "ACTIVE";
     return package->version[0] == '\0' ? "UNKNOWN" : package->version;
+}
+
+static const char *const settings_labels[] = {
+    "Clock", "Motion Wake", "Display Motion", "Set Time", "NTP Sync",
+    "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
+};
+
+const char *watchy_shell_render_settings_label(size_t index) {
+    return index < sizeof(settings_labels) / sizeof(settings_labels[0])
+               ? settings_labels[index] : NULL;
 }
 
 static void render_selector(watchy_canvas_t *canvas,
@@ -177,10 +190,6 @@ static void render_settings_screen(watchy_canvas_t *canvas,
                                    const watchy_shell_t *shell,
                                    const watchy_settings_t *settings,
                                    const watchy_time_t *time) {
-    static const char *const labels[] = {
-        "Clock", "Motion Wake", "Display Motion", "Set Time", "NTP Sync",
-        "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
-    };
     char metadata[10][20];
     const char *motion = settings->motion_wake ? "ON" : "OFF";
     const char *transition = settings->transition_level == WATCHY_TRANSITION_LEVEL_FULL
@@ -204,7 +213,7 @@ static void render_settings_screen(watchy_canvas_t *canvas,
         const unsigned index = page_start + slot;
         if (index < 10u) {
             draw_primary_row(canvas, slot, shell->selection == index,
-                             labels[index], metadata[index], 2u);
+                             settings_labels[index], metadata[index], 2u);
         }
     }
     draw_rail(canvas, shell->selection, 10u);

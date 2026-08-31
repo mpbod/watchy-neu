@@ -19,6 +19,9 @@ void watchy_shell_render(watchy_canvas_t *canvas,
                          const watchy_diagnostic_report_t *diagnostics,
                          const char *detail);
 
+/* Stable handoff labels used by the nested Settings renderer and host tests. */
+const char *watchy_shell_render_settings_label(size_t index);
+
 #ifdef __cplusplus
 }
 #endif
