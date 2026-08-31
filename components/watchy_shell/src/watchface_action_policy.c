@@ -45,6 +45,9 @@ watchy_status_t watchy_watchface_action_apply(
     }
     if (request->action == WATCHY_SHELL_ACTION_SELECT_BUILTIN) {
         package_status = operations->select_builtin(operations->context);
+        if (package_status == WATCHY_PACKAGE_OK) {
+            operations->force_full_refresh(operations->context);
+        }
     } else if (request->action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE) {
         if (safe_mode || !request->has_package || request->package_ref[0] == '\0' ||
             memchr(request->package_ref, '\0', sizeof(request->package_ref)) == NULL) {
@@ -53,6 +56,7 @@ watchy_status_t watchy_watchface_action_apply(
         package_status = operations->select_watchface(operations->context,
                                                        request->package_ref);
         if (package_status == WATCHY_PACKAGE_OK) {
+            operations->force_full_refresh(operations->context);
             *out_result = operations->run_watchface(operations->context, safe_mode);
         }
     } else {

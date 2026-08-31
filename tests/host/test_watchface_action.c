@@ -15,6 +15,7 @@ typedef struct {
     unsigned snapshot_calls;
     unsigned save_calls;
     unsigned force_full_calls;
+    bool run_started_after_full_refresh;
     char selected_ref[WATCHY_PACKAGE_REF_MAX + 1u];
     watchy_settings_t saved_settings;
 } fixture_t;
@@ -35,6 +36,7 @@ static watchy_package_status_t select_watchface(void *context, const char *packa
 static watchy_watchface_run_result_t run_watchface(void *context, bool safe_mode) {
     fixture_t *fixture = context;
     ++fixture->run_calls;
+    fixture->run_started_after_full_refresh = fixture->force_full_calls != 0u;
     return safe_mode ? (watchy_watchface_run_result_t){0} : fixture->run_result;
 }
 
@@ -105,6 +107,8 @@ static int test_successful_watchface_selection_promotes_and_persists(void) {
     CHECK(watchy_watchface_action_apply(&request, false, &settings, &catalog,
                                         &ops, &result) == WATCHY_STATUS_OK);
     CHECK(result.rendered && result.cancelled_buttons == 0u);
+    CHECK(fixture.force_full_calls == 1u);
+    CHECK(fixture.run_started_after_full_refresh);
     CHECK(fixture.select_watchface_calls == 1u && fixture.run_calls == 1u);
     CHECK(fixture.snapshot_calls == 1u && fixture.save_calls == 1u);
     CHECK(strcmp(fixture.selected_ref, "face.new@1.0.0") == 0);
@@ -133,6 +137,7 @@ static int test_failed_render_preserves_previous_watchface(void) {
     CHECK(watchy_watchface_action_apply(&request, false, &settings, &catalog,
                                         &ops, &result) == WATCHY_STATUS_INVALID_STATE);
     CHECK(!result.rendered && result.cancelled_buttons == 0u);
+    CHECK(fixture.force_full_calls == 1u);
     CHECK(fixture.snapshot_calls == 1u && fixture.save_calls == 0u);
     CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
     CHECK(catalog.packages[0].active);
@@ -156,6 +161,7 @@ static int test_builtin_selection_clears_persisted_package(void) {
     CHECK(watchy_watchface_action_apply(&request, false, &settings, &catalog,
                                         &ops, &result) == WATCHY_STATUS_OK);
     CHECK(!result.rendered && result.cancelled_buttons == 0u);
+    CHECK(fixture.force_full_calls == 1u);
     CHECK(fixture.select_builtin_calls == 1u && fixture.run_calls == 0u);
     CHECK(fixture.snapshot_calls == 1u && fixture.save_calls == 1u);
     CHECK(settings.active_watchface[0] == '\0');
