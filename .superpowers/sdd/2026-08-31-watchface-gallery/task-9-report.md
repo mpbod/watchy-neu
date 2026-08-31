@@ -118,3 +118,69 @@ were intentionally discarded; the committed locks use portable relative paths.
 The remaining concern is physical e-paper contrast/ghosting and device-scale
 appearance, especially the intentionally cropped 82px Slab figures. No Watchy
 hardware UAT is claimed in this scoped task.
+
+## Repair round 1 — handoff geometry correction
+
+The Slab 82px Heros baselines were corrected from the rejected `111/205` to
+`82/182`. The white hour ink is now centered in y=0..99 and the inverse minute
+ink in y=100..199; the only retained cropping is the font's natural boundary.
+The weekday/date/battery corners remain unobscured. New hand-derived assertions
+require substantial large-number ink away from each boundary and require zero
+hour ink at y=96..99 and zero inverse-minute ink at y=196..199. Thus a divider
+or panel-edge-amputated number cannot pass merely through its PBM golden.
+
+Orbit now maps every moon octant exactly as follows: `NEW`, `WAX CRES`,
+`FIRST QTR`, `WAX GIBB`, `FULL`, `WAN GIBB`, `LAST QTR`, `WAN CRES`.
+The header's three fixed handoff glyphs are a filled 10x10 square at (92,35),
+an outlined 10x10 square at (106,35), and a filled 10px circle in x=120..129 /
+y=35..44. They have no invented dynamic meaning. Every cardinal fixture now
+independently compares the literal expected label and glyph pixels in addition
+to its phase-disc geometry: NEW (2000-01-06 18:14 UTC), FIRST QTR
+(2000-01-14 03:26), FULL (2000-01-21 12:37), and LAST QTR (2000-01-28 21:48).
+This rejects the former generic `PHASE` title and the former outlined
+square/circle/diamond row.
+
+At the repaired milestone gate the targeted host face test passed without
+golden rewriting:
+
+```text
+cmake --build build/host --target watchy_first_party_face_tests && \
+  ./build/host/tests/host/watchy_first_party_face_tests
+EXIT=0
+```
+
+`python3 tools/build_first_party.py --reproducible` also passed for all eight
+WPKs (two reproducible rounds each; package ELF audit has zero undefined
+symbols and zero symbol relocations). The builder's absolute local dependency
+lock rewrites were reverted to portable relative paths after the audit.
+
+The regenerated native artifacts were visually compared with
+`reference-slab.png` and `reference-orbit.png`: Slab has centered, unclipped
+large figures with correct upper/lower inversion, and Orbit has the intended
+right-header label/glyph geometry, inset disc, rule, and unclipped footer.
+The four-panel phase contact sheet was also inspected for one-bit stem survival
+and all cardinal phase polarities. Repaired artifact SHA-256 values:
+
+```text
+slab-1x.png              930c06f0fce7d57faf8275739998c61dde1889a9f0ddd2b73ae678e8aeb122e7
+slab-4x.png              bf3c551ceb9d1da58bea4681344b786473ce9838e56fbc0ffd23c44aec84fd85
+orbit-1x.png             7dd29167b8d90154ade7eeec30768a50968590e45a8c6de5d2c1052179463eb5
+orbit-4x.png             b9b18a14826420deb683384ea951ca5002060a2a309da0594b03122ddc969dd4
+orbit-phases-contact.png 4e3c628d5f2bae9b58bec199b32fcd3a57ef19bbac9190be563b115739da959f
+```
+
+| Package | Bytes | SHA-256 after repair |
+| --- | ---: | --- |
+| grid-01.wpk | 28,060 | `465a34f57d867c580075052d56f3c608c86242528118fb5e4e06c91b87356dc8` |
+| grid-02.wpk | 21,452 | `abb2a52cb898b293c3fbe6da8c0fa432f8f7883c82fb05736c61b460418d2674` |
+| grid-03.wpk | 23,648 | `2c3b978153d6b57bad454a811f877ecab17cde949cfc3a17c9c3d83daccb5687` |
+| orbit.wpk | 16,985 | `8b5c20086e75ab11d9a988cd37f8fb923347f44125ea2ed8177adeaac21e8efa` |
+| slab.wpk | 16,595 | `e1ca5d417205108a38bdc238b65eee180885da02a2d272ec644f506385855ea8` |
+| term-01.wpk | 20,456 | `838f7253e86a71e990f0224b4512a24f321342592a36411f0675f1c6790318c8` |
+| term-02.wpk | 19,460 | `f57c05f0faa807be7a1f67e443971cff1d2da8d0c1859645f9386704993fdf88` |
+| term-03.wpk | 17,032 | `f7365c4bacef2a8d89dc9e88a825ebaf0c9eab3fc6e896bf2aadb2a350da57c4` |
+
+Final self-review: `git diff --check` is clean. No generated font changed,
+therefore no font check was required; no full firmware suite was run by scope.
+Remaining concern is still hardware-only e-paper contrast/ghosting; this repair
+does not claim device UAT.

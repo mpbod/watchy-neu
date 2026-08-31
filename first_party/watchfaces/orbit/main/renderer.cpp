@@ -71,6 +71,18 @@ void draw_phase_disc(watchy_canvas_t *canvas, uint8_t octant) noexcept {
     }
 }
 
+const char *phase_label(uint8_t octant) noexcept {
+    const uint8_t phase = static_cast<uint8_t>(octant & 7u);
+    if (phase == 0u) return "NEW";
+    if (phase == 1u) return "WAX CRES";
+    if (phase == 2u) return "FIRST QTR";
+    if (phase == 3u) return "WAX GIBB";
+    if (phase == 4u) return "FULL";
+    if (phase == 5u) return "WAN GIBB";
+    if (phase == 6u) return "LAST QTR";
+    return "WAN CRES";
+}
+
 fixed_text orbit_day(const watchy_time_t &time) noexcept {
     fixed_text out;
     const fixed_text weekday = format_weekday(time);
@@ -109,20 +121,27 @@ fixed_text orbit_status(void *user_data) noexcept {
 }
 
 void draw_glyphs(watchy_canvas_t *canvas) noexcept {
-    watchy_ui_rect_outline(canvas, 92, 35, 10, 10, 1u, true);
-    watchy_ui_circle(canvas, 111, 39, 4, false, true);
-    for (int row = 0; row < 10; ++row) {
-        const int width = row <= 4 ? row * 2 + 1 : (9 - row) * 2 + 1;
-        watchy_ui_rule(canvas, static_cast<int16_t>(132 - width / 2),
-                       static_cast<int16_t>(35 + row), static_cast<int16_t>(width), 1u, true);
+    watchy_ui_rect(canvas, 92, 35, 10, 10, true);
+    watchy_ui_rect_outline(canvas, 106, 35, 10, 10, 1u, true);
+    /* Fixed 10px filled circle at x=120..129/y=35..44; doubled coordinates
+     * preserve the handoff's even 10px diameter without float arithmetic. */
+    for (int y = 35; y <= 44; ++y) {
+        const int dy2 = y * 2 - 79;
+        for (int x = 120; x <= 129; ++x) {
+            const int dx2 = x * 2 - 249;
+            if (dx2 * dx2 + dy2 * dy2 <= 100) {
+                watchy_ui_pixel(canvas, static_cast<int16_t>(x), static_cast<int16_t>(y), true);
+            }
+        }
     }
 }
 
 void draw_orbit(watchy_canvas_t *canvas, void *user_data, const watchy_time_t &time) noexcept {
     const fixed_text clock = format_hhmm(time, false);
     watchy_ui_fill(canvas, false);
-    draw_phase_disc(canvas, moon_octant(time));
-    watchy_ui_draw_text_font(canvas, 92, 23, "PHASE", &kCompact);
+    const uint8_t phase = moon_octant(time);
+    draw_phase_disc(canvas, phase);
+    watchy_ui_draw_text_font(canvas, 92, 23, phase_label(phase), &kCompact);
     draw_glyphs(canvas);
     watchy_ui_draw_text_font(canvas, 92, 64, orbit_status(user_data).c_str(), &kCompact);
     watchy_ui_draw_text_centered(canvas, 100, 150, clock.c_str(), &kClock);

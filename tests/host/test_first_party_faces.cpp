@@ -48,6 +48,21 @@ static int ink(const uint8_t *fb, int left, int top, int right, int bottom) {
     return count;
 }
 
+static int white_ink(const uint8_t *fb, int left, int top, int right, int bottom) {
+    const int area = (right - left + 1) * (bottom - top + 1);
+    return area - ink(fb, left, top, right, bottom);
+}
+
+static bool same_region(const uint8_t *actual, const uint8_t *expected,
+                        int left, int top, int right, int bottom) {
+    for (int y = top; y <= bottom; ++y) {
+        for (int x = left; x <= right; ++x) {
+            if (black(actual, x, y) != black(expected, x, y)) return false;
+        }
+    }
+    return true;
+}
+
 static bool text_ink_fits(const watchy_text_style_t &style,
                           const char *text,
                           int pen_x,
@@ -310,8 +325,12 @@ static int test_slab_orbit(const watchy_package_descriptor_v1_t *descriptor,
          * independent top/bottom regions before the PBM comparison. */
         assert(ink(framebuffer, 0, 0, 199, 99) > 1000);
         assert(ink(framebuffer, 0, 100, 199, 199) > 15000);
-        assert(ink(framebuffer, 50, 10, 150, 95) > 300);
-        assert(ink(framebuffer, 50, 105, 150, 199) > 300);
+        /* Large glyphs are centered within their own slabs: they must not be
+         * visibly amputated at the divider or the panel's lower edge. */
+        assert(ink(framebuffer, 50, 20, 150, 94) > 300);
+        assert(ink(framebuffer, 50, 96, 150, 99) == 0);
+        assert(white_ink(framebuffer, 50, 105, 150, 190) > 300);
+        assert(white_ink(framebuffer, 50, 196, 150, 199) == 0);
         assert(ink(framebuffer, 130, 0, 190, 30) > 10);
         assert(ink(framebuffer, 8, 165, 85, 199) > 20);
         assert(ink(framebuffer, 145, 165, 191, 199) > 15);
@@ -342,11 +361,38 @@ static int test_slab_orbit(const watchy_package_descriptor_v1_t *descriptor,
     return 0;
 }
 
+static void draw_expected_orbit_glyphs(watchy_canvas_t *canvas) {
+    watchy_ui_rect(canvas, 92, 35, 10, 10, true);
+    watchy_ui_rect_outline(canvas, 106, 35, 10, 10, 1u, true);
+    /* Exact 10 x 10 filled circle, doubled around the pixel-center (124.5,39.5). */
+    for (int y = 35; y <= 44; ++y) {
+        const int dy2 = y * 2 - 79;
+        for (int x = 120; x <= 129; ++x) {
+            const int dx2 = x * 2 - 249;
+            if (dx2 * dx2 + dy2 * dy2 <= 100) watchy_ui_pixel(canvas, x, y, true);
+        }
+    }
+}
+
+static void assert_orbit_header(const uint8_t *actual, const char *label) {
+    uint8_t expected[5000]{};
+    watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, expected};
+    const watchy_text_style_t compact{&watchy_font_plex_9_semibold, 0, true, false};
+    watchy_ui_fill(&canvas, false);
+    watchy_ui_draw_text_font(&canvas, 92, 23, label, &compact);
+    draw_expected_orbit_glyphs(&canvas);
+    /* Literal label pixels and fixed handoff glyphs prevent a generic PHASE
+     * title or invented outline/circle/diamond semantics from passing. */
+    assert(same_region(actual, expected, 90, 11, 188, 27));
+    assert(same_region(actual, expected, 90, 33, 132, 47));
+}
+
 static void assert_orbit_phase(watchy_time_t phase_time,
                                int expected_octant,
                                bool left_black,
                                bool right_black,
-                               const char *artifact_name) {
+                               const char *artifact_name,
+                               const char *label) {
     assert(moon_octant(phase_time) == expected_octant);
     host_fixture fixture;
     fixture.time = phase_time;
@@ -364,6 +410,7 @@ static void assert_orbit_phase(watchy_time_t phase_time,
     assert(black(framebuffer, 30, 45) == left_black);
     assert(black(framebuffer, 60, 45) == right_black);
     assert(ink(framebuffer, 14, 14, 75, 75) > 250);
+    assert_orbit_header(framebuffer, label);
     const char *artifact_dir = std::getenv("WATCHY_PHASE_ARTIFACT_DIR");
     if (artifact_dir != nullptr && artifact_name != nullptr) {
         char path[192]{};
@@ -486,9 +533,9 @@ int main() {
                            WATCHY_FACE_GOLDEN_DIR "/slab.pbm", 531u, false) == 0);
     assert(test_slab_orbit(orbit_package_entry(), orbit_render,
                            WATCHY_FACE_GOLDEN_DIR "/orbit.pbm", 531u, true) == 0);
-    assert_orbit_phase(watchy_time_t{2000, 1, 6, 18, 14, 0, 4, 0}, 0, true, true, "orbit-new");
-    assert_orbit_phase(watchy_time_t{2000, 1, 14, 3, 26, 0, 5, 0}, 2, true, false, "orbit-first-quarter");
-    assert_orbit_phase(watchy_time_t{2000, 1, 21, 12, 37, 0, 5, 0}, 4, false, false, "orbit-full");
-    assert_orbit_phase(watchy_time_t{2000, 1, 28, 21, 48, 0, 5, 0}, 6, false, true, "orbit-last-quarter");
+    assert_orbit_phase(watchy_time_t{2000, 1, 6, 18, 14, 0, 4, 0}, 0, true, true, "orbit-new", "NEW");
+    assert_orbit_phase(watchy_time_t{2000, 1, 14, 3, 26, 0, 5, 0}, 2, true, false, "orbit-first-quarter", "FIRST QTR");
+    assert_orbit_phase(watchy_time_t{2000, 1, 21, 12, 37, 0, 5, 0}, 4, false, false, "orbit-full", "FULL");
+    assert_orbit_phase(watchy_time_t{2000, 1, 28, 21, 48, 0, 5, 0}, 6, false, true, "orbit-last-quarter", "LAST QTR");
     return 0;
 }

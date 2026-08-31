@@ -51,15 +51,15 @@ void draw_slab(watchy_canvas_t *canvas, void *user_data, const watchy_time_t &ti
                             static_cast<char>('0' + time.minute % 10u), '\0'};
 
     watchy_ui_fill(canvas, false);
-    /* The 82px hour baseline intentionally crosses the exact 100px boundary;
-     * the lower slab crops the glyph rather than allowing it to bleed. */
-    watchy_ui_draw_text_centered(canvas, 100, 111, hour, &kLarge);
+    /* The font's natural ascent/descent remains inside the white 100px slab;
+     * no divider crop is used to manufacture the large-number treatment. */
+    watchy_ui_draw_text_centered(canvas, 100, 82, hour, &kLarge);
     watchy_ui_rect(canvas, 0, 100, 200, 100, true);
-    /* The minute baseline intentionally extends below the panel, producing the
-     * handed-off cropped counterpart while clipped drawing keeps it bounded. */
+    /* Mirrored lower-slab baseline preserves the same natural type boundary
+     * without cutting minutes at the panel's lower edge. */
     watchy_text_style_t minute_style = kLarge;
     minute_style.black = false;
-    watchy_ui_draw_text_centered(canvas, 100, 205, minute, &minute_style);
+    watchy_ui_draw_text_centered(canvas, 100, 182, minute, &minute_style);
 
     const fixed_text weekday = format_weekday(time);
     const fixed_text date = format_day_month(time);
