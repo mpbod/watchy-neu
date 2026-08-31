@@ -135,6 +135,21 @@ target_compile_features(watchy_shell_tests PRIVATE c_std_11)
 target_compile_options(watchy_shell_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_shell_tests COMMAND watchy_shell_tests)
 
+add_executable(watchy_watchface_action_tests
+  test_watchface_action.c
+  ../../components/watchy_shell/src/watchface_action_policy.c
+)
+target_include_directories(watchy_watchface_action_tests PRIVATE
+  ../../components/watchy_shell/include
+  ../../components/watchy_hal/include
+  ../../components/watchy_packages/include
+  ../../components/watchy_core/include
+  ../../sdk/include
+)
+target_compile_features(watchy_watchface_action_tests PRIVATE c_std_11)
+target_compile_options(watchy_watchface_action_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_watchface_action_tests COMMAND watchy_watchface_action_tests)
+
 add_executable(watchy_shell_render_tests
   test_shell_render.c
   ../../components/watchy_shell/src/shell_render.c

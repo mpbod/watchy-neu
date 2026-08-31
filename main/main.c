@@ -15,6 +15,7 @@
 #include "watchy/shell.h"
 #include "watchy/shell_render.h"
 #include "watchy/storage.h"
+#include "watchy/watchface_action.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -211,6 +212,43 @@ static watchy_status_t sync_active_watchface_setting(watchy_settings_t *settings
     return WATCHY_STATUS_OK;
 }
 
+static watchy_package_status_t action_select_builtin(void *context) {
+    (void)context;
+    return watchy_packages_select_builtin();
+}
+
+static watchy_package_status_t action_select_watchface(void *context,
+                                                       const char *package_ref) {
+    (void)context;
+    return watchy_packages_select_watchface(package_ref);
+}
+
+static bool action_run_watchface(void *context, bool safe_mode) {
+    (void)context;
+    return watchy_packages_run_watchface(safe_mode);
+}
+
+static watchy_package_status_t action_snapshot(void *context,
+                                                watchy_package_catalog_t *catalog) {
+    (void)context;
+    return watchy_packages_snapshot(catalog);
+}
+
+static watchy_status_t action_save_settings(void *context,
+                                             const watchy_settings_t *settings) {
+    (void)context;
+    return watchy_settings_save(settings);
+}
+
+static const watchy_watchface_action_ops_t watchface_action_ops = {
+    .select_builtin = action_select_builtin,
+    .select_watchface = action_select_watchface,
+    .run_watchface = action_run_watchface,
+    .snapshot = action_snapshot,
+    .save_settings = action_save_settings,
+    .context = NULL,
+};
+
 static watchy_status_t sync_time_ntp(const watchy_settings_t *settings) {
     watchy_wifi_sta_config_t wifi = {0};
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(settings->ntp_server);
@@ -401,7 +439,9 @@ static void run_shell(watchy_shell_t *shell,
             detail[0] = '\0';
             watchy_shell_input(shell, shell_input);
             last_activity = milliseconds();
-            const watchy_shell_action_t action = watchy_shell_take_action(shell);
+            watchy_shell_action_request_t action_request;
+            (void)watchy_shell_take_action_request(shell, &action_request);
+            const watchy_shell_action_t action = action_request.action;
             switch (action) {
             case WATCHY_SHELL_ACTION_SAVE_SETTINGS:
                 if (shell->selection == 0u) settings->time_24h = !settings->time_24h;
@@ -524,6 +564,22 @@ static void run_shell(watchy_shell_t *shell,
                     } else watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
                 } else watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
                 break;
+            case WATCHY_SHELL_ACTION_SELECT_BUILTIN:
+            case WATCHY_SHELL_ACTION_SELECT_WATCHFACE: {
+                bool package_rendered = false;
+                const watchy_status_t status = watchy_watchface_action_apply(
+                    &action_request, shell->safe_mode, settings, catalog,
+                    &watchface_action_ops, &package_rendered);
+                if (status == WATCHY_STATUS_OK) {
+                    watchy_shell_set_package_catalog(shell, catalog, true);
+                    post_action_presentation_needed = !package_rendered;
+                } else {
+                    shell->package_warning = true;
+                    watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
+                }
+                last_activity = milliseconds();
+                break;
+            }
             case WATCHY_SHELL_ACTION_NORMAL_REBOOT:
                 (void)watchy_portal_stop();
                 s_safe_mode_latched = false;
