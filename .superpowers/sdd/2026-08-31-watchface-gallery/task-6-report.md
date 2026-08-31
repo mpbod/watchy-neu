@@ -75,6 +75,17 @@ complete-set preservation, and absence of `.staging`/`.work` debris. The
 existing package tests cover wrong architecture, wrong ELF type, undefined
 relocations, runtime limits, WPK limits, and atomic package writes.
 
+The pinned PlatformIO firmware build also passes:
+
+```text
+platformio run -e watchy_v2
+SUCCESS; Flash 73.9% (1,356,591 / 1,835,008 bytes)
+```
+
+No Watchy serial device was present (`platformio device list` exposed only
+debug-console/Bluetooth ports), so a physical upload/frame acceptance run is
+not claimed.
+
 The active interpreter lacks the pinned font dependencies (`fontTools`), so
 the system-interpreter discovery run cannot execute the already-existing font
 suite. In a temporary venv populated from the pinned requirements, the full
