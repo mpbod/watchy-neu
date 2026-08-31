@@ -33,7 +33,7 @@ ctest --test-dir build/host --output-on-failure
 mutation_exit=1 (expected rejection)
 
 platformio run -e watchy_v2
-SUCCESS; RAM 118924/327680 (36.3%), flash 1356663/1835008 (73.9%)
+SUCCESS; RAM 118924/327680 (36.3%), flash 1356727/1835008 (73.9%)
 
 cat .pio/build/watchy_v2/components/watchy_shell/src/shell_render.c.su
 watchy_shell_render frame: 272 bytes
@@ -46,4 +46,4 @@ PBMs are under `tests/golden/shell/`. Native 1x and nearest-neighbor 4x PNG revi
 
 ## Commit
 
-This rescue implementation is committed as new commits `cecddbc` (`feat: complete watchface gallery shell renderer`), `2f92a5c` (`fix: match gallery label casing`), and this fix-round commit; no prior history was amended.
+This rescue implementation is committed as new commits `cecddbc` (`feat: complete watchface gallery shell renderer`), `2f92a5c` (`fix: match gallery label casing`), `ccb96f1` (`test: assert selector metadata raster content`), and `1535a02` (`fix: align shell renderer handoff geometry`); no prior history was amended.
