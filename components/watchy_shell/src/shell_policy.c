@@ -171,7 +171,7 @@ void watchy_shell_set_package_catalog(watchy_shell_t *shell,
                 shell->face_quarantined[face_position] = package->quarantined;
                 ++shell->face_count;
                 if (shell->active_face_selection == 0u && package->active &&
-                    !package->quarantined) {
+                    !package->pending && !package->quarantined) {
                     shell->active_face_selection = shell->face_count - 1u;
                 }
             }

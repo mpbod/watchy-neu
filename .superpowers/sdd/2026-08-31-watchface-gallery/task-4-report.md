@@ -106,3 +106,56 @@ Task 5 must render the Menu, selector rows/status metadata, Hairline, and the
 ten-item Settings viewport. Task 11 must consume the new selection actions and
 perform package selection, persistence, lifecycle render, promotion, or
 rollback. This task intentionally performs none of those operations.
+
+## Fix Round 1: Active and Pending Cursor Precedence
+
+### Reviewer finding and root cause
+
+The active-cursor predicate required `active` and healthy metadata but did not
+exclude `pending`. A healthy catalog entry carrying both flags was therefore
+initialized as the selector's active row, contrary to the rule that pending
+must never be presented as active. Existing coverage tested a pending-only row
+and did not exercise the overlapping flags.
+
+### RED evidence
+
+Added `test_selector_never_treats_a_pending_face_as_active` with one healthy
+watchface marked both `active = true` and `pending = true`. After entering the
+selector, the test requires position zero, Hairline.
+
+```text
+FAIL tests/host/test_shell.c:685: shell.selection == 0u
+```
+
+### GREEN implementation and verification
+
+The cursor eligibility predicate now explicitly requires
+`!package->pending`, in addition to active and non-quarantined status. No
+mapping, action, rendering, or persistence behavior changed.
+
+```text
+cmake --build build/host --target watchy_shell_tests
+./build/host/tests/host/watchy_shell_tests
+```
+
+Result: `shell tests passed`.
+
+```text
+cmake --build build/host
+ctest --test-dir build/host --output-on-failure
+```
+
+Result: 10/10 tests passed, 0 failed.
+
+```text
+platformio run -e watchy_v2
+```
+
+Result: firmware build succeeded under the existing warnings-as-errors and
+frame-size flags; flash usage remains 1,340,875 of 1,835,008 bytes.
+
+```text
+git diff --check
+```
+
+Result: clean.

@@ -670,6 +670,22 @@ static int test_selector_handles_sizes_pages_wrap_and_healthy_active_cursor(void
     return 0;
 }
 
+static int test_selector_never_treats_a_pending_face_as_active(void) {
+    watchy_shell_t shell;
+    watchy_package_catalog_t catalog;
+
+    populate_faces(&catalog, 1u);
+    catalog.packages[0].active = true;
+    catalog.packages[0].pending = true;
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+
+    CHECK(shell.screen == WATCHY_SHELL_WATCHFACE_SELECTOR);
+    CHECK(shell.selection == 0u);
+    return 0;
+}
+
 static int test_selector_actions_are_copied_one_shot_and_back_cancels(void) {
     watchy_shell_t shell;
     watchy_package_catalog_t catalog;
@@ -914,6 +930,7 @@ int main(void) {
     failures += test_app_launcher_pages_and_maps_zero_three_four_and_sixteen_apps();
     failures += test_catalog_builds_independent_bounded_maps_and_clears_stale_rows();
     failures += test_selector_handles_sizes_pages_wrap_and_healthy_active_cursor();
+    failures += test_selector_never_treats_a_pending_face_as_active();
     failures += test_selector_actions_are_copied_one_shot_and_back_cancels();
     failures += test_quarantined_faces_stay_visible_but_cannot_activate();
     failures += test_safe_mode_selector_exposes_only_hairline_and_never_selects_wpk();
