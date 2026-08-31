@@ -26,6 +26,11 @@ typedef struct {
     size_t count;
 } watchy_package_catalog_t;
 
+typedef struct {
+    watchy_package_status_t status;
+    bool index_mutated;
+} watchy_package_mutation_result_t;
+
 typedef watchy_package_status_t (*watchy_package_manifest_reader_fn_t)(
     void *context,
     const char *package_ref,
@@ -91,6 +96,7 @@ watchy_package_status_t watchy_packages_install_blob(
     char out_package_ref[WATCHY_PACKAGE_REF_MAX + 1u]);
 watchy_package_status_t watchy_packages_select_watchface(const char *package_ref);
 watchy_package_status_t watchy_packages_select_builtin(void);
+watchy_package_status_t watchy_packages_recover_stale_pending(void);
 watchy_package_status_t watchy_packages_snapshot(watchy_package_catalog_t *out_catalog);
 watchy_package_status_t watchy_package_catalog_snapshot(
     const watchy_package_index_manager_t *manager,
@@ -100,6 +106,9 @@ watchy_package_status_t watchy_package_catalog_snapshot(
     watchy_package_catalog_t *out_catalog);
 watchy_package_status_t watchy_packages_remove(const char *package_ref);
 watchy_package_status_t watchy_packages_safe_mode_purge(void);
+watchy_package_mutation_result_t watchy_packages_remove_observed(
+    const char *package_ref);
+watchy_package_mutation_result_t watchy_packages_safe_mode_purge_observed(void);
 watchy_package_status_t watchy_packages_upload_begin(size_t expected_size);
 watchy_package_status_t watchy_packages_upload_write(const uint8_t *bytes, size_t size);
 watchy_package_status_t watchy_packages_upload_finish(

@@ -13,12 +13,9 @@ watchy_status_t watchy_watchface_reconcile_settings(
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     for (size_t index = 0u; index < catalog->count; ++index) {
-        if (catalog->packages[index].pending) {
-            selected = catalog->packages[index].package_ref;
-            break;
-        }
         if (catalog->packages[index].active) {
             selected = catalog->packages[index].package_ref;
+            break;
         }
     }
     if (strcmp(settings->active_watchface, selected) == 0) {
@@ -35,7 +32,8 @@ watchy_status_t watchy_watchface_boot_prepare(
     const watchy_watchface_boot_ops_t *operations,
     watchy_watchface_boot_result_t *out_result) {
     if (catalog == NULL || operations == NULL ||
-        operations->import_factory_seed == NULL || operations->snapshot == NULL ||
+        operations->import_factory_seed == NULL ||
+        operations->recover_stale_pending == NULL || operations->snapshot == NULL ||
         out_result == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
@@ -44,11 +42,54 @@ watchy_status_t watchy_watchface_boot_prepare(
         out_result->seed_import_attempted = true;
         out_result->seed_import_failed =
             operations->import_factory_seed(operations->context) != WATCHY_PACKAGE_OK;
+        out_result->stale_pending_recovery_failed =
+            operations->recover_stale_pending(operations->context) != WATCHY_PACKAGE_OK;
     }
     out_result->catalog_readable =
         operations->snapshot(operations->context, catalog) == WATCHY_PACKAGE_OK;
     out_result->package_warning =
-        !safe_mode && (out_result->seed_import_failed || !out_result->catalog_readable);
+        !safe_mode && (out_result->seed_import_failed ||
+                       out_result->stale_pending_recovery_failed ||
+                       !out_result->catalog_readable);
+    return WATCHY_STATUS_OK;
+}
+
+bool watchy_watchface_boot_allows_package_execution(
+    bool safe_mode,
+    const watchy_watchface_boot_result_t *result) {
+    return !safe_mode && result != NULL && !result->seed_import_failed &&
+           !result->stale_pending_recovery_failed && result->catalog_readable;
+}
+
+watchy_status_t watchy_watchface_reconcile_catalog_mutation(
+    watchy_package_mutation_result_t mutation,
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    watchy_package_status_t (*snapshot)(void *context,
+                                        watchy_package_catalog_t *out_catalog),
+    watchy_status_t (*save_settings)(void *context,
+                                     const watchy_settings_t *settings),
+    void *context,
+    watchy_watchface_catalog_mutation_result_t *out_result) {
+    if (settings == NULL || catalog == NULL || snapshot == NULL ||
+        save_settings == NULL || out_result == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_result = (watchy_watchface_catalog_mutation_result_t){
+        .package_failed = mutation.status != WATCHY_PACKAGE_OK,
+    };
+    if (!mutation.index_mutated) {
+        return WATCHY_STATUS_OK;
+    }
+    if (snapshot(context, catalog) != WATCHY_PACKAGE_OK) {
+        out_result->package_failed = true;
+        return WATCHY_STATUS_OK;
+    }
+    out_result->catalog_refreshed = true;
+    if (watchy_watchface_reconcile_settings(settings, catalog, save_settings,
+                                             context) != WATCHY_STATUS_OK) {
+        out_result->settings_save_failed = true;
+    }
     return WATCHY_STATUS_OK;
 }
 

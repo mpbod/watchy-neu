@@ -17,11 +17,13 @@ typedef struct {
     unsigned force_full_calls;
     bool run_started_after_full_refresh;
     watchy_package_status_t import_status;
+    watchy_package_status_t recovery_status;
     watchy_package_status_t snapshot_status;
     watchy_status_t save_status;
     unsigned import_calls;
     unsigned boot_snapshot_calls;
-    char boot_order[3];
+    unsigned recovery_calls;
+    char boot_order[4];
     size_t boot_order_length;
     char selected_ref[WATCHY_PACKAGE_REF_MAX + 1u];
     watchy_settings_t saved_settings;
@@ -43,6 +45,14 @@ static watchy_package_status_t boot_snapshot(void *context,
     fixture->boot_order[fixture->boot_order_length] = '\0';
     *out_catalog = fixture->snapshot;
     return fixture->snapshot_status;
+}
+
+static watchy_package_status_t recover_stale_pending(void *context) {
+    fixture_t *fixture = context;
+    ++fixture->recovery_calls;
+    fixture->boot_order[fixture->boot_order_length++] = 'R';
+    fixture->boot_order[fixture->boot_order_length] = '\0';
+    return fixture->recovery_status;
 }
 
 static watchy_package_status_t select_builtin(void *context) {
@@ -101,6 +111,7 @@ static watchy_watchface_action_ops_t operations(fixture_t *fixture) {
 static watchy_watchface_boot_ops_t boot_operations(fixture_t *fixture) {
     return (watchy_watchface_boot_ops_t){
         .import_factory_seed = import_factory_seed,
+        .recover_stale_pending = recover_stale_pending,
         .snapshot = boot_snapshot,
         .context = fixture,
     };
@@ -266,8 +277,9 @@ static int test_normal_boot_imports_seed_before_first_catalog_snapshot(void) {
 
     CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
           WATCHY_STATUS_OK);
-    CHECK(strcmp(fixture.boot_order, "IS") == 0);
-    CHECK(fixture.import_calls == 1u && fixture.boot_snapshot_calls == 1u);
+    CHECK(strcmp(fixture.boot_order, "IRS") == 0);
+    CHECK(fixture.import_calls == 1u && fixture.recovery_calls == 1u &&
+          fixture.boot_snapshot_calls == 1u);
     CHECK(result.seed_import_attempted && !result.seed_import_failed);
     CHECK(result.catalog_readable && !result.package_warning);
     CHECK(catalog.packages[0].active);
@@ -287,7 +299,8 @@ static int test_safe_boot_skips_seed_import_but_keeps_recovery_catalog(void) {
     CHECK(watchy_watchface_boot_prepare(true, &catalog, &ops, &result) ==
           WATCHY_STATUS_OK);
     CHECK(strcmp(fixture.boot_order, "S") == 0);
-    CHECK(fixture.import_calls == 0u && fixture.boot_snapshot_calls == 1u);
+    CHECK(fixture.import_calls == 0u && fixture.recovery_calls == 0u &&
+          fixture.boot_snapshot_calls == 1u);
     CHECK(!result.seed_import_attempted && !result.seed_import_failed);
     CHECK(result.catalog_readable && !result.package_warning);
     CHECK(catalog.packages[0].active);
@@ -306,7 +319,7 @@ static int test_seed_failure_is_visible_and_does_not_hide_readable_catalog(void)
 
     CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
           WATCHY_STATUS_OK);
-    CHECK(strcmp(fixture.boot_order, "IS") == 0);
+    CHECK(strcmp(fixture.boot_order, "IRS") == 0);
     CHECK(result.seed_import_attempted && result.seed_import_failed);
     CHECK(result.catalog_readable && result.package_warning);
     CHECK(catalog.packages[0].active);
@@ -324,7 +337,7 @@ static int test_unreadable_boot_catalog_is_a_bounded_package_warning(void) {
 
     CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
           WATCHY_STATUS_OK);
-    CHECK(strcmp(fixture.boot_order, "IS") == 0);
+    CHECK(strcmp(fixture.boot_order, "IRS") == 0);
     CHECK(!result.catalog_readable && result.package_warning);
     return 0;
 }
@@ -356,6 +369,123 @@ static int test_non_active_removal_leaves_setting_unchanged(void) {
               &settings, &catalog, save_settings, &fixture) == WATCHY_STATUS_OK);
     CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
     CHECK(fixture.save_calls == 0u);
+    return 0;
+}
+
+static int test_portal_pending_candidate_never_replaces_active_setting(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    catalog_with_active(&catalog, "face.old@1.0.0");
+    catalog.packages[1].pending = true;
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(watchy_watchface_reconcile_settings(
+              &settings, &catalog, save_settings, &fixture) == WATCHY_STATUS_OK);
+    CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
+    CHECK(fixture.save_calls == 0u);
+    return 0;
+}
+
+static int test_stale_pending_recovery_failure_blocks_package_execution(void) {
+    fixture_t fixture = {
+        .import_status = WATCHY_PACKAGE_OK,
+        .recovery_status = WATCHY_PACKAGE_ERR_STORE,
+        .snapshot_status = WATCHY_PACKAGE_OK,
+    };
+    watchy_package_catalog_t catalog = {0};
+    watchy_watchface_boot_result_t result = {0};
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    fixture.snapshot.packages[1].pending = true;
+    const watchy_watchface_boot_ops_t ops = boot_operations(&fixture);
+
+    CHECK(watchy_watchface_boot_prepare(false, &catalog, &ops, &result) ==
+          WATCHY_STATUS_OK);
+    CHECK(result.stale_pending_recovery_failed && result.package_warning);
+    CHECK(!watchy_watchface_boot_allows_package_execution(false, &result));
+    CHECK(strcmp(fixture.boot_order, "IRS") == 0);
+    return 0;
+}
+
+static watchy_package_status_t mutation_snapshot(void *context,
+                                                 watchy_package_catalog_t *out_catalog) {
+    return snapshot(context, out_catalog);
+}
+
+static int reconcile_mutation(fixture_t *fixture,
+                              watchy_package_status_t status,
+                              bool index_mutated,
+                              watchy_settings_t *settings,
+                              watchy_package_catalog_t *catalog,
+                              watchy_watchface_catalog_mutation_result_t *result) {
+    const watchy_package_mutation_result_t mutation = {
+        .status = status,
+        .index_mutated = index_mutated,
+    };
+    return watchy_watchface_reconcile_catalog_mutation(
+               mutation, settings, catalog, mutation_snapshot, save_settings,
+               fixture, result) == WATCHY_STATUS_OK ? 0 : 1;
+}
+
+static int test_partial_active_removal_failure_reconciles_empty_setting(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    watchy_watchface_catalog_mutation_result_t result = {0};
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(reconcile_mutation(&fixture, WATCHY_PACKAGE_ERR_FILESYSTEM, true,
+                             &settings, &catalog, &result) == 0);
+    CHECK(result.catalog_refreshed && result.package_failed);
+    CHECK(!result.settings_save_failed);
+    CHECK(settings.active_watchface[0] == '\0' && fixture.save_calls == 1u);
+    return 0;
+}
+
+static int test_partial_purge_failure_reconciles_empty_setting(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    watchy_watchface_catalog_mutation_result_t result = {0};
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(reconcile_mutation(&fixture, WATCHY_PACKAGE_ERR_FILESYSTEM, true,
+                             &settings, &catalog, &result) == 0);
+    CHECK(result.package_failed && settings.active_watchface[0] == '\0');
+    return 0;
+}
+
+static int test_partial_mutation_save_failure_has_explicit_precedence(void) {
+    fixture_t fixture = {.save_status = WATCHY_STATUS_INVALID_STATE};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    watchy_watchface_catalog_mutation_result_t result = {0};
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(reconcile_mutation(&fixture, WATCHY_PACKAGE_ERR_FILESYSTEM, true,
+                             &settings, &catalog, &result) == 0);
+    CHECK(result.package_failed && result.settings_save_failed);
+    return 0;
+}
+
+static int test_non_active_removal_mutation_keeps_active_setting(void) {
+    fixture_t fixture = {0};
+    watchy_package_catalog_t catalog = {0};
+    watchy_settings_t settings = {0};
+    watchy_watchface_catalog_mutation_result_t result = {0};
+    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    snprintf(settings.active_watchface, sizeof(settings.active_watchface),
+             "%s", "face.old@1.0.0");
+
+    CHECK(reconcile_mutation(&fixture, WATCHY_PACKAGE_OK, true,
+                             &settings, &catalog, &result) == 0);
+    CHECK(result.catalog_refreshed && !result.package_failed);
+    CHECK(fixture.save_calls == 0u);
+    CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
     return 0;
 }
 
@@ -432,6 +562,12 @@ int main(void) {
     CHECK(test_unreadable_boot_catalog_is_a_bounded_package_warning() == 0);
     CHECK(test_active_removal_reconciles_to_hairline_setting() == 0);
     CHECK(test_non_active_removal_leaves_setting_unchanged() == 0);
+    CHECK(test_portal_pending_candidate_never_replaces_active_setting() == 0);
+    CHECK(test_stale_pending_recovery_failure_blocks_package_execution() == 0);
+    CHECK(test_partial_active_removal_failure_reconciles_empty_setting() == 0);
+    CHECK(test_partial_purge_failure_reconciles_empty_setting() == 0);
+    CHECK(test_partial_mutation_save_failure_has_explicit_precedence() == 0);
+    CHECK(test_non_active_removal_mutation_keeps_active_setting() == 0);
     CHECK(test_rollback_reconciles_persisted_setting_to_prior_active() == 0);
     CHECK(test_reconcile_surfaces_settings_save_failure() == 0);
     CHECK(test_activation_identifies_settings_save_failure() == 0);

@@ -276,6 +276,8 @@ watchy_package_status_t watchy_package_finalize_watchface_attempt(
     bool rendered,
     watchy_package_status_t lifecycle_status,
     watchy_package_status_t stop_status);
+watchy_package_status_t watchy_package_recover_stale_pending(
+    watchy_package_index_manager_t *manager);
 bool watchy_package_is_quarantined(const watchy_package_index_manager_t *manager,
                                    const char *package_ref);
 watchy_package_status_t watchy_package_register_installed(

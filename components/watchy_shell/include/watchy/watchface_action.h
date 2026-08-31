@@ -30,6 +30,7 @@ typedef struct {
 
 typedef struct {
     watchy_package_status_t (*import_factory_seed)(void *context);
+    watchy_package_status_t (*recover_stale_pending)(void *context);
     watchy_package_status_t (*snapshot)(void *context,
                                         watchy_package_catalog_t *out_catalog);
     void *context;
@@ -38,9 +39,16 @@ typedef struct {
 typedef struct {
     bool seed_import_attempted;
     bool seed_import_failed;
+    bool stale_pending_recovery_failed;
     bool catalog_readable;
     bool package_warning;
 } watchy_watchface_boot_result_t;
+
+typedef struct {
+    bool catalog_refreshed;
+    bool package_failed;
+    bool settings_save_failed;
+} watchy_watchface_catalog_mutation_result_t;
 
 watchy_status_t watchy_watchface_reconcile_settings(
     watchy_settings_t *settings,
@@ -48,6 +56,21 @@ watchy_status_t watchy_watchface_reconcile_settings(
     watchy_status_t (*save_settings)(void *context,
                                      const watchy_settings_t *settings),
     void *context);
+
+bool watchy_watchface_boot_allows_package_execution(
+    bool safe_mode,
+    const watchy_watchface_boot_result_t *result);
+
+watchy_status_t watchy_watchface_reconcile_catalog_mutation(
+    watchy_package_mutation_result_t mutation,
+    watchy_settings_t *settings,
+    watchy_package_catalog_t *catalog,
+    watchy_package_status_t (*snapshot)(void *context,
+                                        watchy_package_catalog_t *out_catalog),
+    watchy_status_t (*save_settings)(void *context,
+                                     const watchy_settings_t *settings),
+    void *context,
+    watchy_watchface_catalog_mutation_result_t *out_result);
 
 watchy_status_t watchy_watchface_boot_prepare(
     bool safe_mode,

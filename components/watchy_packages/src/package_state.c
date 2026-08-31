@@ -421,6 +421,19 @@ watchy_package_status_t watchy_package_rollback_pending(watchy_package_index_man
     return commit_index(manager, next);
 }
 
+watchy_package_status_t watchy_package_recover_stale_pending(
+    watchy_package_index_manager_t *manager) {
+    char package_ref[WATCHY_PACKAGE_REF_MAX + 1u];
+    if (check_manager(manager) != WATCHY_PACKAGE_OK) {
+        return WATCHY_PACKAGE_ERR_STATE;
+    }
+    if (manager->index.pending_watchface[0] == '\0') {
+        return WATCHY_PACKAGE_OK;
+    }
+    memcpy(package_ref, manager->index.pending_watchface, sizeof(package_ref));
+    return watchy_package_rollback_pending(manager, package_ref);
+}
+
 watchy_package_status_t watchy_package_begin_attempt(watchy_package_index_manager_t *manager,
                                                      const char *package_ref,
                                                      bool safe_mode) {
@@ -513,7 +526,7 @@ watchy_package_status_t watchy_package_finalize_watchface_attempt(
         result = status;
     }
     status = watchy_package_rollback_pending(manager, package_ref);
-    return result != WATCHY_PACKAGE_OK ? result : status;
+    return status != WATCHY_PACKAGE_OK ? status : result;
 }
 
 bool watchy_package_is_quarantined(const watchy_package_index_manager_t *manager,

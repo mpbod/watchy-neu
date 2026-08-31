@@ -1975,6 +1975,58 @@ static int test_pending_watchface_promotion_failure_rolls_back_prior(void) {
     return 0;
 }
 
+static int test_pending_watchface_rollback_commit_failure_is_propagated(void) {
+    fake_index_store_t store = {0};
+    watchy_package_index_manager_t manager;
+    CHECK(prepare_pending_watchface(&store, &manager) == 0);
+    store.fail_save_call = store.save_calls + 2u;
+
+    CHECK(watchy_package_finalize_watchface_attempt(
+              &manager, "clock.new@2.0", true, true, WATCHY_PACKAGE_OK,
+              WATCHY_PACKAGE_ERR_CALLBACK) == WATCHY_PACKAGE_ERR_STORE);
+    const watchy_package_index_t *snapshot = watchy_package_index_snapshot(&manager);
+    CHECK(strcmp(snapshot->active_watchface, "clock.old@1.0") == 0);
+    CHECK(strcmp(snapshot->pending_watchface, "clock.new@2.0") == 0);
+    CHECK(strcmp(snapshot->prior_watchface, "clock.old@1.0") == 0);
+    CHECK(strcmp(store.persisted.pending_watchface, "clock.new@2.0") == 0);
+    return 0;
+}
+
+static int test_stale_pending_recovery_rolls_back_to_prior_active(void) {
+    fake_index_store_t store = {0};
+    watchy_package_index_manager_t manager;
+    watchy_package_index_manager_t reloaded;
+    CHECK(prepare_pending_watchface(&store, &manager) == 0);
+    watchy_package_index_store_t api = fake_store_api(&store);
+    CHECK(watchy_package_index_init(&reloaded, &api) == WATCHY_PACKAGE_OK);
+
+    CHECK(watchy_package_recover_stale_pending(&reloaded) == WATCHY_PACKAGE_OK);
+    const watchy_package_index_t *snapshot = watchy_package_index_snapshot(&reloaded);
+    CHECK(strcmp(snapshot->active_watchface, "clock.old@1.0") == 0);
+    CHECK(snapshot->pending_watchface[0] == '\0');
+    CHECK(snapshot->prior_watchface[0] == '\0');
+    CHECK(store.persisted.pending_watchface[0] == '\0');
+    return 0;
+}
+
+static int test_stale_pending_recovery_store_failure_keeps_retriable_state(void) {
+    fake_index_store_t store = {0};
+    watchy_package_index_manager_t manager;
+    watchy_package_index_manager_t reloaded;
+    CHECK(prepare_pending_watchface(&store, &manager) == 0);
+    watchy_package_index_store_t api = fake_store_api(&store);
+    CHECK(watchy_package_index_init(&reloaded, &api) == WATCHY_PACKAGE_OK);
+    store.fail_save = true;
+
+    CHECK(watchy_package_recover_stale_pending(&reloaded) ==
+          WATCHY_PACKAGE_ERR_STORE);
+    const watchy_package_index_t *snapshot = watchy_package_index_snapshot(&reloaded);
+    CHECK(strcmp(snapshot->active_watchface, "clock.old@1.0") == 0);
+    CHECK(strcmp(snapshot->pending_watchface, "clock.new@2.0") == 0);
+    CHECK(strcmp(store.persisted.pending_watchface, "clock.new@2.0") == 0);
+    return 0;
+}
+
 static int test_three_incomplete_attempts_quarantine_persistently_and_safe_mode_bypasses(void) {
     fake_index_store_t store = {0};
     watchy_package_index_store_t api = fake_store_api(&store);
@@ -3079,6 +3131,9 @@ int main(void) {
     CHECK(test_pending_watchface_promotes_after_clean_finalization() == 0);
     CHECK(test_pending_watchface_finish_failure_rolls_back_prior() == 0);
     CHECK(test_pending_watchface_promotion_failure_rolls_back_prior() == 0);
+    CHECK(test_pending_watchface_rollback_commit_failure_is_propagated() == 0);
+    CHECK(test_stale_pending_recovery_rolls_back_to_prior_active() == 0);
+    CHECK(test_stale_pending_recovery_store_failure_keeps_retriable_state() == 0);
     CHECK(test_three_incomplete_attempts_quarantine_persistently_and_safe_mode_bypasses() == 0);
     CHECK(test_index_rejects_corrupt_persisted_counts_and_strings() == 0);
     CHECK(test_index_wire_is_fixed_width_and_rejects_corruption_or_bad_selection() == 0);
