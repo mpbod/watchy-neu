@@ -90,3 +90,37 @@ move is recorded above for reproducible provenance.
 ## Commit
 
 Commit subject: `feat: add deterministic handoff typography`
+
+## Fix Round 1
+
+Review findings are addressed by `tools/font_provenance.lock.json`. Its font
+allowlist is exactly the six approved OTF paths and each entry records the
+expected file SHA-256 plus either an IBM Plex commit-pinned raw URL
+(`bf260093582f04622aacc1e9f9ca604d7ccd0c42`) or the CTAN archive SHA-256
+and exact archive member. The generator independently validates the lock,
+the exact OTF directory contents, regular/non-symlink paths, and every locked
+hash before it reads configuration or emits output.
+
+The lock also covers the canonicalized full-text hashes of OFL, GUST Font
+License, and a newly vendored `LPPL-1.3c.txt`, because the GUST license refers
+to LPPL 1.3c. Canonicalization is intentionally limited to CR/LF conversion,
+trailing spaces/tabs at line ends, and one final newline; tests demonstrate
+that interior whitespace is preserved.
+
+`tests/python/test_fonts.py` now hard-codes the complete 17-strike contract
+independently of `font_strikes.json`, validates all required codepoints against
+each source OTF's FontTools cmap, and exercises provenance rejection outside
+the allowlist. The generator validates every C ABI integer before emission:
+glyph count, bitmap length/offset/extent, codepoint, bearings, dimensions,
+advance, stride, pixel size, ascent/descent, and line height. Diagnostics name
+the strike and glyph codepoint. Focused pinned verification passed with 11/11
+tests, C compilation, and byte-identical `--check` regeneration.
+
+Updated deterministic artifact hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| `sdk/ui/generated/watchy_fonts.h` | `4a5c1172e88cabb31c2d3846643a92fccc84ec9501d96bf37ce88ca9c519e07b` |
+| `sdk/ui/generated/watchy_fonts.c` | `9a04ffcdf072770efa0f4baf8454438b4aa37b066b7d48942bcebd3672c9087d` |
+| `tools/font_provenance.lock.json` | `4c80cd9fde73951c7df2097c9717de4938c930fd06f5a045bf65f5a633a54787` |
+| `assets/fonts/tex-gyre-heros/LPPL-1.3c.txt` | `d7bd10db098a03db9e36e41f3e6f67548602d11486904fb4f1d98b3d64ab7258` |

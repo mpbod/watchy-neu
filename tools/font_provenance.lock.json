@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "fonts": [
+    {
+      "path": "assets/fonts/ibm-plex-mono/IBMPlexMono-Bold.otf",
+      "sha256": "27a69e26eb871f52431f45fef5e938acd45e752d9132faaf38aa4a045168b3b6",
+      "source": {
+        "url": "https://raw.githubusercontent.com/IBM/plex/bf260093582f04622aacc1e9f9ca604d7ccd0c42/packages/plex-mono/fonts/complete/otf/IBMPlexMono-Bold.otf",
+        "revision": "bf260093582f04622aacc1e9f9ca604d7ccd0c42"
+      }
+    },
+    {
+      "path": "assets/fonts/ibm-plex-mono/IBMPlexMono-Medium.otf",
+      "sha256": "f7db820bddfbf7fce52946e69fee89a150938d401d82850cdf975b2c4c31b97b",
+      "source": {
+        "url": "https://raw.githubusercontent.com/IBM/plex/bf260093582f04622aacc1e9f9ca604d7ccd0c42/packages/plex-mono/fonts/complete/otf/IBMPlexMono-Medium.otf",
+        "revision": "bf260093582f04622aacc1e9f9ca604d7ccd0c42"
+      }
+    },
+    {
+      "path": "assets/fonts/ibm-plex-mono/IBMPlexMono-Regular.otf",
+      "sha256": "372fe8f8a459baef84ee346b0a478084e80c46bd299a0c27bcb0f3412f5a9d28",
+      "source": {
+        "url": "https://raw.githubusercontent.com/IBM/plex/bf260093582f04622aacc1e9f9ca604d7ccd0c42/packages/plex-mono/fonts/complete/otf/IBMPlexMono-Regular.otf",
+        "revision": "bf260093582f04622aacc1e9f9ca604d7ccd0c42"
+      }
+    },
+    {
+      "path": "assets/fonts/ibm-plex-mono/IBMPlexMono-SemiBold.otf",
+      "sha256": "bc63f5550b440d5edd4da15c4740e7468d2064a72f5509aca55348f930588267",
+      "source": {
+        "url": "https://raw.githubusercontent.com/IBM/plex/bf260093582f04622aacc1e9f9ca604d7ccd0c42/packages/plex-mono/fonts/complete/otf/IBMPlexMono-SemiBold.otf",
+        "revision": "bf260093582f04622aacc1e9f9ca604d7ccd0c42"
+      }
+    },
+    {
+      "path": "assets/fonts/tex-gyre-heros/texgyreheros-bold.otf",
+      "sha256": "b170162835f4efc288886dd4231406dc47e19b614cf4416836635599d44a7d60",
+      "source": {
+        "url": "https://mirrors.ctan.org/fonts/tex-gyre.zip",
+        "archive_sha256": "1773c470f9e388e087b68e3426e115af2cd236845a7e05ceb25b2a503409a7a3",
+        "archive_member": "tex-gyre/opentype/texgyreheros-bold.otf"
+      }
+    },
+    {
+      "path": "assets/fonts/tex-gyre-heros/texgyreheros-regular.otf",
+      "sha256": "6ae1a09d5a940367b7aaaa91ee8bd8a2c333bfe193e7096e23f931357d62081f",
+      "source": {
+        "url": "https://mirrors.ctan.org/fonts/tex-gyre.zip",
+        "archive_sha256": "1773c470f9e388e087b68e3426e115af2cd236845a7e05ceb25b2a503409a7a3",
+        "archive_member": "tex-gyre/opentype/texgyreheros-regular.otf"
+      }
+    }
+  ],
+  "licenses": [
+    {
+      "path": "assets/fonts/ibm-plex-mono/OFL.txt",
+      "canonical_sha256": "9590325331b1975eac408dc78e7d369c042f565cee8aa9e34d6b40524f400972",
+      "source": {
+        "url": "https://raw.githubusercontent.com/IBM/plex/bf260093582f04622aacc1e9f9ca604d7ccd0c42/packages/plex-mono/fonts/complete/otf/license.txt",
+        "revision": "bf260093582f04622aacc1e9f9ca604d7ccd0c42"
+      }
+    },
+    {
+      "path": "assets/fonts/tex-gyre-heros/GUST-FONT-LICENSE.txt",
+      "canonical_sha256": "e120f067589d589a9fa436db09940bd2e03b477cf29b15443c6f87d3861f734b",
+      "source": {
+        "url": "https://mirrors.ctan.org/fonts/tex-gyre.zip",
+        "archive_sha256": "1773c470f9e388e087b68e3426e115af2cd236845a7e05ceb25b2a503409a7a3",
+        "archive_member": "tex-gyre/doc/GUST-FONT-LICENSE.txt"
+      }
+    },
+    {
+      "path": "assets/fonts/tex-gyre-heros/LPPL-1.3c.txt",
+      "canonical_sha256": "d7bd10db098a03db9e36e41f3e6f67548602d11486904fb4f1d98b3d64ab7258",
+      "source": {
+        "url": "https://www.latex-project.org/lppl/lppl-1-3c.txt",
+        "revision": "LPPL-1.3c"
+      }
+    }
+  ]
+}
