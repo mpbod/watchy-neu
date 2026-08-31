@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -244,6 +245,35 @@ class FactorySeedCatalogTests(unittest.TestCase):
 
 
 class FactoryFlashSafetyTests(unittest.TestCase):
+    def test_repository_pins_and_real_parser_accepts_factory_commands(self):
+        import tools.flash_factory as flash
+        requirement = ROOT / "tools" / "factory-flash-requirements.txt"
+        self.assertEqual(requirement.read_text(encoding="utf-8"),
+                         "esptool==5.3.1\n")
+        self.assertEqual(flash.validate_esptool_environment(), "5.3.1")
+
+    def test_missing_or_wrong_esptool_fails_before_any_runner_command(self):
+        import tools.flash_factory as flash
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = self.write_partition_table(root)
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root)
+            for imported in (ModuleNotFoundError("esptool"),
+                             type("WrongEsptool", (), {"__version__": "4.9.0"})()):
+                commands = []
+                effect = imported if isinstance(imported, Exception) else None
+                with self.subTest(imported=repr(imported)), \
+                     mock.patch("importlib.import_module", side_effect=effect,
+                                return_value=None if effect else imported):
+                    with self.assertRaisesRegex(flash.FlashSafetyError,
+                                                "esptool.*5.3.1"):
+                        flash.flash_factory(
+                            "/dev/fake", image, table,
+                            runner=lambda command, **_kwargs: commands.append(command),
+                            build_dir=build)
+                    self.assertEqual(commands, [])
+
     def write_partition_table(self, root: Path, offset="0x1d0000", size="0x230000") -> Path:
         table = root / "partitions.csv"
         table.write_text(
@@ -334,7 +364,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             result = flash.flash_factory(
                 port="/dev/fake-watchy", image=image, partition_table=table,
                 runner=fake_runner, printer=messages.append,
-                platformio="platformio", python="python3", build_dir=build)
+                platformio="platformio", build_dir=build)
             self.assertEqual(result, hashlib.sha256(image.read_bytes()).hexdigest())
             self.assertIn(result, messages[0])  # digest is emitted before any write command
             self.assertEqual(commands[0], ["platformio", "run", "-e", "watchy_v2"])
@@ -356,8 +386,9 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 "0x10000", str((build / "firmware.bin").resolve()),
                 "0x1d0000", str(image.resolve()),
             ])
-            self.assertEqual(commands[5][-5:],
-                             ["--before", "no-reset", "--after", "no-reset", "run"])
+            self.assertEqual(commands[5][-6:],
+                             ["--before", "no-reset", "--after", "no-reset",
+                              "--no-stub", "run"])
             self.assertFalse(any("erase-flash" in command for command in commands))
 
     def test_failed_complete_write_never_runs_application(self):
@@ -385,7 +416,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
 
             with self.assertRaisesRegex(flash.FlashSafetyError, "write-flash"):
                 flash.flash_factory("/dev/fake", image, table, runner=failing_runner,
-                                    platformio="platformio", python="python3",
+                                    platformio="platformio",
                                     build_dir=build)
             self.assertEqual(sum("write-flash" in command for command in commands), 1)
             self.assertFalse(any(command[-1:] == ["run"] for command in commands))
@@ -427,7 +458,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
             flash.flash_factory("/dev/fake", image, table, runner=fake_runner,
-                                platformio="platformio", python="python3",
+                                platformio="platformio",
                                 build_dir=build)
             self.assertEqual(reset_observations, [("erased", "pristine")])
 
@@ -541,7 +572,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             self.assertIn("platformio run -e watchy_v2", rendered)
             self.assertIn("--after no-reset erase-region 0x9000 0x6000", rendered)
             self.assertIn("--after no-reset write-flash 0x1000", rendered)
-            self.assertIn("--before no-reset --after no-reset run", rendered)
+            self.assertIn("--before no-reset --after no-reset --no-stub run", rendered)
             self.assertIn("write-flash 0x1000", rendered)
             self.assertIn("0x1d0000", rendered)
 

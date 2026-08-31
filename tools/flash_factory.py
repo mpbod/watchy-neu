@@ -10,10 +10,12 @@ Wi-Fi credentials, package index/health state, and the factory-seed marker.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 from dataclasses import dataclass
 import hashlib
 import io
+import importlib
 import json
 from pathlib import Path
 import re
@@ -22,6 +24,7 @@ import shutil
 import subprocess
 import struct
 import sys
+import warnings
 from typing import Callable, Iterable, Sequence
 
 
@@ -37,6 +40,7 @@ EXPECTED_SIZE = 0x230000
 DEFAULT_IMAGE = ROOT / "build" / "factory-seed" / "littlefs.bin"
 DEFAULT_PARTITIONS = ROOT / "partitions.csv"
 DEFAULT_BUILD_DIR = ROOT / ".pio" / "build" / "watchy_v2"
+PINNED_ESPTOOL_VERSION = "5.3.1"
 
 EXPECTED_PARTITIONS = (
     ("nvs", "data", "nvs", NVS_OFFSET, NVS_SIZE, ""),
@@ -78,6 +82,40 @@ class FlashImage:
     path: Path
     size: int
     sha256: str
+
+
+def validate_esptool_environment() -> str:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            module = importlib.import_module("esptool")
+    except (ImportError, ModuleNotFoundError) as error:
+        raise FlashSafetyError(
+            f"esptool {PINNED_ESPTOOL_VERSION} is required; install "
+            "tools/factory-flash-requirements.txt") from error
+    version = getattr(module, "__version__", None)
+    if version != PINNED_ESPTOOL_VERSION or not callable(getattr(module, "main", None)):
+        raise FlashSafetyError(
+            f"esptool {PINNED_ESPTOOL_VERSION} is required; imported {version or 'unknown'}")
+    parser_smoke = (
+        ["--chip", "esp32", "--port", "/dev/null", "--before", "default-reset",
+         "--after", "no-reset", "chip-id", "--help"],
+        ["--chip", "esp32", "--port", "/dev/null", "--before", "default-reset",
+         "--after", "no-reset", "erase-region", "--help"],
+        ["--chip", "esp32", "--port", "/dev/null", "--before", "default-reset",
+         "--after", "no-reset", "write-flash", "--help"],
+        ["--chip", "esp32", "--port", "/dev/null", "--before", "no-reset",
+         "--after", "no-reset", "--no-stub", "run", "--help"],
+    )
+    try:
+        for arguments in parser_smoke:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                module.main(arguments)
+    except (Exception, SystemExit) as error:
+        raise FlashSafetyError(
+            f"esptool {PINNED_ESPTOOL_VERSION} parser semantics are unsupported") from error
+    return version
 
 
 def _parse_number(value: str) -> int:
@@ -180,12 +218,12 @@ def validate_flash_images(build_dir: Path, image: Path) -> tuple[FlashImage, ...
 
 
 def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
-                 platformio: str, python: str) -> list[list[str]]:
+                 platformio: str) -> list[list[str]]:
     if not port or any(character.isspace() for character in port) or not port.startswith("/dev/"):
         raise FlashSafetyError("--port must be one explicit /dev/ serial path without whitespace")
     image = Path(image).resolve()
     build_dir = Path(build_dir).resolve()
-    esptool = [python, "-m", "esptool", "--chip", "esp32", "--port", port,
+    esptool = [sys.executable, "-m", "esptool", "--chip", "esp32", "--port", port,
                "--before", "default-reset"]
     chip = esptool + ["--after", "no-reset", "chip-id"]
     return [
@@ -199,8 +237,8 @@ def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
          f"0x{PARTITION_TABLE_OFFSET:x}", str(build_dir / "partitions.bin"),
          f"0x{FACTORY_OFFSET:x}", str(build_dir / "firmware.bin"),
          f"0x{EXPECTED_OFFSET:x}", str(image)],
-        [python, "-m", "esptool", "--chip", "esp32", "--port", port,
-         "--before", "no-reset", "--after", "no-reset", "run"],
+        [sys.executable, "-m", "esptool", "--chip", "esp32", "--port", port,
+         "--before", "no-reset", "--after", "no-reset", "--no-stub", "run"],
     ]
 
 
@@ -244,15 +282,14 @@ def flash_factory(port: str,
                   *, runner: Runner = subprocess.run,
                   printer: Callable[[str], None] = print,
                   platformio: str | None = None,
-                  python: str | None = None,
                   build_dir: Path = DEFAULT_BUILD_DIR) -> str:
+    validate_esptool_environment()
     offset, _ = validate_partition_table(partition_table)
     image = Path(image).resolve()
     validate_image(image)
     platformio = platformio or shutil.which("platformio") or "platformio"
-    python = python or sys.executable
     commands = commands_for(port, image, build_dir=build_dir,
-                            platformio=platformio, python=python)
+                            platformio=platformio)
     _run(runner, commands[0])
     images = validate_flash_images(build_dir, image)
     digest = images[-1].sha256
@@ -285,11 +322,12 @@ def make_parser() -> argparse.ArgumentParser:
 def main(arguments: Iterable[str] | None = None) -> int:
     try:
         args = make_parser().parse_args(arguments)
+        validate_esptool_environment()
         offset, _ = validate_partition_table(args.partition_table)
         size, digest = validate_image(args.image)
         platformio = shutil.which("platformio") or "platformio"
         commands = commands_for(args.port, args.image, build_dir=args.build_dir,
-                                platformio=platformio, python=sys.executable)
+                                platformio=platformio)
         if args.dry_run:
             images = validate_flash_images(args.build_dir, args.image)
             print("DRY RUN " + "; ".join(
@@ -299,7 +337,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
                 print(shlex.join(command))
             return 0
         flash_factory(args.port, args.image, args.partition_table,
-                      platformio=platformio, python=sys.executable,
+                      platformio=platformio,
                       build_dir=args.build_dir)
         return 0
     except (FlashSafetyError, OSError) as error:

@@ -68,3 +68,11 @@ factory operation resets settings,
 Wi-Fi credentials, package index/health state, and the seed marker; routine
 `platformio run -e watchy_v2 -t upload` remains firmware-only and preserves
 NVS/LittleFS.
+
+Factory tooling pins `esptool==5.3.1` in
+`tools/factory-flash-requirements.txt`. Install that file into a dedicated
+virtual environment and run `flash_factory.py` with the same environment's
+Python. Before any build runner or device discovery, the tool verifies the
+imported version and parser support for every chip-id/erase/write/run form. It
+uses `python -m esptool`, never an ambient executable from `PATH`; the final
+success-only ROM-loader `run` includes `--no-stub`.

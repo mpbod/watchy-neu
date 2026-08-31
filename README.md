@@ -160,8 +160,16 @@ requires an explicit discovered classic ESP32 serial device—there is no
 automatic port selection:
 
 ```sh
-make factory-flash PORT=/dev/ttyUSB0
+python3 -m venv build/factory-flash-venv
+build/factory-flash-venv/bin/python -m pip install \
+  -r tools/factory-flash-requirements.txt
+make factory-flash PORT=/dev/ttyUSB0 \
+  FACTORY_FLASH_PYTHON=build/factory-flash-venv/bin/python
 ```
+
+The tool requires exactly esptool 5.3.1, validates the imported module and all
+used parser forms before running even the firmware build, and invokes it only
+as a module of `FACTORY_FLASH_PYTHON`; no ambient `esptool` executable is used.
 
 Do not use `factory-flash` for routine firmware development. See the pending
 [hardware acceptance checklist](docs/hardware-acceptance.md) before treating a
