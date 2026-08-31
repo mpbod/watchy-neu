@@ -88,7 +88,7 @@ fixed_text format_date(const watchy_time_t &time) noexcept {
 }
 
 fixed_text format_weekday(const watchy_time_t &time) noexcept {
-    static const char *const names[] = {
+    static const char *names[] __attribute__((section(".data"))) = {
         "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
     };
     return valid_time(time) ? fixed_text(names[weekday_for(time)]) : fixed_text();

@@ -36,7 +36,7 @@ struct face_context {
 inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept {
     return user_data == nullptr ? nullptr : static_cast<const face_context *>(user_data)->host;
 }
-inline face_context &state() noexcept { static face_context value{nullptr, false, false, 0u}; return value; }
+static inline face_context &state() noexcept { static face_context value{nullptr, false, false, 0u}; return value; }
 
 inline bool full_refresh_for_hour(void *user_data, uint8_t hour) noexcept {
     if (user_data != &state() || !state().loaded) return true;
@@ -75,8 +75,9 @@ inline watchy_status_t event(void *, const watchy_event_t *) noexcept { return W
 }  // namespace watchy_first_party
 
 #define WATCHY_FIRST_PARTY_FACE_NAMED(ENTRY, ID, NAME, CAPS, RENDER_FN) \
-extern "C" const watchy_package_descriptor_v1_t *ENTRY(void) { \
-    static const watchy_package_descriptor_v1_t descriptor = { \
+extern "C" __attribute__((visibility("hidden"))) \
+const watchy_package_descriptor_v1_t *ENTRY(void) { \
+    static watchy_package_descriptor_v1_t descriptor = { \
         sizeof(watchy_package_descriptor_v1_t), {ID, NAME, "1.0.0", {1u, 2u}, CAPS}, \
         {watchy_first_party::load, watchy_first_party::unload, watchy_first_party::start, \
          watchy_first_party::stop, watchy_first_party::event, RENDER_FN} }; \

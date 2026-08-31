@@ -44,8 +44,41 @@ when passing `--no-relax`, confirming a local linker-relaxation/toolchain issue;
 the repository builder invocation itself remains unchanged and no WPK build is
 claimed from this environment.
 
+## Task 7 link-debug follow-up
+
+At commit `4b566af`, the pinned ESP-IDF 5.5.0 / elf_loader 1.3.3 Grid01 `project_so`
+link segfaulted in GNU ld 2.43.1 (`collect2 ... signal 11`) with production
+`--gc-sections`. Full command/output are preserved in
+`task-7-debug/idf-grid01-failing.log`; `--no-relax` was diagnostic only.
+
+Object isolation showed that fonts, face, UI, renderer, and package objects each
+triggered the crash with the bridge, while bridge-only and working sample objects
+linked. A minimal fixture reproduced it with production hidden visibility. Working
+samples explicitly export `watchy_package_entry` default-visible; making the Grid
+wrapper default-visible changed the crash into relocation diagnostics. These then
+identified const pointer-bearing generated font descriptors and the weekday
+pointer table in read-only sections. The descriptor audit is RED before and GREEN
+after the changes (`descriptor-audit-red.log`, `descriptor-audit-final2.log`).
+
+The fix keeps the first-party descriptor mutable static, gives the public wrapper
+default visibility, makes generated font records writable while retaining const
+access through the API, and makes the weekday pointer table writable. No global
+`--no-relax` workaround is used.
+
+Pinned `build_first_party.py --only grid-01 grid-02 grid-03 --reproducible` completed
+two clean rounds. Final WPK SHA-256 values:
+
+* Grid01 `8dd10713cd5c86b3b09fb5064354ced514e5ae427b532f5992c651110cfc8347`
+* Grid02 `722a29820a9689f866c6e932957b62050ef4bb4e0eeb45f29bdecc662f054428`
+* Grid03 `3c554ef9e8fa29183c5080209d9f6a7212cb62fed70ab78928330cbcdd76effa`
+
+Each ELF audit reported `exports=watchy_package_entry undefined=0 symbol_relocations=0`.
+The final builder log is `task-7-debug/builder-all-section-attr.log`. A direct C
+compile of generated fonts passed. Host/Python reruns are recorded in
+`host-test-final.log` and `python-test-final.log`; this macOS environment lacks
+`cmake` on PATH and Python `fontTools`.
+
 ## Files
 
 The package projects, manifests, renderers, common Grid rendering helpers,
 approved PBM goldens, and focused host coverage are included in this change.
-
