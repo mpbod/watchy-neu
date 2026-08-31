@@ -3,6 +3,28 @@
 
 set(WATCHY_PACKAGE_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
+function(watchy_package_add_ui_sources target)
+  if(NOT TARGET "${target}")
+    message(FATAL_ERROR "watchy_package_add_ui_sources requires an existing target: ${target}")
+  endif()
+
+  get_filename_component(watchy_sdk_dir "${WATCHY_PACKAGE_CMAKE_DIR}/.." ABSOLUTE)
+  target_sources(${target} PRIVATE
+    "${watchy_sdk_dir}/ui/src/ui_draw.c"
+    "${watchy_sdk_dir}/ui/generated/watchy_fonts.c"
+  )
+  target_include_directories(${target} PUBLIC
+    "${watchy_sdk_dir}/include"
+    "${watchy_sdk_dir}/ui/include"
+    "${watchy_sdk_dir}/ui/generated"
+  )
+  target_compile_features(${target} PRIVATE c_std_11)
+  target_compile_options(${target} PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:-ffunction-sections>
+    $<$<COMPILE_LANGUAGE:C>:-fdata-sections>
+  )
+endfunction()
+
 function(watchy_project_so package_name)
   if(NOT IDF_TARGET STREQUAL "esp32")
     message(FATAL_ERROR "Watchy 2.0 packages must target esp32")

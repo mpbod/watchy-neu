@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 project(watchy_host_tests LANGUAGES C CXX)
 enable_testing()
 
+include(../../sdk/cmake/WatchyPackage.cmake)
+
 add_executable(watchy_core_tests
   test_core.c
   ../../components/watchy_core/src/wpk.c
@@ -117,11 +119,11 @@ add_executable(watchy_shell_tests
   test_shell.c
   ../../components/watchy_shell/src/settings_policy.c
   ../../components/watchy_shell/src/shell_policy.c
-  ../../components/watchy_shell/src/ui.c
   ../../components/watchy_core/src/transition_policy.c
   ../../components/watchy_hal/src/framebuffer.c
   ../../components/watchy_packages/src/package_format.c
 )
+watchy_package_add_ui_sources(watchy_shell_tests)
 target_include_directories(watchy_shell_tests PRIVATE
   ../../components/watchy_shell/include
   ../../components/watchy_hal/include
@@ -148,6 +150,14 @@ target_include_directories(watchy_portal_tests PRIVATE
 target_compile_features(watchy_portal_tests PRIVATE c_std_11)
 target_compile_options(watchy_portal_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_portal_tests COMMAND watchy_portal_tests)
+
+add_executable(watchy_ui_draw_tests
+  test_ui_draw.c
+)
+watchy_package_add_ui_sources(watchy_ui_draw_tests)
+target_compile_features(watchy_ui_draw_tests PRIVATE c_std_11)
+target_compile_options(watchy_ui_draw_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_ui_draw_tests COMMAND watchy_ui_draw_tests)
 
 add_executable(watchy_elf_fixture_validator
   validate_elf_fixture.c

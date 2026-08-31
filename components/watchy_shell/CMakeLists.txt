@@ -6,9 +6,12 @@ idf_component_register(
         "src/settings_policy.c"
         "src/shell_policy.c"
         "src/shell_render.c"
-        "src/ui.c"
+        "../../sdk/ui/src/ui_draw.c"
+        "../../sdk/ui/generated/watchy_fonts.c"
     INCLUDE_DIRS
         "include"
+        "../../sdk/ui/include"
+        "../../sdk/ui/generated"
     REQUIRES
         watchy_core
         watchy_hal
