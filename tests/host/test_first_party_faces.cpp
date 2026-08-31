@@ -66,19 +66,6 @@ static bool text_ink_fits(const watchy_text_style_t &style,
     return true;
 }
 
-static bool centered_text_ink_fits(const watchy_text_style_t &style,
-                                   const char *text,
-                                   int center_x,
-                                   int baseline,
-                                   int left,
-                                   int top,
-                                   int right,
-                                   int bottom) {
-    const watchy_text_metrics_t metrics = watchy_ui_measure_text(&style, text);
-    return text_ink_fits(style, text, center_x - metrics.width / 2, baseline,
-                         left, top, right, bottom);
-}
-
 static bool right_text_ink_fits(const watchy_text_style_t &style,
                                 const char *text,
                                 int right_x,
@@ -211,26 +198,35 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
 
 int main() {
     const watchy_text_style_t grid_heading = grid_heading_style();
+    const watchy_text_style_t grid_header = grid_header_style();
+    const watchy_text_style_t grid_footer = grid_footer_style();
     const watchy_text_style_t grid_body = grid_body_style();
     const watchy_text_style_t grid_value = grid_value_style();
+    const watchy_text_style_t grid_rail = grid_rail_style();
     const watchy_text_style_t grid_clock = grid_large_clock_style();
     const watchy_text_style_t grid_rail_clock = grid_rail_clock_style();
     const watchy_text_style_t grid_modular_clock = grid_modular_clock_style();
     assert(grid_heading.font == &watchy_font_plex_11_semibold);
+    assert(grid_header.font == &watchy_font_plex_10_semibold);
+    assert(grid_footer.font == &watchy_font_plex_8_semibold);
+    assert(grid_header.tracking == 1 && grid_footer.tracking == 1);
     assert(grid_body.font == &watchy_font_plex_13_regular);
     assert(grid_value.font == &watchy_font_plex_15_medium);
+    assert(grid_rail.font == &watchy_font_plex_9_semibold);
+    assert(grid_rail.tracking == 2);
     assert(grid_clock.font == &watchy_font_heros_62_bold);
+    assert(grid_clock.tracking == 0);
     assert(grid_rail_clock.font == &watchy_font_heros_62_regular);
+    assert(grid_rail_clock.tracking == 0);
     assert(grid_modular_clock.font == &watchy_font_heros_74_regular);
-    assert(watchy_ui_measure_text(&grid_clock, "09:41").width <= 184);
-    assert(text_ink_fits(grid_heading, "MON", 14, 23, 14, 14, 70, 31));
-    assert(right_text_ink_fits(grid_heading, "31 AUG", 186, 23, 120, 14, 185, 31));
-    assert(centered_text_ink_fits(grid_clock, "09:41", 100, 111,
-                                  14, 33, 185, 157));
-    assert(centered_text_ink_fits(grid_rail_clock, "09:41", 111, 184,
-                                  31, 113, 185, 199));
-    assert(centered_text_ink_fits(grid_modular_clock, "09:41", 100, 94,
-                                  0, 0, 199, 117));
+    assert(grid_modular_clock.tracking == 0);
+    assert(watchy_ui_measure_text(&grid_clock, "09:41").width == 157);
+    assert(text_ink_fits(grid_header, "MON", 14, 23, 14, 14, 70, 31));
+    assert(right_text_ink_fits(grid_header, "31 AUG", 186, 23, 120, 14, 185, 31));
+    assert(grid_fit_width(grid_clock, "09:41", 170u) == 157u);
+    assert(grid_fit_width(grid_rail_clock, "09:41", 150u) == 150u);
+    assert(grid_text_raw_width(grid_modular_clock, "09:41") == 185);
+    assert(grid_fit_width(grid_modular_clock, "09:41", 190u) == 185u);
     assert(text_ink_fits(grid_body, "NO EVENT", 40, 58,
                          31, 30, 185, 90));
     assert(text_ink_fits(grid_body, "--:--", 40, 76,

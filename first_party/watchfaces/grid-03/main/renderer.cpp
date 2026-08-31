@@ -17,7 +17,7 @@ static void draw_grid03(watchy_canvas_t *canvas, void *user_data,
     watchy_time_t tokyo{};
     const bool tokyo_valid = offset_time_checked(time, 540, &tokyo);
     const fixed_text tokyo_clock = tokyo_valid ? format_hhmm(tokyo, false) : fixed_text("--:--");
-    watchy_ui_draw_text_centered(canvas, 100, 94, local.c_str(), &large);
+    grid_draw_text_fit_centered(canvas, 100, 94, local.c_str(), large, 190u);
     watchy_ui_rule(canvas, 0, 118, 200, 1u, true);
     watchy_ui_rect(canvas, 66, 119, 1, 81, true);
     watchy_ui_rect(canvas, 133, 119, 1, 81, true);

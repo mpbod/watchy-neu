@@ -9,7 +9,8 @@ static const char kTemperaturePlaceholder[] = "--°";
 static void draw_grid01(watchy_canvas_t *canvas, void *user_data,
                         const watchy_time_t &time) noexcept {
     watchy_ui_fill(canvas, false);
-    watchy_text_style_t header = grid_heading_style();
+    watchy_text_style_t header = grid_header_style();
+    watchy_text_style_t footer = grid_footer_style();
     watchy_text_style_t value = grid_value_style();
     watchy_text_style_t large = grid_large_clock_style();
     const fixed_text weekday = format_weekday(time);
@@ -18,11 +19,11 @@ static void draw_grid01(watchy_canvas_t *canvas, void *user_data,
     watchy_ui_draw_text_font(canvas, 14, 23, weekday.c_str(), &header);
     watchy_ui_draw_text_right(canvas, 186, 23, date.c_str(), &header);
     watchy_ui_rule(canvas, 14, 32, 172, 1u, true);
-    watchy_ui_draw_text_centered(canvas, 100, 111, clock.c_str(), &large);
+    grid_draw_text_fit_centered(canvas, 100, 111, clock.c_str(), large, 170u);
     grid_footer_rule(canvas);
-    watchy_ui_draw_text_font(canvas, 14, 174, "TEMP", &header);
-    watchy_ui_draw_text_font(canvas, 76, 174, "BATT", &header);
-    watchy_ui_draw_text_font(canvas, 140, 174, "LINK", &header);
+    watchy_ui_draw_text_font(canvas, 14, 174, "TEMP", &footer);
+    watchy_ui_draw_text_font(canvas, 76, 174, "BATT", &footer);
+    watchy_ui_draw_text_font(canvas, 140, 174, "LINK", &footer);
     watchy_ui_draw_text_font(canvas, 14, 196, kTemperaturePlaceholder, &value);
     grid_draw_battery(canvas, user_data, 76, 196);
     watchy_ui_draw_text_right(canvas, 184, 196,

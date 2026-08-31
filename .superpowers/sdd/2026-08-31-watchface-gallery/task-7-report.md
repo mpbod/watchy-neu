@@ -152,3 +152,58 @@ failures still resolve to honest placeholders and Grid 03 performs no battery
 or radio read. The remaining acceptance concern is ordinary device-side
 e-paper tuning of negative tracking at native scale; the reviewed 1x/4x
 artifacts show no panel-edge clipping, but physical hardware was not available.
+
+## Reviewer fix round 2 (2026-09-01)
+
+The follow-up visual review findings were addressed before the repaired package
+gate. Grid 02 now composes `MON 31 AUG 2026` as one tracked Plex 9 semibold
+line and rotates the glyph raster into the 26px rail with explicit canvas
+clipping. Grid 01 uses distinct Plex 10 semibold header and Plex 8 semibold
+footer roles. All three Heros clock styles use non-negative tracking (zero),
+with bounded one-bit raster fitting for the 150/170/190px handoff regions;
+the independent checks cover the generated raw widths and those caps.
+
+```text
+/Users/maxb/.platformio/packages/tool-cmake/bin/cmake --build build/host-make --target watchy_first_party_face_tests -j2
+./build/host-make/tests/host/watchy_first_party_face_tests
+100% built; targeted face test exited 0
+
+WATCHY_UPDATE_GOLDENS=1 ./build/host-make/tests/host/watchy_first_party_face_tests
+./build/host-make/tests/host/watchy_first_party_face_tests
+three PBM goldens regenerated; clean comparison exited 0
+
+python3 tools/generate_fonts.py --check
+font strikes are up to date
+
+magick tests/golden/faces/grid-01.pbm -resize 200x200 -filter point build/task7-artifacts/grid-01-1x.png
+magick tests/golden/faces/grid-02.pbm -resize 200x200 -filter point build/task7-artifacts/grid-02-1x.png
+magick tests/golden/faces/grid-03.pbm -resize 200x200 -filter point build/task7-artifacts/grid-03-1x.png
+magick tests/golden/faces/grid-01.pbm -resize 800x800 -filter point build/task7-artifacts/grid-01-4x.png
+magick tests/golden/faces/grid-02.pbm -resize 800x800 -filter point build/task7-artifacts/grid-02-4x.png
+magick tests/golden/faces/grid-03.pbm -resize 800x800 -filter point build/task7-artifacts/grid-03-4x.png
+native 1x and nearest-neighbor 4x artifacts inspected; header/footer/rail/cell edge audits clean
+
+env IDF_PATH=/Users/maxb/.platformio/packages/framework-espidf \
+  IDF_PYTHON_ENV_PATH=/Users/maxb/.espressif/python_env/idf5.5_py3.14_env \
+  ESP_IDF_VERSION=5.5.0 \
+  ESP_ROM_ELF_DIR=/Users/maxb/.platformio/packages/tool-esp-rom-elfs \
+  PATH=/Users/maxb/.platformio/packages/toolchain-xtensa-esp-elf/bin:/Users/maxb/.platformio/packages/tool-ninja:/Users/maxb/.platformio/packages/tool-cmake/bin:$PATH \
+  python3 tools/build_first_party.py --only grid-01 grid-02 grid-03 --reproducible
+EXIT=0
+all three projects: clean round 1 + clean round 2, Xtensa ELF audit, WPK build/verify,
+and byte reproducibility comparison passed
+```
+
+Repair-round published WPKs (the package verifier hashes the verified payload):
+
+| package | bytes | verifier SHA-256 | file SHA-256 |
+| --- | ---: | --- | --- |
+| Grid 01 | 28,060 | `77ec7ff193e27b1c7c775bb6dd5328eaf51c5146917cf8eeffb38b30782c0296` | `465a34f57d867c580075052d56f3c608c86242528118fb5e4e06c91b87356dc8` |
+| Grid 02 | 21,452 | `56f4fbec15e50d1c05f67c9b43887f130d99c0015b4af012daf273870e73e7cc` | `abb2a52cb898b293c3fbe6da8c0fa432f8f7883c82fb05736c61b460418d2674` |
+| Grid 03 | 23,648 | `27157af48e5c265d1f3b59e11aa9dd116e3751e8fb24ccdf397ecb6194d55a3d` | `2c3b978153d6b57bad454a811f877ecab17cde949cfc3a17c9c3d83daccb5687` |
+
+Each repaired ELF reported `exports=watchy_package_entry undefined=0
+symbol_relocations=0`, and each published WPK passed the verifier. The only
+remaining concern is physical e-paper inspection; the native artifacts show
+no clipping at any panel edge. No Task 8 or Task 9 files were touched. Per
+the scoped instruction, no additional full-suite or firmware command was run.
