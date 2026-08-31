@@ -75,30 +75,34 @@ def load_provenance_lock(root: Path) -> dict:
     return json.loads((root / PROVENANCE_LOCK_RELATIVE_PATH).read_text(encoding="utf-8"))
 
 
-def resolve_locked_font(root: Path, entry: dict) -> Path:
-    relative = Path(entry["path"])
-    if relative not in APPROVED_FONT_PATHS:
-        raise ValueError(f"font path is not in the approved allowlist: {relative}")
+def resolve_regular_vendored_file(root: Path, relative: Path, allowlist: tuple[Path, ...], kind: str) -> Path:
+    if relative not in allowlist:
+        raise ValueError(f"{kind} path is not in the approved allowlist: {relative}")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"trusted repository root must be a regular directory: {root}")
+    trusted_root = root.resolve(strict=True)
+    candidate = root
+    for component in relative.parts:
+        candidate /= component
+        if candidate.is_symlink():
+            raise ValueError(f"{kind} path must not contain a symlink: {relative}")
     path = root / relative
     expected_directory = root / relative.parent
-    if path.parent != expected_directory or expected_directory.is_symlink() or path.is_symlink():
-        raise ValueError(f"font path must be a regular non-symlink in its vendored directory: {relative}")
-    if not path.is_file() or path.resolve().parent != expected_directory.resolve():
-        raise ValueError(f"font path must resolve inside its exact vendored directory: {relative}")
+    if not path.is_file():
+        raise ValueError(f"{kind} path must be a regular file in its vendored directory: {relative}")
+    resolved = path.resolve(strict=True)
+    expected = trusted_root.joinpath(*relative.parts)
+    if resolved != expected or resolved.parent != expected_directory.resolve(strict=True):
+        raise ValueError(f"{kind} path must resolve inside its exact vendored directory: {relative}")
     return path
+
+
+def resolve_locked_font(root: Path, entry: dict) -> Path:
+    return resolve_regular_vendored_file(root, Path(entry["path"]), APPROVED_FONT_PATHS, "font")
 
 
 def resolve_locked_license(root: Path, entry: dict) -> Path:
-    relative = Path(entry["path"])
-    if relative not in APPROVED_LICENSE_PATHS:
-        raise ValueError(f"license path is not in the approved allowlist: {relative}")
-    path = root / relative
-    expected_directory = root / relative.parent
-    if path.parent != expected_directory or expected_directory.is_symlink() or path.is_symlink():
-        raise ValueError(f"license path must be a regular non-symlink in its vendored directory: {relative}")
-    if not path.is_file() or path.resolve().parent != expected_directory.resolve():
-        raise ValueError(f"license path must resolve inside its exact vendored directory: {relative}")
-    return path
+    return resolve_regular_vendored_file(root, Path(entry["path"]), APPROVED_LICENSE_PATHS, "license")
 
 
 def verify_provenance_lock(root: Path) -> dict:

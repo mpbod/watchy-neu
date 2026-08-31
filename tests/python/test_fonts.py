@@ -138,6 +138,22 @@ class DeterministicFontTests(unittest.TestCase):
                 {"path": "assets/fonts/ibm-plex-mono/unapproved.otf", "sha256": "0" * 64},
             )
 
+    def test_provenance_rejects_a_symlinked_ancestor_directory(self) -> None:
+        approved = {"path": "assets/fonts/ibm-plex-mono/IBMPlexMono-Bold.otf"}
+        self.assertEqual(
+            self.generator.resolve_locked_font(ROOT, approved),
+            ROOT / approved["path"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture_root = Path(temporary) / "root"
+            outside = Path(temporary) / "outside"
+            (outside / "fonts/ibm-plex-mono").mkdir(parents=True)
+            (outside / "fonts/ibm-plex-mono/IBMPlexMono-Bold.otf").write_bytes(b"not-a-font")
+            fixture_root.mkdir()
+            (fixture_root / "assets").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                self.generator.resolve_locked_font(fixture_root, approved)
+
     def test_license_hashes_use_narrow_canonicalization_and_include_lppl(self) -> None:
         self.assertEqual(
             self.generator.canonicalize_license_text("alpha \t\r\nbeta\r\ngamma\t\n"),

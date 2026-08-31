@@ -124,3 +124,23 @@ Updated deterministic artifact hashes:
 | `sdk/ui/generated/watchy_fonts.c` | `9a04ffcdf072770efa0f4baf8454438b4aa37b066b7d48942bcebd3672c9087d` |
 | `tools/font_provenance.lock.json` | `4c80cd9fde73951c7df2097c9717de4938c930fd06f5a045bf65f5a633a54787` |
 | `assets/fonts/tex-gyre-heros/LPPL-1.3c.txt` | `d7bd10db098a03db9e36e41f3e6f67548602d11486904fb4f1d98b3d64ab7258` |
+
+## Fix Round 2
+
+`resolve_locked_font()` and the shared vendored-file resolver now reject a
+symlink in every path component below the trusted repository root, including
+an ancestor such as `assets/`. The resolver also requires the resolved regular
+file to equal the trusted-root-relative approved path and to remain in its
+exact vendored directory. This preserves the immutable allowlist/hash checks
+while preventing an alias from redirecting an approved filename outside the
+checkout. A temporary-fixture regression test confirms a symlinked `assets`
+ancestor is rejected and the real approved regular path remains accepted.
+
+Pinned verification passed with 12/12 tests, byte-identical `--check`, generated
+C compilation, and `git diff --check`.
+
+| File | SHA-256 |
+| --- | --- |
+| `sdk/ui/generated/watchy_fonts.h` | `6460f7c96025faf2b71552458cad79f6ee06d697db3b950dc9172a2314f3961c` |
+| `sdk/ui/generated/watchy_fonts.c` | `2ed7f9740d1e85969dde2d894d1e7fcdc6c9f0e7f3b6a5e2f47608ea69f6d620` |
+| `tools/generate_fonts.py` | `a43bae530f1e1f765c325901d2d3f51d650a4e31f722abc15a343382951897f9` |
