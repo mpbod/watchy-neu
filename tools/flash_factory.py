@@ -129,8 +129,9 @@ def _validate_chip(output: str) -> None:
     match = re.search(r"Chip\s+(?:type:\s*|is\s+)([^\r\n]+)", output, re.IGNORECASE)
     chip = match.group(1).strip() if match else ""
     identity = chip.split("(", 1)[0].strip().upper()
+    pico_identities = {"ESP32-PICO-D4", "ESP32-PICO-V3", "ESP32-PICO-V3-02"}
     classic = (identity == "ESP32" or identity.startswith("ESP32-D") or
-               identity.startswith("ESP32-PICO-") or identity == "ESP32-U4WDH")
+               identity in pico_identities or identity == "ESP32-U4WDH")
     if not classic:
         raise FlashSafetyError(f"serial target is not the classic ESP32 target: {chip or 'unknown'}")
 

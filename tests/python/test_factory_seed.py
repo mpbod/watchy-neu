@@ -321,6 +321,24 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 with self.assertRaisesRegex(flash.FlashSafetyError, "classic ESP32"):
                     flash._validate_chip(f"Chip type: {family} (revision v1.0)")
 
+    def test_chip_identity_rejects_every_unlisted_or_malformed_pico_name(self):
+        import tools.flash_factory as flash
+        unsupported = (
+            "ESP32-PICO-S3",
+            "ESP32-PICO-P4",
+            "ESP32-PICO-C3",
+            "ESP32-PICO-D4-EXTRA",
+            "ESP32-PICO-V3-02-EXTRA",
+            "ESP32-PICO-ARBITRARY",
+            "ESP32-PICO-",
+            "ESP32-PICO",
+            "ESP32-PICO--",
+        )
+        for identity in unsupported:
+            with self.subTest(identity=identity):
+                with self.assertRaisesRegex(flash.FlashSafetyError, "classic ESP32"):
+                    flash._validate_chip(f"Chip type: {identity} (revision v1.0)")
+
     def test_flash_rejects_oversize_undiscovered_or_wrong_chip_before_upload(self):
         import tools.flash_factory as flash
         with tempfile.TemporaryDirectory() as directory:
