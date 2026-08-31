@@ -44,4 +44,4 @@ PBMs are under `tests/golden/shell/`. Native 1x and nearest-neighbor 4x PNG revi
 
 ## Commit
 
-This rescue implementation is committed as a new `feat: complete watchface gallery shell renderer` commit; no prior history was amended.
+This rescue implementation is committed as new commits `cecddbc` (`feat: complete watchface gallery shell renderer`) and `2f92a5c` (`fix: match gallery label casing`); no prior history was amended.
