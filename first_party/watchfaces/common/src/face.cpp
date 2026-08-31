@@ -1,4 +1,5 @@
 #include "watchy_first_party/face.h"
+#include "watchy_first_party/package.hpp"
 
 namespace watchy_first_party {
 namespace {
@@ -88,9 +89,19 @@ fixed_text format_date(const watchy_time_t &time) noexcept {
 }
 
 fixed_text format_weekday(const watchy_time_t &time) noexcept {
+#if defined(__ELF__)
+    /* The Xtensa ELF package loader relocates writable .data at load time;
+     * keep the weekday table out of .rodata so the pointer array is
+     * relocation-safe in the package image. Mach-O host tests do not need
+     * (and cannot use) this specifier. */
     static const char *names[] __attribute__((section(".data"))) = {
         "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
     };
+#else
+    static const char *const names[] = {
+        "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
+    };
+#endif
     return valid_time(time) ? fixed_text(names[weekday_for(time)]) : fixed_text();
 }
 
@@ -177,6 +188,15 @@ uint8_t moon_octant(const watchy_time_t &time) noexcept {
     phase %= cycle_seconds;
     if (phase < 0) phase += cycle_seconds;
     return static_cast<uint8_t>((phase * 8) / cycle_seconds);
+}
+
+/* Single definition shared by every translation unit of one package image
+ * (package.cpp load path and renderer.cpp render path). Marked hidden so it
+ * never becomes a second exported package symbol. */
+__attribute__((visibility("hidden")))
+face_context &state() noexcept {
+    static face_context value{nullptr, false, false, 0u};
+    return value;
 }
 
 }  // namespace watchy_first_party

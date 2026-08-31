@@ -36,7 +36,11 @@ struct face_context {
 inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept {
     return user_data == nullptr ? nullptr : static_cast<const face_context *>(user_data)->host;
 }
-static inline face_context &state() noexcept { static face_context value{nullptr, false, false, 0u}; return value; }
+/* One state object per package image: defined out-of-line in face.cpp so the
+ * load (package.cpp TU) and render (renderer.cpp TU) paths share the same
+ * face_context. A header-local static here would duplicate state per TU and
+ * defeat the load/render handoff. */
+face_context &state() noexcept;
 
 inline bool full_refresh_for_hour(void *user_data, uint8_t hour) noexcept {
     if (user_data != &state() || !state().loaded) return true;
