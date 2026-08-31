@@ -1,218 +1,23 @@
 #include "watchy/shell_render.h"
-
-#include "watchy/ui.h"
-
+#include "watchy/ui_draw.h"
 #include <stdio.h>
 #include <string.h>
 
-static void title(watchy_canvas_t *canvas, const char *text) {
-    watchy_ui_draw_text(canvas, 7, 6, text, 2u, true);
-    watchy_ui_rect(canvas, 6, 23, 188, 2, true);
+static void icon(watchy_canvas_t *c,int16_t x,int16_t y,unsigned k,bool b){
+    if(k==0){watchy_ui_circle(c,x+9,y+12,8,false,b);watchy_ui_rule(c,x+9,y+4,1,16,b);watchy_ui_rule(c,x+2,y+12,15,1,b);}
+    else if(k==1){watchy_ui_rect(c,x+1,y+4,7,7,b);watchy_ui_rect_outline(c,x+10,y+4,7,7,1,b);watchy_ui_rect_outline(c,x+1,y+13,7,7,1,b);watchy_ui_rect(c,x+10,y+13,7,7,b);}
+    else {watchy_ui_rule(c,x+9,y+3,1,19,b);watchy_ui_rule(c,x+3,y+12,13,1,b);watchy_ui_rule(c,x+9,y+3,1,1,b);watchy_ui_rule(c,x+3,y+12,1,1,b);}
 }
-
-static void row(watchy_canvas_t *canvas, int index, const char *text, bool selected) {
-    const int16_t y = (int16_t)(31 + index * 24);
-    if (selected) {
-        watchy_ui_rect(canvas, 4, (int16_t)(y - 4), 192, 19, true);
-    }
-    watchy_ui_draw_text(canvas, 9, y, text, 2u, !selected);
-}
-
-static void compact_row(watchy_canvas_t *canvas, int index, const char *text, bool selected) {
-    const int16_t y = (int16_t)(33 + index * 21);
-    if (selected) {
-        watchy_ui_rect(canvas, 4, (int16_t)(y - 3), 192, 15, true);
-    }
-    watchy_ui_draw_text(canvas, 8, y, text, 1u, !selected);
-}
-
-static void detail_lines(watchy_canvas_t *canvas, int16_t y, const char *detail) {
-    char line[48];
-    while (detail != NULL && *detail != '\0' && y < 193) {
-        const char *end = strchr(detail, '\n');
-        size_t length = end == NULL ? strlen(detail) : (size_t)(end - detail);
-        if (length >= sizeof(line)) length = sizeof(line) - 1u;
-        memcpy(line, detail, length);
-        line[length] = '\0';
-        watchy_ui_draw_text(canvas, 8, y, line, 1u, true);
-        y = (int16_t)(y + 14);
-        detail = end == NULL ? NULL : end + 1u;
-    }
-}
-
-static void render_watchface(watchy_canvas_t *canvas,
-                             const watchy_shell_t *shell,
-                             const watchy_settings_t *settings,
-                             const watchy_time_t *time,
-                             const watchy_battery_state_t *battery) {
-    char text[32];
-    unsigned hour = time == NULL ? 0u : time->hour;
-    const char *suffix = "";
-    if (!settings->time_24h) {
-        suffix = hour >= 12u ? " PM" : " AM";
-        hour %= 12u;
-        if (hour == 0u) hour = 12u;
-    }
-    snprintf(text, sizeof(text), "%02u:%02u%s", hour,
-             time == NULL ? 0u : time->minute, suffix);
-    watchy_ui_draw_text(canvas, settings->time_24h ? 28 : 10, 55, text, 4u, true);
-    if (time != NULL) {
-        snprintf(text, sizeof(text), "%04d-%02u-%02u", time->year, time->month, time->day);
-        watchy_ui_draw_text(canvas, 39, 103, text, 2u, true);
-    }
-    if (battery != NULL) {
-        snprintf(text, sizeof(text), "BAT %u%%", battery->percent);
-        watchy_ui_draw_text(canvas, 60, 151, text, 2u, true);
-    }
-    if (shell->package_warning) {
-        watchy_ui_rect(canvas, 174, 6, 20, 20, true);
-        watchy_ui_draw_text(canvas, 181, 9, "!", 2u, false);
-    }
-    if (shell->safe_mode) {
-        watchy_ui_draw_text(canvas, 5, 181, "SAFE", 1u, true);
-    }
-}
-
-static void render_launcher(watchy_canvas_t *canvas, const watchy_shell_t *shell) {
-    static const char *const labels[] = {
-        "WATCHFACE", "PACKAGES", "SETTINGS", "CONNECT", "DIAGNOSTICS", "ABOUT",
-    };
-    title(canvas, "MENU");
-    for (size_t index = 0u; index < WATCHY_SHELL_LAUNCHER_ITEMS; ++index) {
-        row(canvas, (int)index, labels[index], shell->selection == index);
-    }
-}
-
-static void render_settings(watchy_canvas_t *canvas,
-                            const watchy_shell_t *shell,
-                            const watchy_settings_t *settings) {
-    char label[32];
-    title(canvas, "SETTINGS");
-    snprintf(label, sizeof(label), "CLOCK %s", settings->time_24h ? "24H" : "12H");
-    compact_row(canvas, 0, label, shell->selection == 0u);
-    snprintf(label, sizeof(label), "MOTION WAKE %s", settings->motion_wake ? "ON" : "OFF");
-    compact_row(canvas, 1, label, shell->selection == 1u);
-    snprintf(label, sizeof(label), "DISPLAY FX %s",
-             settings->transition_level == WATCHY_TRANSITION_LEVEL_FULL ? "FULL"
-             : settings->transition_level == WATCHY_TRANSITION_LEVEL_REDUCED ? "REDUCED"
-                                                                       : "OFF");
-    compact_row(canvas, 2, label, shell->selection == 2u);
-    compact_row(canvas, 3, "SET TIME", shell->selection == 3u);
-    compact_row(canvas, 4, "NTP SYNC", shell->selection == 4u);
-    compact_row(canvas, 5, "WIFI", shell->selection == 5u);
-    compact_row(canvas, 6, "PORTAL", shell->selection == 6u);
-    snprintf(label, sizeof(label), "REFRESH %u", settings->partial_refresh_limit);
-    compact_row(canvas, 7, label, shell->selection == 7u);
-}
-
-static void render_packages(watchy_canvas_t *canvas,
-                            const watchy_shell_t *shell,
-                            const watchy_package_catalog_t *catalog,
-                            const char *detail) {
-    title(canvas, shell->safe_mode ? "REMOVE" : "PACKAGES");
-    if (catalog == NULL || catalog->count == 0u || shell->package_count == 0u) {
-        row(canvas, 0, "NO PACKAGES", true);
-    } else {
-        const size_t page_start = watchy_shell_package_page_start(shell);
-        for (size_t position = page_start; position < shell->package_count &&
-                                             position < page_start + WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
-             ++position) {
-            char label[WATCHY_SHELL_PACKAGE_LABEL_SIZE];
-            const size_t catalog_index = shell->package_indices[position];
-            if (catalog_index >= catalog->count ||
-                !watchy_shell_format_package_label(&catalog->packages[catalog_index], position,
-                                                   shell->package_count, label, sizeof(label))) {
-                continue;
-            }
-            compact_row(canvas, (int)(position - page_start), label, shell->selection == position);
-        }
-    }
-    if (detail != NULL) watchy_ui_draw_text(canvas, 8, 184, detail, 1u, true);
-}
-
-static void render_diagnostics(watchy_canvas_t *canvas,
-                               const watchy_shell_t *shell,
-                               const watchy_diagnostic_report_t *diagnostics) {
-    title(canvas, "DIAGNOSTICS");
-    if (diagnostics == NULL || diagnostics->count == 0u) {
-        row(canvas, 2, "UNAVAILABLE", false);
-        return;
-    }
-    const size_t page_start = watchy_shell_diagnostic_page_start(shell);
-    for (size_t index = page_start; index < diagnostics->count &&
-                                      index < page_start + WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
-         ++index) {
-        char label[WATCHY_SHELL_DIAGNOSTIC_LABEL_SIZE];
-        if (watchy_shell_format_diagnostic_label(&diagnostics->entries[index], label,
-                                                 sizeof(label))) {
-            compact_row(canvas, (int)(index - page_start), label, shell->selection == index);
-        }
-    }
-}
-
-void watchy_shell_render(watchy_canvas_t *canvas,
-                         const watchy_shell_t *shell,
-                         const watchy_settings_t *settings,
-                         const watchy_time_t *time,
-                         const watchy_battery_state_t *battery,
-                         const watchy_package_catalog_t *catalog,
-                         const watchy_diagnostic_report_t *diagnostics,
-                         const char *detail) {
-    if (canvas == NULL || shell == NULL || settings == NULL) {
-        return;
-    }
-    watchy_ui_fill(canvas, false);
-    switch (shell->screen) {
-    case WATCHY_SHELL_WATCHFACE:
-        render_watchface(canvas, shell, settings, time, battery);
-        break;
-    case WATCHY_SHELL_LAUNCHER:
-        render_launcher(canvas, shell);
-        break;
-    case WATCHY_SHELL_PACKAGE_APPS:
-        render_packages(canvas, shell, catalog, detail);
-        break;
-    case WATCHY_SHELL_SETTINGS:
-        render_settings(canvas, shell, settings);
-        break;
-    case WATCHY_SHELL_MANUAL_TIME:
-        title(canvas, "SET TIME");
-        detail_lines(canvas, 62, detail == NULL ? "EDIT CLOCK" : detail);
-        break;
-    case WATCHY_SHELL_NTP_SYNC:
-        title(canvas, "NTP SYNC");
-        row(canvas, 2, detail == NULL ? "READY" : detail, false);
-        break;
-    case WATCHY_SHELL_CONNECTIVITY:
-        title(canvas, "CONNECT");
-        row(canvas, 1, settings->wifi_ssid[0] == '\0' ? "NO WIFI SAVED" : "WIFI SAVED", false);
-        row(canvas, 3, detail == NULL ? "RADIO OFF" : detail, false);
-        break;
-    case WATCHY_SHELL_PACKAGE_PORTAL:
-        title(canvas, "PORTAL");
-        row(canvas, 1, "CLIENT WIFI", shell->selection == 0u);
-        row(canvas, 2, "WATCHY AP", shell->selection == 1u);
-        detail_lines(canvas, 114, detail);
-        break;
-    case WATCHY_SHELL_DIAGNOSTICS:
-        render_diagnostics(canvas, shell, diagnostics);
-        break;
-    case WATCHY_SHELL_ABOUT:
-        title(canvas, "ABOUT");
-        row(canvas, 1, "WATCHY 2.0", false);
-        row(canvas, 3, "ESP-IDF WPK1", false);
-        break;
-    case WATCHY_SHELL_ERROR:
-        title(canvas, "ERROR");
-        compact_row(canvas, 3, watchy_shell_error_message(shell), false);
-        break;
-    case WATCHY_SHELL_SAFE_MODE:
-        title(canvas, "SAFE MODE");
-        row(canvas, 0, detail == NULL ? "RECOVERY" : detail, false);
-        row(canvas, 2, "DIAGNOSTICS", shell->selection == 0u);
-        row(canvas, 3, shell->package_index_readable ? "REMOVE PACKAGE" : "REMOVE ALL",
-            shell->selection == 1u);
-        row(canvas, 4, "NORMAL REBOOT", shell->selection == 2u);
-        break;
-    }
-}
+static void header(watchy_canvas_t *c,const char *s,const watchy_time_t *t){char q[8];watchy_ui_rect(c,0,0,200,25,true);watchy_ui_draw_text_font(c,7,17,s,&(watchy_text_style_t){&watchy_font_plex_9_semibold,1,false,false});snprintf(q,sizeof(q),"%02u:%02u",t?t->hour:0u,t?t->minute:0u);watchy_ui_draw_text_right(c,183,17,q,&(watchy_text_style_t){&watchy_font_plex_9_semibold,1,false,false});}
+static void rail(watchy_canvas_t *c,unsigned sel,unsigned total){(void)total;watchy_ui_rect(c,187,25,13,175,false);watchy_ui_rule(c,192,31,1,5,true);watchy_ui_rule(c,190,33,5,1,true);watchy_ui_rule(c,192,188,1,5,true);watchy_ui_rule(c,190,190,5,1,true);unsigned thumb=31+(sel*155)/(total?total:1);watchy_ui_rect(c,190,(int16_t)thumb,5,8,true);}
+static void row(watchy_canvas_t *c,unsigned slot,bool selected,const char *p,const char *m,unsigned k){int16_t y=(int16_t)(25+slot*55);if(selected)watchy_ui_rect(c,0,y,187,55,true);icon(c,10,y+17,k,!selected);watchy_ui_draw_text_font(c,44,y+30,p,&(watchy_text_style_t){&watchy_font_heros_17_bold,0,!selected,false});watchy_ui_draw_text_font(c,44,y+46,m,&(watchy_text_style_t){&watchy_font_plex_9_semibold,1,!selected,false});}
+static void menu(watchy_canvas_t *c,const watchy_shell_t *s,const watchy_time_t *t){static const char*p[]={"WATCHFACE","APPS","SETTINGS"};static const char*m[]={"CHANGE FACE","APP GRID","SYSTEM"};header(c,"MENU",t);for(unsigned i=0;i<3;i++)row(c,i,s->selection==i,p[i],m[i],i);rail(c,s->selection,3);}
+static const char *meta(const watchy_package_info_t*p){if(p->quarantined)return"QUARANTINED";if(p->active)return"ACTIVE";if(p->pending)return"PENDING";return p->version[0]?p->version:"INSTALLED";}
+static void selector(watchy_canvas_t*c,const watchy_shell_t*s,const watchy_time_t*t,const watchy_package_catalog_t*cat){header(c,"WATCHFACE",t);unsigned total=s->face_count?s->face_count:1,start=(s->selection/3)*3;for(unsigned z=0;z<3&&start+z<total;z++){unsigned pos=start+z;const char*n="HAIRLINE",*m="BUILT-IN";if(pos&&cat&&pos-1<s->face_count-1){unsigned ci=s->face_indices[pos-1];if(ci<cat->count){n=cat->packages[ci].name[0]?cat->packages[ci].name:cat->packages[ci].package_ref;m=meta(&cat->packages[ci]);}}row(c,z,s->selection==pos,n,m,0);}rail(c,s->selection,total);}
+static void settings_screen(watchy_canvas_t*c,const watchy_shell_t*s,const watchy_settings_t*x,const watchy_time_t*t){char v[10][24];snprintf(v[0],24,"Clock %s",x->time_24h?"24H":"12H");snprintf(v[1],24,"Motion Wake %s",x->motion_wake?"ON":"OFF");snprintf(v[2],24,"Display Motion %s",x->transition_level==WATCHY_TRANSITION_LEVEL_FULL?"FULL":x->transition_level==WATCHY_TRANSITION_LEVEL_REDUCED?"REDUCED":"OFF");strcpy(v[3],"Set Time");strcpy(v[4],"NTP Sync");strcpy(v[5],"Wi-Fi");strcpy(v[6],"Portal");snprintf(v[7],24,"Refresh %u",x->partial_refresh_limit);strcpy(v[8],"Diagnostics");strcpy(v[9],"About");header(c,"SETTINGS",t);unsigned st=(s->selection/3)*3;for(unsigned z=0;z<3&&st+z<10;z++)row(c,z,s->selection==st+z,v[st+z],z<3?"DISPLAY":"SYSTEM",2);rail(c,s->selection,10);}
+static void hairline(watchy_canvas_t*c,const watchy_shell_t*s,const watchy_settings_t*x,const watchy_time_t*t,const watchy_battery_state_t*b){char q[16];unsigned h=t?t->hour:0;if(!x->time_24h){h%=12;if(!h)h=12;}snprintf(q,sizeof(q),"%02u:%02u",h,t?t->minute:0u);watchy_ui_draw_text_centered(c,100,112,q,&(watchy_text_style_t){&watchy_font_heros_40_regular,0,true,false});static const char*mo[]={"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"};unsigned mn=t&&t->month>=1&&t->month<=12?t->month:1;snprintf(q,sizeof(q),"%02u %s",t?t->day:0u,mo[mn-1]);watchy_ui_draw_text_centered(c,100,184,q,&(watchy_text_style_t){&watchy_font_plex_9_semibold,1,true,false});unsigned p=b&&b->percent<=100?b->percent:0,w=(p*200+50)/100;if(w>200)w=200;watchy_ui_rect(c,0,197,(int16_t)w,3,true);if(s->safe_mode)watchy_ui_draw_text_font(c,5,16,"SAFE",&(watchy_text_style_t){&watchy_font_plex_9_semibold,1,true,false});if(s->package_warning)watchy_ui_draw_text_font(c,178,16,"!",&(watchy_text_style_t){&watchy_font_plex_11_regular,0,true,false});}
+static void old_title(watchy_canvas_t*c,const char*s){watchy_ui_draw_text(c,7,6,s,2,true);watchy_ui_rect(c,6,23,188,2,true);}
+static void old_row(watchy_canvas_t*c,unsigned i,const char*s,bool sel){int16_t y=(int16_t)(31+i*24);if(sel)watchy_ui_rect(c,4,y-4,192,19,true);watchy_ui_draw_text(c,9,y,s,2,!sel);}
+static void old_detail(watchy_canvas_t*c,int16_t y,const char*d){char line[48];while(d&&*d&&y<193){const char*e=strchr(d,'\n');size_t n=e?(size_t)(e-d):strlen(d);if(n>=sizeof(line))n=sizeof(line)-1;memcpy(line,d,n);line[n]=0;watchy_ui_draw_text(c,8,y,line,1,true);y+=14;d=e?e+1:NULL;}}
+static void legacy(watchy_canvas_t*c,const watchy_shell_t*s,const watchy_settings_t*x,const watchy_package_catalog_t*cat,const watchy_diagnostic_report_t*d,const char*detail){char q[48];switch(s->screen){case WATCHY_SHELL_PACKAGE_APPS:old_title(c,s->safe_mode?"REMOVE":"APPS");if(!cat||!cat->count){old_row(c,0,"NO APPS",true);}else for(size_t i=0;i<cat->count&&i<3;i++){snprintf(q,sizeof(q),"%s",cat->packages[i].name[0]?cat->packages[i].name:cat->packages[i].package_ref);old_row(c,(unsigned)i,q,s->selection==i);}if(detail)old_detail(c,184,detail);break;case WATCHY_SHELL_MANUAL_TIME:old_title(c,"SET TIME");old_detail(c,62,detail?detail:"EDIT CLOCK");break;case WATCHY_SHELL_NTP_SYNC:old_title(c,"NTP SYNC");old_row(c,2,detail?detail:"READY",false);break;case WATCHY_SHELL_CONNECTIVITY:old_title(c,"CONNECT");old_row(c,1,x->wifi_ssid[0]?"WIFI SAVED":"NO WIFI SAVED",false);old_row(c,3,detail?detail:"RADIO OFF",false);break;case WATCHY_SHELL_PACKAGE_PORTAL:old_title(c,"PORTAL");old_row(c,1,"CLIENT WIFI",s->selection==0);old_row(c,2,"WATCHY AP",s->selection==1);old_detail(c,114,detail);break;case WATCHY_SHELL_DIAGNOSTICS:old_title(c,"DIAGNOSTICS");if(!d||!d->count)old_row(c,2,"UNAVAILABLE",false);else old_row(c,0,"DIAGNOSTICS READY",false);break;case WATCHY_SHELL_ABOUT:old_title(c,"ABOUT");old_row(c,1,"WATCHY 2.0",false);old_row(c,3,"ESP-IDF WPK1",false);break;case WATCHY_SHELL_ERROR:old_title(c,"ERROR");old_row(c,3,watchy_shell_error_message(s),false);break;case WATCHY_SHELL_SAFE_MODE:old_title(c,"SAFE MODE");old_row(c,0,detail?detail:"RECOVERY",false);old_row(c,2,"DIAGNOSTICS",s->selection==0);old_row(c,3,s->package_index_readable?"REMOVE PACKAGE":"REMOVE ALL",s->selection==1);old_row(c,4,"NORMAL REBOOT",s->selection==2);break;default:old_title(c,"MENU");old_row(c,0,"UNAVAILABLE",false);break;}}
+void watchy_shell_render(watchy_canvas_t*c,const watchy_shell_t*s,const watchy_settings_t*x,const watchy_time_t*t,const watchy_battery_state_t*b,const watchy_package_catalog_t*cat,const watchy_diagnostic_report_t*d,const char*detail){if(!c||!s||!x)return;watchy_ui_fill(c,false);if(s->screen==WATCHY_SHELL_WATCHFACE_SELECTOR){selector(c,s,t,cat);return;}switch(s->screen){case WATCHY_SHELL_WATCHFACE:hairline(c,s,x,t,b);break;case WATCHY_SHELL_LAUNCHER:menu(c,s,t);break;case WATCHY_SHELL_SETTINGS:settings_screen(c,s,x,t);break;default:legacy(c,s,x,cat,d,detail);break;}}
