@@ -154,7 +154,15 @@ target_include_directories(watchy_shell_render_tests PRIVATE
 )
 target_compile_features(watchy_shell_render_tests PRIVATE c_std_11)
 target_compile_options(watchy_shell_render_tests PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(watchy_shell_render_tests PRIVATE
+  WATCHY_GOLDEN_DIR="${CMAKE_CURRENT_LIST_DIR}/../golden/shell")
 add_test(NAME watchy_shell_render_tests COMMAND watchy_shell_render_tests)
+add_test(NAME watchy_shell_render_golden_mutation
+  COMMAND ${CMAKE_COMMAND}
+          -DTEST_EXE=$<TARGET_FILE:watchy_shell_render_tests>
+          -DGOLDEN=${CMAKE_CURRENT_LIST_DIR}/../golden/shell/menu.pbm
+          -DMUTATED=${CMAKE_CURRENT_BINARY_DIR}/mutated-menu.pbm
+          -P ${CMAKE_CURRENT_LIST_DIR}/check_shell_golden_mutation.cmake)
 
 add_executable(watchy_portal_tests
   test_portal.c
