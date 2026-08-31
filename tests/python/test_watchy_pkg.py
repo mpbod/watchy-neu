@@ -133,6 +133,22 @@ class PackageToolTests(unittest.TestCase):
         package[36:68] = bytes(32)
         self.assertEqual(stored, hashlib.sha256(package).digest())
 
+    def test_accepts_all_supported_abi_minor_versions(self):
+        for minor in (0, 1, 2):
+            manifest = base_manifest()
+            manifest["abi_minor"] = minor
+            self.write_manifest(manifest)
+            output = self.dir / f"abi-{minor}.wpk"
+            self.build(output)
+            self.assertEqual(watchy_pkg.verify_package(output.read_bytes())["manifest"]["abi_minor"], minor)
+
+    def test_rejects_abi_minor_newer_than_host(self):
+        manifest = base_manifest()
+        manifest["abi_minor"] = 3
+        self.write_manifest(manifest)
+        with self.assertRaisesRegex(watchy_pkg.PackageError, "ABI"):
+            self.build(self.dir / "abi-3.wpk")
+
     def test_corrupt_header_and_digest_are_rejected(self):
         self.write_manifest(base_manifest())
         output = self.dir / "ok.wpk"

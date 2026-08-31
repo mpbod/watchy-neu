@@ -32,7 +32,10 @@ MAX_ASSET_COUNT = 64
 MAX_ASSET_PATH = 96
 KNOWN_CAPABILITIES = (1 << 10) - 1
 ABI_MAJOR = 1
-ABI_MINOR = 1
+# The host speaks the v1.2 ABI.  Older v1 packages remain valid because the
+# ABI is append-only and the firmware negotiates the package's required minor
+# against the host's provided minor.
+ABI_MINOR = 2
 ENTRY_POINT = "watchy_package_entry"
 
 

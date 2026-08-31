@@ -54,8 +54,12 @@ class ReproducibilityContracts(unittest.TestCase):
 
     def test_settings_labels_distinguish_motion_wake_from_display_effects(self) -> None:
         rendering = self.read("components/watchy_shell/src/shell_render.c")
-        self.assertIn('"MOTION WAKE %s"', rendering)
-        self.assertIn('"DISPLAY FX %s"', rendering)
+        # The approved gallery plan names the rows "Motion Wake" and
+        # "Display Motion".  This source now uses the row labels directly;
+        # the former all-caps metadata strings belonged to the superseded
+        # renderer contract.
+        self.assertIn('"Motion Wake"', rendering)
+        self.assertIn('"Display Motion"', rendering)
         self.assertNotIn('"MOTION %s"', rendering)
 
     def test_runner_stop_propagates_callback_cleanup_failure(self) -> None:
