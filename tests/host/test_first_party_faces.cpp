@@ -20,6 +20,12 @@ extern "C" watchy_status_t grid03_render(void *, watchy_canvas_t *, watchy_refre
 extern "C" const watchy_package_descriptor_v1_t *grid01_package_entry(void);
 extern "C" const watchy_package_descriptor_v1_t *grid02_package_entry(void);
 extern "C" const watchy_package_descriptor_v1_t *grid03_package_entry(void);
+extern "C" watchy_status_t term01_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *);
+extern "C" watchy_status_t term02_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *);
+extern "C" watchy_status_t term03_render(void *, watchy_canvas_t *, watchy_refresh_mode_t *);
+extern "C" const watchy_package_descriptor_v1_t *term01_package_entry(void);
+extern "C" const watchy_package_descriptor_v1_t *term02_package_entry(void);
+extern "C" const watchy_package_descriptor_v1_t *term03_package_entry(void);
 
 static watchy_status_t render(void *, watchy_canvas_t *, watchy_refresh_mode_t *) { return WATCHY_STATUS_OK; }
 WATCHY_FIRST_PARTY_FACE_NAMED(test_package_entry, "watchy.test.face", "Test Face", 0x203u, render)
@@ -196,6 +202,80 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
     return 0;
 }
 
+static int filled_segments(const uint8_t *fb, int x, int y, int width, int gap) {
+    int filled = 0;
+    for (int index = 0; index < 10; ++index) {
+        if (ink(fb, x + index * (width + gap) + 1, y + 1,
+                x + index * (width + gap) + width - 2, y + 4) == 0) {
+            ++filled;
+        }
+    }
+    return filled;
+}
+
+static int test_term(const watchy_package_descriptor_v1_t *descriptor,
+                     watchy_status_t (*renderer)(void *, watchy_canvas_t *, watchy_refresh_mode_t *),
+                     const char *golden,
+                     uint32_t capabilities,
+                     int face) {
+    assert(descriptor != nullptr);
+    assert(descriptor->size == sizeof(*descriptor));
+    assert(descriptor->metadata.abi.major == 1u && descriptor->metadata.abi.minor == 2u);
+    assert(descriptor->metadata.version != nullptr && std::strcmp(descriptor->metadata.version, "1.0.0") == 0);
+    assert(descriptor->metadata.flags == capabilities);
+    host_fixture fixture;
+    watchy_host_caps_v1_t caps = fixture_caps(&fixture);
+    void *user = nullptr;
+    assert(descriptor->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
+    assert(descriptor->callbacks.on_start(user) == WATCHY_STATUS_OK);
+    uint8_t framebuffer[5000];
+    std::memset(framebuffer, 0x00, sizeof(framebuffer));
+    watchy_canvas_t canvas{200u, 200u, 25u, 0u, WATCHY_PIXEL_MONO, framebuffer};
+    watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_FULL);
+    if (face == 1) {
+        /* A missing inverse status line, command content, or solid cursor is a layout bug. */
+        assert(ink(framebuffer, 12, 12, 187, 25) > 400);
+        assert(ink(framebuffer, 12, 34, 187, 150) > 240);
+        assert(ink(framebuffer, 27, 174, 33, 186) == 91);
+    } else if (face == 2) {
+        /* Mutations to the twelve-cell bar geometry or the ruled footer must be visible. */
+        assert(ink(framebuffer, 13, 59, 186, 60) > 250);
+        assert(ink(framebuffer, 13, 145, 186, 145) > 120);
+        for (int row = 0; row < 3; ++row) {
+            int cells = 0;
+            for (int cell = 0; cell < 12; ++cell) {
+                const int x = 92 + cell * 8;
+                assert(ink(framebuffer, x, 65 + row * 27, x + 6, 73 + row * 27) > 0);
+                ++cells;
+            }
+            assert(cells == 12);
+        }
+    } else {
+        /* Term 03 is an actual inverted panel, with only seven real battery fills at 68%. */
+        assert(ink(framebuffer, 0, 0, 199, 199) > 36000);
+        assert(ink(framebuffer, 14, 164, 180, 169) > 250);
+        assert(filled_segments(framebuffer, 14, 164, 14, 3) == 7);
+        assert(ink(framebuffer, 14, 174, 186, 192) < 3200);
+    }
+    if (std::getenv("WATCHY_UPDATE_GOLDENS") != nullptr) {
+        write_pbm(golden, framebuffer);
+        assert(read_pbm(golden, framebuffer) == 0);
+    } else {
+        assert(read_pbm(golden, framebuffer) == 0);
+    }
+    std::memset(framebuffer, 0x00, sizeof(framebuffer));
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_PARTIAL);
+    fixture.time.hour = 10u;
+    assert(renderer(user, &canvas, &mode) == WATCHY_STATUS_OK);
+    assert(mode == WATCHY_REFRESH_FULL);
+    descriptor->callbacks.on_stop(user);
+    descriptor->callbacks.on_unload(user);
+    return 0;
+}
+
 int main() {
     const watchy_text_style_t grid_heading = grid_heading_style();
     const watchy_text_style_t grid_header = grid_header_style();
@@ -289,5 +369,15 @@ int main() {
                      WATCHY_FACE_GOLDEN_DIR "/grid-02.pbm", 515u, 2) == 0);
     assert(test_grid(grid03_package_entry(), grid03_render,
                      WATCHY_FACE_GOLDEN_DIR "/grid-03.pbm", 515u, 3) == 0);
+    assert(std::strcmp(term01_package_entry()->metadata.identifier, "watchy.firstparty.term01") == 0);
+    assert(std::strcmp(term01_package_entry()->metadata.name, "Term 01") == 0);
+    assert(std::strcmp(term02_package_entry()->metadata.identifier, "watchy.firstparty.term02") == 0);
+    assert(std::strcmp(term03_package_entry()->metadata.identifier, "watchy.firstparty.term03") == 0);
+    assert(test_term(term01_package_entry(), term01_render,
+                     WATCHY_FACE_GOLDEN_DIR "/term-01.pbm", 771u, 1) == 0);
+    assert(test_term(term02_package_entry(), term02_render,
+                     WATCHY_FACE_GOLDEN_DIR "/term-02.pbm", 531u, 2) == 0);
+    assert(test_term(term03_package_entry(), term03_render,
+                     WATCHY_FACE_GOLDEN_DIR "/term-03.pbm", 531u, 3) == 0);
     return 0;
 }

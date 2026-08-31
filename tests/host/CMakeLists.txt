@@ -226,6 +226,12 @@ add_executable(watchy_first_party_face_tests
   ../../first_party/watchfaces/grid-02/main/package.cpp
   ../../first_party/watchfaces/grid-03/main/renderer.cpp
   ../../first_party/watchfaces/grid-03/main/package.cpp
+  ../../first_party/watchfaces/term-01/main/renderer.cpp
+  ../../first_party/watchfaces/term-01/main/package.cpp
+  ../../first_party/watchfaces/term-02/main/renderer.cpp
+  ../../first_party/watchfaces/term-02/main/package.cpp
+  ../../first_party/watchfaces/term-03/main/renderer.cpp
+  ../../first_party/watchfaces/term-03/main/package.cpp
 )
 target_include_directories(watchy_first_party_face_tests PRIVATE
   ../../first_party/watchfaces/common/include
