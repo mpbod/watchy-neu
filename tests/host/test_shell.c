@@ -320,6 +320,7 @@ static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void
     CHECK(shell.selection == 2u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
     CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    CHECK(shell.sleep_requested);
     return 0;
 }
 
@@ -702,6 +703,7 @@ static int test_selector_actions_are_copied_one_shot_and_back_cancels(void) {
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    CHECK(shell.sleep_requested);
     CHECK(watchy_shell_take_action_request(&shell, &request));
     CHECK(request.action == WATCHY_SHELL_ACTION_SELECT_BUILTIN);
     CHECK(!request.has_package);
@@ -715,6 +717,7 @@ static int test_selector_actions_are_copied_one_shot_and_back_cancels(void) {
     shell.selection = 2u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    CHECK(shell.sleep_requested);
     watchy_shell_set_package_catalog(&shell, NULL, false);
     CHECK(watchy_shell_take_action_request(&shell, &request));
     CHECK(request.action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE);

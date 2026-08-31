@@ -30,16 +30,16 @@ watchy_status_t watchy_watchface_action_apply(
     watchy_settings_t *settings,
     watchy_package_catalog_t *catalog,
     const watchy_watchface_action_ops_t *operations,
-    bool *out_package_rendered) {
+    watchy_watchface_run_result_t *out_result) {
     watchy_package_status_t package_status;
-    bool rendered = false;
-    if (out_package_rendered == NULL) {
+    if (out_result == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
-    *out_package_rendered = false;
+    *out_result = (watchy_watchface_run_result_t){0};
     if (request == NULL || settings == NULL || catalog == NULL || operations == NULL ||
         operations->select_builtin == NULL || operations->select_watchface == NULL ||
-        operations->run_watchface == NULL || operations->snapshot == NULL ||
+        operations->run_watchface == NULL || operations->force_full_refresh == NULL ||
+        operations->snapshot == NULL ||
         operations->save_settings == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
@@ -53,7 +53,7 @@ watchy_status_t watchy_watchface_action_apply(
         package_status = operations->select_watchface(operations->context,
                                                        request->package_ref);
         if (package_status == WATCHY_PACKAGE_OK) {
-            rendered = operations->run_watchface(operations->context, safe_mode);
+            *out_result = operations->run_watchface(operations->context, safe_mode);
         }
     } else {
         return WATCHY_STATUS_INVALID_ARGUMENT;
@@ -67,9 +67,44 @@ watchy_status_t watchy_watchface_action_apply(
     if (settings_status != WATCHY_STATUS_OK) {
         return settings_status;
     }
-    if (request->action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE && !rendered) {
+    if (out_result->cancelled_buttons != 0u) {
+        return WATCHY_STATUS_CANCELLED;
+    }
+    if (request->action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE &&
+        !out_result->rendered) {
         return WATCHY_STATUS_INVALID_STATE;
     }
-    *out_package_rendered = rendered;
     return WATCHY_STATUS_OK;
+}
+
+watchy_status_t watchy_watchface_run_active(
+    bool safe_mode,
+    bool force_full_refresh,
+    const watchy_package_catalog_t *catalog,
+    const watchy_watchface_action_ops_t *operations,
+    watchy_watchface_run_result_t *out_result) {
+    bool selected = false;
+    if (catalog == NULL || operations == NULL || operations->run_watchface == NULL ||
+        operations->force_full_refresh == NULL || out_result == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_result = (watchy_watchface_run_result_t){0};
+    if (safe_mode) {
+        return WATCHY_STATUS_UNSUPPORTED;
+    }
+    for (size_t index = 0u; index < catalog->count; ++index) {
+        selected = selected || catalog->packages[index].active ||
+                   catalog->packages[index].pending;
+    }
+    if (!selected) {
+        return WATCHY_STATUS_UNSUPPORTED;
+    }
+    if (force_full_refresh) {
+        operations->force_full_refresh(operations->context);
+    }
+    *out_result = operations->run_watchface(operations->context, safe_mode);
+    if (out_result->cancelled_buttons != 0u) {
+        return WATCHY_STATUS_CANCELLED;
+    }
+    return out_result->rendered ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
 }

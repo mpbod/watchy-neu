@@ -506,6 +506,7 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
             shell->sleep_requested = true;
         } else if (shell->screen == WATCHY_SHELL_LAUNCHER) {
             enter(shell, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER);
+            shell->sleep_requested = true;
         } else {
             enter(shell, shell->return_screen,
                   shell->safe_mode ? WATCHY_SHELL_SAFE_MODE : WATCHY_SHELL_LAUNCHER);
@@ -519,6 +520,7 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
         if (shell->selection == 0u) {
             queue_action(shell, WATCHY_SHELL_ACTION_SELECT_BUILTIN);
             enter(shell, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER);
+            shell->sleep_requested = true;
         } else if (shell->selection < shell->face_count) {
             const uint8_t face_position = (uint8_t)(shell->selection - 1u);
             if (shell->face_quarantined[face_position]) {
@@ -526,6 +528,7 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
             } else if (queue_package_action(shell, WATCHY_SHELL_ACTION_SELECT_WATCHFACE,
                                             shell->face_indices[face_position])) {
                 enter(shell, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER);
+                shell->sleep_requested = true;
             } else {
                 watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
             }

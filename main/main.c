@@ -223,9 +223,19 @@ static watchy_package_status_t action_select_watchface(void *context,
     return watchy_packages_select_watchface(package_ref);
 }
 
-static bool action_run_watchface(void *context, bool safe_mode) {
+static watchy_watchface_run_result_t action_run_watchface(void *context,
+                                                           bool safe_mode) {
     (void)context;
-    return watchy_packages_run_watchface(safe_mode);
+    watchy_watchface_run_result_t result = {
+        .rendered = watchy_packages_run_watchface(safe_mode),
+    };
+    (void)watchy_display_take_cancelled_buttons(&result.cancelled_buttons);
+    return result;
+}
+
+static void action_force_full_refresh(void *context) {
+    (void)context;
+    watchy_display_invalidate_previous();
 }
 
 static watchy_package_status_t action_snapshot(void *context,
@@ -244,6 +254,7 @@ static const watchy_watchface_action_ops_t watchface_action_ops = {
     .select_builtin = action_select_builtin,
     .select_watchface = action_select_watchface,
     .run_watchface = action_run_watchface,
+    .force_full_refresh = action_force_full_refresh,
     .snapshot = action_snapshot,
     .save_settings = action_save_settings,
     .context = NULL,
@@ -566,13 +577,19 @@ static void run_shell(watchy_shell_t *shell,
                 break;
             case WATCHY_SHELL_ACTION_SELECT_BUILTIN:
             case WATCHY_SHELL_ACTION_SELECT_WATCHFACE: {
-                bool package_rendered = false;
+                watchy_watchface_run_result_t run_result = {0};
                 const watchy_status_t status = watchy_watchface_action_apply(
                     &action_request, shell->safe_mode, settings, catalog,
-                    &watchface_action_ops, &package_rendered);
+                    &watchface_action_ops, &run_result);
                 if (status == WATCHY_STATUS_OK) {
                     watchy_shell_set_package_catalog(shell, catalog, true);
-                    post_action_presentation_needed = !package_rendered;
+                    post_action_presentation_needed = !run_result.rendered;
+                } else if (status == WATCHY_STATUS_CANCELLED) {
+                    watchy_shell_set_package_catalog(shell, catalog, true);
+                    watchy_shell_presentation_observe(
+                        presentation, shell, WATCHY_SHELL_PRESENT_CANCELLED,
+                        run_result.cancelled_buttons);
+                    post_action_presentation_needed = false;
                 } else {
                     shell->package_warning = true;
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
@@ -594,6 +611,41 @@ static void run_shell(watchy_shell_t *shell,
                 watchy_shell_set_diagnostic_count(shell, diagnostics->count);
             }
             if (post_action_presentation_needed) {
+                bool force_builtin_full = false;
+                if (shell->screen == WATCHY_SHELL_WATCHFACE && !shell->safe_mode) {
+                    watchy_watchface_run_result_t run_result = {0};
+                    const watchy_status_t watchface_status =
+                        watchy_watchface_run_active(
+                            false, shell_input == WATCHY_SHELL_INPUT_BACK,
+                            catalog, &watchface_action_ops, &run_result);
+                    if (watchface_status == WATCHY_STATUS_OK) {
+                        watchy_shell_presentation_observe(
+                            presentation, shell, WATCHY_SHELL_PRESENT_TARGET, 0u);
+                        post_action_presentation_needed = false;
+                    } else if (watchface_status == WATCHY_STATUS_CANCELLED) {
+                        watchy_shell_presentation_observe(
+                            presentation, shell, WATCHY_SHELL_PRESENT_CANCELLED,
+                            run_result.cancelled_buttons);
+                        post_action_presentation_needed = false;
+                    } else if (watchface_status != WATCHY_STATUS_UNSUPPORTED) {
+                        shell->package_warning = true;
+                        if (watchy_packages_snapshot(catalog) == WATCHY_PACKAGE_OK) {
+                            watchy_shell_set_package_catalog(shell, catalog, true);
+                            if (sync_active_watchface_setting(settings, catalog) !=
+                                WATCHY_STATUS_OK) {
+                                watchy_shell_fail(shell,
+                                                 WATCHY_SHELL_ERROR_SETTINGS_SAVE);
+                            }
+                        }
+                        watchy_display_invalidate_previous();
+                        force_builtin_full = true;
+                    }
+                }
+                if (!post_action_presentation_needed) {
+                    last_activity = milliseconds();
+                    vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
+                    continue;
+                }
                 watchy_transition_request_v1_t request;
                 const watchy_shell_transition_context_t change = {
                     .from = transition_from,
@@ -608,7 +660,9 @@ static void run_shell(watchy_shell_t *shell,
                                 : (watchy_transition_rect_t){0},
                 };
                 const bool has_request = watchy_shell_transition_for_change(&change, &request);
-                watchy_refresh_mode_t refresh_mode = WATCHY_REFRESH_PARTIAL;
+                watchy_refresh_mode_t refresh_mode = force_builtin_full
+                                                          ? WATCHY_REFRESH_FULL
+                                                          : WATCHY_REFRESH_PARTIAL;
                 if (shell->screen == WATCHY_SHELL_ERROR &&
                     transition_from != WATCHY_SHELL_ERROR) {
                     watchy_display_invalidate_previous();
