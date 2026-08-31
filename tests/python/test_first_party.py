@@ -16,6 +16,7 @@ class FirstPartyBuildMatrixTests(unittest.TestCase):
         outputs = [face["output"] for face in builder.FACES]
         self.assertEqual(ids, sorted(ids))
         self.assertEqual(outputs, sorted(outputs))
+        self.assertEqual(outputs, ["grid-01.wpk", "grid-02.wpk", "grid-03.wpk", "orbit.wpk", "slab.wpk", "term-01.wpk", "term-02.wpk", "term-03.wpk"])
         self.assertEqual(len(set(ids)), 8)
         self.assertEqual(len(set(outputs)), 8)
         for face in builder.FACES:

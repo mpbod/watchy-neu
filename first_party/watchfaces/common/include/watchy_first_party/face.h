@@ -15,6 +15,7 @@ struct fixed_text {
     bool operator==(const fixed_text &other) const noexcept {
         uint8_t i = 0; while (value[i] != '\0' || other.value[i] != '\0') { if (value[i] != other.value[i]) return false; ++i; } return true;
     }
+    const char *c_str() const noexcept { return value; }
 };
 
 struct watchy_face_data_t {
@@ -25,6 +26,10 @@ struct watchy_face_data_t {
 
 fixed_text format_hhmm(const watchy_time_t &time, bool twelve_hour) noexcept;
 fixed_text format_date(const watchy_time_t &time) noexcept;
+fixed_text format_weekday(const watchy_time_t &time) noexcept;
+bool valid_time(const watchy_time_t &time) noexcept;
+bool format_hhmm_checked(const watchy_time_t &time, bool twelve_hour, fixed_text *out) noexcept;
+bool offset_time_checked(const watchy_time_t &time, int16_t utc_offset_minutes, watchy_time_t *out) noexcept;
 watchy_time_t offset_time(const watchy_time_t &time, int16_t utc_offset_minutes) noexcept;
 uint8_t moon_octant(const watchy_time_t &time) noexcept;
 

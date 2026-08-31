@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,14 +17,14 @@ FACES = tuple({
     "abi_major": 1, "abi_minor": 2, "type": "watchface", "version": "1.0.0",
     "capabilities": caps, "max_runtime_bytes": 49152, "assets": []
 } for slug, name, caps in (
-    ("grid01", "Grid 01", 787),
-    ("grid02", "Grid 02", CAPABILITIES),
-    ("grid03", "Grid 03", CAPABILITIES),
+    ("grid-01", "Grid 01", 787),
+    ("grid-02", "Grid 02", CAPABILITIES),
+    ("grid-03", "Grid 03", CAPABILITIES),
     ("orbit", "Orbit", CAPABILITIES),
     ("slab", "Slab", CAPABILITIES),
-    ("term01", "Term 01", CAPABILITIES),
-    ("term02", "Term 02", CAPABILITIES),
-    ("term03", "Term 03", CAPABILITIES),
+    ("term-01", "Term 01", CAPABILITIES),
+    ("term-02", "Term 02", CAPABILITIES),
+    ("term-03", "Term 03", CAPABILITIES),
 ))
 
 
@@ -42,13 +41,27 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build" / "first-party")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     if args.list:
         for face in FACES:
             print(face["id"], face["output"])
         return 0
-    import tools.watchy_pkg as watchy_pkg
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from tools import watchy_pkg
+    except ModuleNotFoundError:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("watchy_pkg", ROOT / "tools" / "watchy_pkg.py")
+        watchy_pkg = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(watchy_pkg)
+    if args.dry_run:
+        for face in FACES:
+            print("would-build", face["id"], ROOT / "first_party" / "watchfaces" / face["output"][:-4])
+        return 0
+    staging = args.output_dir.parent / (args.output_dir.name + ".staging")
+    if staging.exists(): shutil.rmtree(staging)
+    staging.mkdir(parents=True)
     for face in FACES:
         project = ROOT / "first_party" / "watchfaces" / face["output"][:-4]
         if not project.is_dir():
@@ -62,20 +75,32 @@ def main(argv=None):
             build_dir = project / "build" / repeat
             if build_dir.exists(): shutil.rmtree(build_dir)
             build_dir.mkdir(parents=True)
+            if not args.dry_run:
+                idf = os.environ.get("IDF_PATH")
+                if not idf:
+                    raise RuntimeError("IDF_PATH is not set; use --dry-run to inspect the matrix")
+                run([sys.executable, Path(idf) / "tools" / "idf.py", "-C", project, "-B", build_dir, "build", "so"])
+            if not elf.exists():
+                raise RuntimeError(f"renderer did not produce Xtensa ELF: {elf}")
             run([sys.executable, ROOT / "tools" / "watchy_pkg.py", "audit-elf", "--elf", elf])
-            out = args.output_dir / f"{face['output']}.{repeat}"
+            out = staging / f"{face['output']}.{repeat}"
             run([sys.executable, ROOT / "tools" / "watchy_pkg.py", "build", "--manifest", manifest_path,
                  "--elf", elf, "--assets", project / "assets", "--output", out])
             run([sys.executable, ROOT / "tools" / "watchy_pkg.py", "verify", out])
             artifacts.append(out.read_bytes())
         if artifacts[0] != artifacts[1]:
             raise RuntimeError(f"non-deterministic output for {face['id']}")
-        final = args.output_dir / face["output"]
+        final = staging / face["output"]
         final.write_bytes(artifacts[0])
         if len(artifacts[0]) > watchy_pkg.MAX_WPK:
             raise RuntimeError(f"WPK exceeds 80 KiB: {final}")
         for repeat in ("repro-a", "repro-b"):
-            (args.output_dir / f"{face['output']}.{repeat}").unlink()
+            (staging / f"{face['output']}.{repeat}").unlink()
+    backup = args.output_dir.parent / (args.output_dir.name + ".previous")
+    if backup.exists(): shutil.rmtree(backup)
+    if args.output_dir.exists(): args.output_dir.rename(backup)
+    staging.rename(args.output_dir)
+    if backup.exists(): shutil.rmtree(backup)
     return 0
 
 

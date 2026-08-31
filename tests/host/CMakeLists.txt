@@ -212,7 +212,7 @@ target_include_directories(watchy_first_party_face_tests PRIVATE
   ../../components/watchy_packages/include
 )
 target_compile_features(watchy_first_party_face_tests PRIVATE cxx_std_17)
-target_compile_options(watchy_first_party_face_tests PRIVATE -Wall -Wextra -Werror)
+target_compile_options(watchy_first_party_face_tests PRIVATE -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fno-threadsafe-statics)
 add_test(NAME watchy_first_party_face_tests COMMAND watchy_first_party_face_tests)
 
 add_executable(watchy_elf_fixture_validator
