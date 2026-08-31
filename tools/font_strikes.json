@@ -6,7 +6,7 @@
     {"id":"plex_10_semibold","font":"IBMPlexMono-SemiBold.otf","px":10,"threshold":128},
     {"id":"plex_11_semibold","font":"IBMPlexMono-SemiBold.otf","px":11,"threshold":128},
     {"id":"plex_11_regular","font":"IBMPlexMono-Regular.otf","px":11,"threshold":128},
-    {"id":"plex_13_semibold","font":"IBMPlexMono-SemiBold.otf","px":13,"threshold":128},
+    {"id":"plex_13_bold","font":"IBMPlexMono-Bold.otf","px":13,"threshold":128},
     {"id":"plex_13_regular","font":"IBMPlexMono-Regular.otf","px":13,"threshold":128},
     {"id":"plex_13_medium","font":"IBMPlexMono-Medium.otf","px":13,"threshold":128},
     {"id":"plex_15_medium","font":"IBMPlexMono-Medium.otf","px":15,"threshold":128},

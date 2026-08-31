@@ -333,7 +333,7 @@ static int test_hairline_date_uses_legible_strike_without_clipping(void) {
     watchy_time_t time = now();
     watchy_shell_t shell = {.screen = WATCHY_SHELL_WATCHFACE};
     const watchy_text_style_t date = {
-        &watchy_font_plex_13_semibold, 1, true, false,
+        &watchy_font_plex_13_bold, 1, true, false,
     };
 
     draw(&actual_canvas, &shell, &settings, &time, NULL, NULL, NULL, NULL);
@@ -350,7 +350,7 @@ static int test_larger_typography_fits_shell_regions(void) {
     const watchy_text_style_t primary = {&watchy_font_heros_20_bold, 0, true, false};
     const watchy_text_style_t secondary = {&watchy_font_plex_10_semibold, 1, true, false};
     const watchy_text_style_t clock = {&watchy_font_heros_46_regular, 0, true, false};
-    const watchy_text_style_t date = {&watchy_font_plex_13_semibold, 1, true, false};
+    const watchy_text_style_t date = {&watchy_font_plex_13_bold, 1, true, false};
     const watchy_text_style_t compact = {&watchy_font_heros_15_bold, 0, true, false};
 
     CHECK(header.font->px == 10u && primary.font->px == 20u &&

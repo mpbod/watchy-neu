@@ -23,7 +23,7 @@ APPROVED_STRIKES = [
     ("plex_10_semibold", "IBMPlexMono-SemiBold.otf", 10, 128, APPROVED_GLYPHS),
     ("plex_11_semibold", "IBMPlexMono-SemiBold.otf", 11, 128, APPROVED_GLYPHS),
     ("plex_11_regular", "IBMPlexMono-Regular.otf", 11, 128, APPROVED_GLYPHS),
-    ("plex_13_semibold", "IBMPlexMono-SemiBold.otf", 13, 128, APPROVED_GLYPHS),
+    ("plex_13_bold", "IBMPlexMono-Bold.otf", 13, 128, APPROVED_GLYPHS),
     ("plex_13_regular", "IBMPlexMono-Regular.otf", 13, 128, APPROVED_GLYPHS),
     ("plex_13_medium", "IBMPlexMono-Medium.otf", 13, 128, APPROVED_GLYPHS),
     ("plex_15_medium", "IBMPlexMono-Medium.otf", 15, 128, APPROVED_GLYPHS),

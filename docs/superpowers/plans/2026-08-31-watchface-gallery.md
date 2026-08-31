@@ -92,7 +92,7 @@ Pillow==12.3.0
     {"id":"plex_10_semibold","font":"IBMPlexMono-SemiBold.otf","px":10,"threshold":128},
     {"id":"plex_11_semibold","font":"IBMPlexMono-SemiBold.otf","px":11,"threshold":128},
     {"id":"plex_11_regular","font":"IBMPlexMono-Regular.otf","px":11,"threshold":128},
-    {"id":"plex_13_semibold","font":"IBMPlexMono-SemiBold.otf","px":13,"threshold":128},
+    {"id":"plex_13_bold","font":"IBMPlexMono-Bold.otf","px":13,"threshold":128},
     {"id":"plex_13_regular","font":"IBMPlexMono-Regular.otf","px":13,"threshold":128},
     {"id":"plex_13_medium","font":"IBMPlexMono-Medium.otf","px":13,"threshold":128},
     {"id":"plex_15_medium","font":"IBMPlexMono-Medium.otf","px":15,"threshold":128},
@@ -377,13 +377,13 @@ Expected: golden comparisons fail and selector rendering is missing.
 
 - [ ] **Step 3: Implement the handed-off 200 x 200 layouts**
 
-Use a 13-pixel right rail, black header from y=0 through y=24, three 55-pixel content rows, complete selected-row inversion, mono uppercase metadata, Heros bold primary labels, and exact icon geometry. Hairline centers `HH:MM` in Heros 46 regular, places `DD MON` at y=179 in tracked Plex 13 semibold, and draws a 3-pixel battery rule at width `(percent * 200 + 50) / 100`.
+Use a 13-pixel right rail, black header from y=0 through y=24, three 55-pixel content rows, complete selected-row inversion, mono uppercase metadata, Heros bold primary labels, and exact icon geometry. Hairline centers `HH:MM` in Heros 46 regular, places `DD MON` at y=179 in tracked Plex 13 bold, and draws a 3-pixel battery rule at width `(percent * 200 + 50) / 100`.
 
 ```c
 static void render_hairline(watchy_canvas_t *canvas, const watchy_time_t *time,
                             const watchy_battery_state_t *battery) {
     draw_centered_time(canvas, &watchy_font_heros_46_regular, time, 100, 94);
-    draw_centered_date(canvas, &watchy_font_plex_13_semibold, time, 179);
+    draw_centered_date(canvas, &watchy_font_plex_13_bold, time, 179);
     watchy_ui_rect(canvas, 0, 197, battery_rule_width(battery), 3, true);
 }
 ```
