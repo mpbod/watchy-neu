@@ -134,6 +134,16 @@ static int test_selector(void) {
     CHECK(memcmp(status_frames[1], status_frames[2], sizeof(status_frames[1])) != 0);
     CHECK(memcmp(status_frames[2], status_frames[3], sizeof(status_frames[2])) != 0);
     CHECK(memcmp(status_frames[3], status_frames[4], sizeof(status_frames[3])) != 0);
+    for (unsigned position = 1u; position < 5u; ++position) {
+        s.selection = position < 3u ? 0u : position == 3u ? 4u : 3u;
+        draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
+        const unsigned page_start = (position / 3u) * 3u;
+        const unsigned slot = position - page_start;
+        const int metadata_ink = region_ink(fb, 44, 25 + (int)slot * 55 + 34,
+                                            180, 25 + (int)slot * 55 + 52);
+        static const int expected_metadata_ink[] = {0, 89, 122, 189, 54};
+        CHECK(metadata_ink == expected_metadata_ink[position]);
+    }
     s.selection = 0u;
     draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
     CHECK(read_pbm(WATCHY_GOLDEN_DIR "/selector-hairline.pbm", fb) == 0);

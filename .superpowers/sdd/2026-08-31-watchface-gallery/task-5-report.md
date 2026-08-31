@@ -11,7 +11,7 @@ Hairline uses Heros 40 at baseline y=91, Plex date at baseline y=175, uppercase 
 `tests/host/test_shell_render.c` is unconditional. Every plain CTest run compares all four committed PBMs and independently checks:
 
 - all three Menu selections, row bounds, rail boundary, label regions, and selected-row inversion;
-- selector Hairline plus active, pending, quarantined, and version metadata fixtures across first/middle/last positions and page windows;
+- selector Hairline plus active, pending, quarantined, and version metadata fixtures across first/middle/last positions and page windows, with independent fixed metadata-raster assertions;
 - all ten Settings labels/order fixtures, first/middle/last pages, and metadata variants;
 - Apps filtering through `app_indices` and a second page;
 - Hairline 0%, 68%, 100%, invalid battery, date/time regions, and SAFE/warning invariance;
