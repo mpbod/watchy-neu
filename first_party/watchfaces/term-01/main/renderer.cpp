@@ -9,13 +9,9 @@ void draw_term01(watchy_canvas_t *canvas, void *user_data, const watchy_time_t &
     const watchy_text_style_t command = term_11();
     const watchy_text_style_t date = term_13();
     const watchy_text_style_t clock = term_30();
-    const fixed_text battery = term_percent(user_data);
-    char status[16]{};
-    const char *link = term_bluetooth(user_data) ? "BT·ON " : "BT·-- ";
-    uint8_t at = 0u;
-    for (uint8_t i = 0u; link[i] != '\0' && at + 1u < sizeof(status); ++i) status[at++] = link[i];
-    for (uint8_t i = 0u; battery.value[i] != '\0' && at + 1u < sizeof(status); ++i) status[at++] = battery.value[i];
-    status[at] = '\0';
+    /* Capability 771 deliberately excludes Battery; do not render fixture-only
+     * charge state here. Bluetooth is the only header status Term 01 owns. */
+    const char *status = term_bluetooth(user_data) ? "BT·ON" : "BT·--";
     watchy_ui_rect(canvas, 12, 12, 176, 14, true);
     watchy_ui_draw_text_font(canvas, 17, 23, "WATCH.LOCAL", &header);
     watchy_ui_draw_text_right(canvas, 183, 23, status, &header);

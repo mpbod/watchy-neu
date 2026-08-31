@@ -83,3 +83,34 @@ footer, and seven 68%-battery fills.
 The native PBM review shows no clipping at panel edges, but physical e-paper
 contrast/ghosting inspection remains release-UAT work; no device was available
 for this scoped task.
+
+## Fix round 1 — Term 01 capability boundary
+
+Review found that Term 01 declared capability 771, which intentionally omits
+Battery, but its inverse header had read and displayed the fixture battery
+percentage. The header now renders only `BT·ON` or radio-neutral `BT·--`; it
+does not call the battery helper. The geometry handoff now records that this is
+an approved omission rather than an incomplete status field.
+
+The focused Term 01 host path now passes a host capability table with
+`battery == nullptr` while retaining the fixed 68% fixture for Term 02/03.
+Consequently, a renderer that reintroduces battery text/access produces a
+different Term 01 PBM and fails the golden comparison. The repaired 1x and 4x
+Term 01 artifacts were regenerated under `build/task8-artifacts/` and inspected:
+the shorter Bluetooth-only status remains right-aligned within the header and
+all handoff padding/cursor boundaries remain unclipped.
+
+```text
+cmake --build build/host --target watchy_first_party_face_tests && \
+  WATCHY_UPDATE_GOLDENS=1 ./build/host/tests/host/watchy_first_party_face_tests
+EXIT=0 (focused face target, golden round-trip comparison, no full suite)
+
+python3 tools/build_first_party.py --only term-01 term-02 term-03 --reproducible
+EXIT=0 (two clean rounds/package; ELF audit, WPK verification, reproducibility)
+```
+
+| Package | repaired WPK bytes | repaired file SHA-256 |
+| --- | ---: | --- |
+| Term 01 | 20,456 | `838f7253e86a71e990f0224b4512a24f321342592a36411f0675f1c6790318c8` |
+| Term 02 | 19,460 | `f57c05f0faa807be7a1f67e443971cff1d2da8d0c1859645f9386704993fdf88` |
+| Term 03 | 17,032 | `f7365c4bacef2a8d89dc9e88a825ebaf0c9eab3fc6e896bf2aadb2a350da57c4` |

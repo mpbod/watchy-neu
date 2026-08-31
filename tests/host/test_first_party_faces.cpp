@@ -225,6 +225,10 @@ static int test_term(const watchy_package_descriptor_v1_t *descriptor,
     assert(descriptor->metadata.flags == capabilities);
     host_fixture fixture;
     watchy_host_caps_v1_t caps = fixture_caps(&fixture);
+    /* Term 01's 771 capability does not include Battery. Keeping this table
+     * absent catches a renderer that silently treats fixture-only charge data
+     * as a granted service. */
+    if (face == 1) caps.battery = nullptr;
     void *user = nullptr;
     assert(descriptor->callbacks.on_load(&caps, &user) == WATCHY_STATUS_OK);
     assert(descriptor->callbacks.on_start(user) == WATCHY_STATUS_OK);
