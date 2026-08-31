@@ -39,6 +39,49 @@ static int same_region(const uint8_t *first,
     return 1;
 }
 
+static int text_ink_fits(const watchy_font_t *font,
+                         int8_t tracking,
+                         const char *text,
+                         int pen_x,
+                         int baseline,
+                         int left,
+                         int top,
+                         int right,
+                         int bottom) {
+    while (text != NULL && *text != '\0') {
+        const watchy_font_glyph_t *glyph = watchy_font_find_glyph(font, (uint8_t)*text);
+        if (glyph == NULL) return 0;
+        if (glyph->width != 0u && glyph->height != 0u) {
+            const int glyph_left = pen_x + glyph->bearing_x;
+            const int glyph_top = baseline - glyph->bearing_y;
+            const int glyph_right = glyph_left + glyph->width - 1;
+            const int glyph_bottom = glyph_top + glyph->height - 1;
+            if (glyph_left < left || glyph_top < top || glyph_right > right ||
+                glyph_bottom > bottom) {
+                return 0;
+            }
+        }
+        pen_x += glyph->advance;
+        if (text[1] != '\0') pen_x += tracking;
+        ++text;
+    }
+    return 1;
+}
+
+static int centered_text_ink_fits(const watchy_text_style_t *style,
+                                  const char *text,
+                                  int center_x,
+                                  int baseline,
+                                  int left,
+                                  int top,
+                                  int right,
+                                  int bottom) {
+    const watchy_text_metrics_t metrics = watchy_ui_measure_text(style, text);
+    return text_ink_fits(style->font, style->tracking, text,
+                         center_x - metrics.width / 2, baseline,
+                         left, top, right, bottom);
+}
+
 static watchy_canvas_t canvas(uint8_t *fb) {
     watchy_canvas_t c = {200u, 200u, WATCHY_DISPLAY_STRIDE, 0u, WATCHY_PIXEL_MONO, fb};
     memset(fb, 0xff, WATCHY_DISPLAY_FRAMEBUFFER_SIZE);
@@ -204,9 +247,9 @@ static int test_selector(void) {
         uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
         watchy_canvas_t expected_canvas = canvas(expected);
         watchy_ui_draw_text_font(&expected_canvas, 44,
-                                 (int16_t)(25 + slot * 55u + 46u),
+                                 (int16_t)(25 + slot * 55u + 49u),
                                  status_contract[position],
-                                 &(watchy_text_style_t){&watchy_font_plex_9_semibold,
+                                 &(watchy_text_style_t){&watchy_font_plex_10_semibold,
                                                         1, true, false});
         CHECK(same_region(fb, expected, 44, 25 + (int)slot * 55 + 34,
                           186, 25 + (int)slot * 55 + 52));
@@ -248,9 +291,9 @@ static int test_settings(void) {
         const unsigned slot = selection % WATCHY_SHELL_VISIBLE_ROWS;
         const int top = 25 + (int)slot * 55;
         watchy_ui_rect(&expected_canvas, 0, (int16_t)top, 187, 55, true);
-        watchy_ui_draw_text_font(&expected_canvas, 44, (int16_t)(top + 30),
+        watchy_ui_draw_text_font(&expected_canvas, 44, (int16_t)(top + 32),
                                  expected_labels[selection],
-                                 &(watchy_text_style_t){&watchy_font_heros_17_bold, 0,
+                                 &(watchy_text_style_t){&watchy_font_heros_20_bold, 0,
                                                         false, false});
         CHECK(same_region(frames[selection], expected, 44, top, 186, top + 33));
     }
@@ -278,6 +321,31 @@ static int test_hairline(void) {
         CHECK(region_ink(fb, 50, 45, 150, 100) > 25);
         CHECK(region_ink(fb, 60, 155, 140, 180) > 4);
     }
+    return 0;
+}
+
+static int test_larger_typography_fits_shell_regions(void) {
+    const watchy_text_style_t header = {&watchy_font_plex_10_semibold, 1, true, false};
+    const watchy_text_style_t primary = {&watchy_font_heros_20_bold, 0, true, false};
+    const watchy_text_style_t secondary = {&watchy_font_plex_10_semibold, 1, true, false};
+    const watchy_text_style_t clock = {&watchy_font_heros_46_regular, 0, true, false};
+    const watchy_text_style_t date = {&watchy_font_plex_10_semibold, 1, true, false};
+    const watchy_text_style_t compact = {&watchy_font_heros_15_bold, 0, true, false};
+
+    CHECK(header.font->px == 10u && primary.font->px == 20u &&
+          clock.font->px == 46u && compact.font->px == 15u);
+    CHECK(text_ink_fits(header.font, header.tracking, "DIAGNOSTICS", 7, 18,
+                        0, 0, 186, 24));
+    CHECK(text_ink_fits(primary.font, primary.tracking, "Display Motion", 44, 57,
+                        0, 25, 186, 79));
+    CHECK(text_ink_fits(secondary.font, secondary.tracking, "QUARANTINED", 44, 74,
+                        0, 25, 186, 79));
+    CHECK(centered_text_ink_fits(&clock, "12:34", 100, 94,
+                                 0, 25, 199, 150));
+    CHECK(centered_text_ink_fits(&date, "31 AUG", 100, 176,
+                                 0, 151, 199, 196));
+    CHECK(text_ink_fits(compact.font, compact.tracking, "REMOVE PACKAGE", 9, 157,
+                        0, 139, 199, 166));
     return 0;
 }
 
@@ -337,6 +405,37 @@ static int test_apps_filter_and_page(void) {
     return 0;
 }
 
+static int test_dynamic_text_is_fitted_before_visual_boundaries(void) {
+    uint8_t fb[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_canvas_t c = canvas(fb);
+    watchy_settings_t settings = {.time_24h = true};
+    watchy_time_t t = now();
+    watchy_package_catalog_t catalog;
+    watchy_shell_t shell = {
+        .screen = WATCHY_SHELL_WATCHFACE_SELECTOR,
+        .selection = 0u,
+        .face_count = 2u,
+    };
+    catalog_faces(&catalog);
+    snprintf(catalog.packages[0].name, sizeof(catalog.packages[0].name),
+             "%s", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+    shell.face_indices[0] = 0u;
+    draw(&c, &shell, &settings, &t, NULL, &catalog, NULL, NULL);
+    uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_canvas_t expected_canvas = canvas(expected);
+    watchy_ui_draw_text_font(&expected_canvas, 44, 112, "ABCDEFGHIJK",
+                             &(watchy_text_style_t){&watchy_font_heros_20_bold,
+                                                    0, true, false});
+    CHECK(same_region(fb, expected, 44, 81, 186, 120));
+
+    c = canvas(fb);
+    shell = (watchy_shell_t){.screen = WATCHY_SHELL_MANUAL_TIME};
+    draw(&c, &shell, &settings, &t, NULL, NULL, NULL,
+         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJK");
+    CHECK(region_ink(fb, 192, 50, 199, 78) == 0);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "--update-goldens") == 0) {
         uint8_t fb[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
@@ -367,8 +466,10 @@ int main(int argc, char **argv) {
     CHECK(test_selector() == 0);
     CHECK(test_settings() == 0);
     CHECK(test_hairline() == 0);
+    CHECK(test_larger_typography_fits_shell_regions() == 0);
     CHECK(test_legacy_and_guards() == 0);
     CHECK(test_apps_filter_and_page() == 0);
+    CHECK(test_dynamic_text_is_fitted_before_visual_boundaries() == 0);
     if (argc == 3 && strcmp(argv[1], "--compare-menu") == 0) {
         uint8_t fb[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
         watchy_canvas_t c = canvas(fb);

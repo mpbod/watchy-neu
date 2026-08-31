@@ -28,17 +28,74 @@ static watchy_text_style_t text_style(const watchy_font_t *font,
 #define STYLE(font, tracking, black, outlined) \
     (&(watchy_text_style_t){font, tracking, black, outlined})
 
+static size_t utf8_sequence_size(uint8_t leading) {
+    if ((leading & 0x80u) == 0u) return 1u;
+    if ((leading & 0xe0u) == 0xc0u) return 2u;
+    if ((leading & 0xf0u) == 0xe0u) return 3u;
+    if ((leading & 0xf8u) == 0xf0u) return 4u;
+    return 1u;
+}
+
+static size_t copy_utf8_prefix(char *out, size_t capacity, const char *text) {
+    size_t source = 0u;
+    size_t written = 0u;
+
+    if (out == NULL || capacity == 0u) return 0u;
+    if (text == NULL) {
+        out[0] = '\0';
+        return 0u;
+    }
+    while (text[source] != '\0') {
+        const size_t sequence = utf8_sequence_size((uint8_t)text[source]);
+        size_t available = 1u;
+        while (available < sequence && text[source + available] != '\0' &&
+               (((uint8_t)text[source + available] & 0xc0u) == 0x80u)) {
+            ++available;
+        }
+        if (available != sequence || written + sequence >= capacity) break;
+        memcpy(out + written, text + source, sequence);
+        source += sequence;
+        written += sequence;
+    }
+    out[written] = '\0';
+    return written;
+}
+
+static void remove_last_utf8(char *text, size_t *length) {
+    if (text == NULL || length == NULL || *length == 0u) return;
+    --*length;
+    while (*length > 0u && (((uint8_t)text[*length] & 0xc0u) == 0x80u)) --*length;
+    text[*length] = '\0';
+}
+
+static void draw_fitted_text(watchy_canvas_t *canvas,
+                             int16_t x,
+                             int16_t baseline,
+                             int16_t right,
+                             const char *text,
+                             const watchy_text_style_t *style) {
+    char fitted[64];
+    size_t length = copy_utf8_prefix(fitted, sizeof(fitted), text);
+    const int32_t available = (int32_t)right - x + 1;
+
+    if (available <= 0 || style == NULL) return;
+    while (length > 0u && watchy_ui_measure_text(style, fitted).width > available) {
+        remove_last_utf8(fitted, &length);
+    }
+    watchy_ui_draw_text_font(canvas, x, baseline, fitted, style);
+}
+
 static void draw_header(watchy_canvas_t *canvas,
                         const char *title,
                         const watchy_time_t *time) {
     char clock[6];
-    const watchy_text_style_t white = text_style(&watchy_font_plex_9_semibold, 1, false, false);
+    const watchy_text_style_t white = text_style(&watchy_font_plex_10_semibold, 1, false, false);
     watchy_ui_rect(canvas, 0, 0, CONTENT_WIDTH, HEADER_HEIGHT, true);
-    watchy_ui_draw_text_font(canvas, 7, 17, title, &white);
+    watchy_ui_draw_text_font(canvas, 7, 18, title, &white);
     snprintf(clock, sizeof(clock), "%02u:%02u",
              time == NULL ? 0u : (unsigned)(time->hour % 24u),
              time == NULL ? 0u : (unsigned)(time->minute % 60u));
-    watchy_ui_draw_text_right(canvas, 183, 17, clock, &white);
+    watchy_ui_draw_text_right(canvas, 183, 18, clock, &white);
 }
 
 static void triangle(watchy_canvas_t *canvas, int center_y, bool up) {
@@ -131,16 +188,16 @@ static void draw_primary_row(watchy_canvas_t *canvas,
     const int16_t top = (int16_t)(HEADER_HEIGHT + slot * ROW_HEIGHT);
     const bool ink = !selected;
     const watchy_text_style_t primary =
-        text_style(&watchy_font_heros_17_bold, 0, ink, false);
+        text_style(&watchy_font_heros_20_bold, 0, ink, false);
     const watchy_text_style_t secondary =
-        text_style(&watchy_font_plex_9_semibold, 1, ink, false);
+        text_style(&watchy_font_plex_10_semibold, 1, ink, false);
     if (selected) {
         watchy_ui_rect(canvas, 0, top, CONTENT_WIDTH, ROW_HEIGHT, true);
     }
     watchy_ui_rule(canvas, 0, (int16_t)(top + ROW_HEIGHT - 1), CONTENT_WIDTH, 1, true);
     draw_icon(canvas, 11, (int16_t)(top + 17), icon_kind, ink);
-    watchy_ui_draw_text_font(canvas, 44, (int16_t)(top + 30), label, &primary);
-    watchy_ui_draw_text_font(canvas, 44, (int16_t)(top + 46), metadata, &secondary);
+    draw_fitted_text(canvas, 44, (int16_t)(top + 32), 186, label, &primary);
+    draw_fitted_text(canvas, 44, (int16_t)(top + 49), 186, metadata, &secondary);
 }
 
 static void render_menu(watchy_canvas_t *canvas,
@@ -256,12 +313,12 @@ static void render_hairline(watchy_canvas_t *canvas,
     }
     if (day > 31u) day = 0u;
     snprintf(value, sizeof(value), "%02u:%02u", hour, minute);
-    watchy_ui_draw_text_centered(canvas, 100, 91, value,
-                                 STYLE(&watchy_font_heros_40_regular, 0, true, false));
+    watchy_ui_draw_text_centered(canvas, 100, 94, value,
+                                 STYLE(&watchy_font_heros_46_regular, 0, true, false));
     if (month < 1u || month > 12u) month = 1u;
     snprintf(value, sizeof(value), "%02u %s", day, months[month - 1u]);
-    watchy_ui_draw_text_centered(canvas, 100, 175, value,
-                                 STYLE(&watchy_font_plex_9_semibold, 1, true, false));
+    watchy_ui_draw_text_centered(canvas, 100, 176, value,
+                                 STYLE(&watchy_font_plex_10_semibold, 1, true, false));
     unsigned percent = battery == NULL ? 0u : battery->percent;
     if (percent > 100u) percent = 0u;
     unsigned width = (percent * PANEL_WIDTH + 50u) / 100u;
@@ -269,11 +326,11 @@ static void render_hairline(watchy_canvas_t *canvas,
     watchy_ui_rect(canvas, 0, 197, (int16_t)width, 3, true);
     if (shell->safe_mode) {
         watchy_ui_draw_text_font(canvas, 5, 16, "SAFE",
-                                 STYLE(&watchy_font_plex_9_semibold, 1, true, false));
+                                 STYLE(&watchy_font_plex_10_semibold, 1, true, false));
     }
     if (shell->package_warning) {
         watchy_ui_draw_text_font(canvas, 181, 16, "!",
-                                 STYLE(&watchy_font_plex_11_regular, 0, true, false));
+                                 STYLE(&watchy_font_plex_13_regular, 0, true, false));
     }
 }
 
@@ -282,13 +339,15 @@ static void draw_compact_row(watchy_canvas_t *canvas,
                              const char *label,
                              const char *metadata,
                              bool selected) {
-    const int16_t top = (int16_t)(31 + slot * 24u);
-    const watchy_text_style_t primary = text_style(&watchy_font_heros_13_bold, 0, !selected, false);
-    const watchy_text_style_t secondary = text_style(&watchy_font_plex_8_semibold, 0, !selected, false);
-    if (selected) watchy_ui_rect(canvas, 4, top, CONTENT_WIDTH - 8, 20, true);
-    watchy_ui_draw_text_font(canvas, 9, (int16_t)(top + 13), label, &primary);
+    const int16_t top = (int16_t)(31 + slot * 27u);
+    const watchy_text_style_t primary = text_style(&watchy_font_heros_15_bold, 0, !selected, false);
+    const watchy_text_style_t secondary = text_style(&watchy_font_plex_9_semibold, 0, !selected, false);
+    if (selected) watchy_ui_rect(canvas, 4, top, CONTENT_WIDTH - 8, 24, true);
+    draw_fitted_text(canvas, 9, (int16_t)(top + 18),
+                     metadata != NULL && metadata[0] != '\0' ? 124 : 183,
+                     label, &primary);
     if (metadata != NULL && metadata[0] != '\0') {
-        watchy_ui_draw_text_font(canvas, 130, (int16_t)(top + 13), metadata, &secondary);
+        draw_fitted_text(canvas, 130, (int16_t)(top + 18), 183, metadata, &secondary);
     }
 }
 
@@ -300,9 +359,9 @@ static void draw_detail_lines(watchy_canvas_t *canvas, int16_t y, const char *de
         if (length >= sizeof(line)) length = sizeof(line) - 1u;
         memcpy(line, detail, length);
         line[length] = '\0';
-        watchy_ui_draw_text_font(canvas, 8, y, line,
-                                 STYLE(&watchy_font_plex_9_semibold, 0, true, false));
-        y = (int16_t)(y + 14);
+        draw_fitted_text(canvas, 8, y, 191, line,
+                         STYLE(&watchy_font_plex_10_semibold, 0, true, false));
+        y = (int16_t)(y + 16);
         detail = end == NULL ? NULL : end + 1u;
     }
 }

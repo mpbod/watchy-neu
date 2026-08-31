@@ -270,6 +270,10 @@ def render_header(root: Path, strike_ids: list[str]) -> str:
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
 typedef struct {{
     uint32_t codepoint;
     uint32_t bitmap_offset;
@@ -294,6 +298,10 @@ typedef struct {{
 {exports}
 
 const watchy_font_glyph_t *watchy_font_find_glyph(const watchy_font_t *font, uint32_t codepoint);
+
+#ifdef __cplusplus
+}}
+#endif
 
 #endif
 """

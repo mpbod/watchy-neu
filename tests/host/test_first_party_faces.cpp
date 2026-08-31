@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "watchy_first_party/face.h"
+#include "watchy_first_party/grid_render.hpp"
 #include "watchy_first_party/package.hpp"
 
 using namespace watchy_first_party;
@@ -35,6 +36,47 @@ static int ink(const uint8_t *fb, int left, int top, int right, int bottom) {
         for (int x = left; x <= right; ++x) count += black(fb, x, y) ? 1 : 0;
     }
     return count;
+}
+
+static bool text_ink_fits(const watchy_text_style_t &style,
+                          const char *text,
+                          int pen_x,
+                          int baseline,
+                          int left,
+                          int top,
+                          int right,
+                          int bottom) {
+    for (size_t index = 0u; text != nullptr && text[index] != '\0'; ++index) {
+        const watchy_font_glyph_t *glyph =
+            watchy_font_find_glyph(style.font, static_cast<uint8_t>(text[index]));
+        if (glyph == nullptr) return false;
+        if (glyph->width != 0u && glyph->height != 0u) {
+            const int glyph_left = pen_x + glyph->bearing_x;
+            const int glyph_top = baseline - glyph->bearing_y;
+            const int glyph_right = glyph_left + glyph->width - 1;
+            const int glyph_bottom = glyph_top + glyph->height - 1;
+            if (glyph_left < left || glyph_top < top || glyph_right > right ||
+                glyph_bottom > bottom) {
+                return false;
+            }
+        }
+        pen_x += glyph->advance;
+        if (text[index + 1u] != '\0') pen_x += style.tracking;
+    }
+    return true;
+}
+
+static bool centered_text_ink_fits(const watchy_text_style_t &style,
+                                   const char *text,
+                                   int center_x,
+                                   int baseline,
+                                   int left,
+                                   int top,
+                                   int right,
+                                   int bottom) {
+    const watchy_text_metrics_t metrics = watchy_ui_measure_text(&style, text);
+    return text_ink_fits(style, text, center_x - metrics.width / 2, baseline,
+                         left, top, right, bottom);
 }
 
 static int read_pbm(const char *path, const uint8_t *fb) {
@@ -155,6 +197,27 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
 }
 
 int main() {
+    const watchy_text_style_t grid_heading = grid_heading_style();
+    const watchy_text_style_t grid_body = grid_body_style();
+    const watchy_text_style_t grid_value = grid_value_style();
+    const watchy_text_style_t grid_clock = grid_large_clock_style();
+    const watchy_text_style_t grid_rail_clock = grid_rail_clock_style();
+    assert(grid_heading.font == &watchy_font_plex_11_semibold);
+    assert(grid_body.font == &watchy_font_plex_13_regular);
+    assert(grid_value.font == &watchy_font_plex_15_medium);
+    assert(grid_clock.font == &watchy_font_heros_72_bold);
+    assert(grid_rail_clock.font == &watchy_font_heros_62_bold);
+    assert(watchy_ui_measure_text(&grid_clock, "09:41").width <= 184);
+    assert(centered_text_ink_fits(grid_clock, "09:41", 100, 105,
+                                  0, 23, 199, 150));
+    assert(centered_text_ink_fits(grid_rail_clock, "09:41", 119, 182,
+                                  30, 107, 199, 199));
+    assert(centered_text_ink_fits(grid_clock, "09:41", 100, 73,
+                                  0, 0, 199, 86));
+    assert(text_ink_fits(grid_body, "UTC+09", 148, 148,
+                         136, 88, 199, 178));
+    assert(text_ink_fits(grid_value, "9", 5, 187,
+                         0, 0, 28, 199));
     watchy_time_t value{2026, 8, 31, 9, 41, 0, 1, 420};
     assert(format_hhmm(value, true) == fixed_text("09:41"));
     assert(format_hhmm(value, false) == fixed_text("09:41"));

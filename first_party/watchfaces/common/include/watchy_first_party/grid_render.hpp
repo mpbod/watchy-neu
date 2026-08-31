@@ -33,19 +33,23 @@ inline bool grid_bluetooth(void *user_data) noexcept {
            caps->bluetooth->enabled(caps->bluetooth->context);
 }
 
-inline watchy_text_style_t grid_plex10(bool black = true) noexcept {
-    return {&watchy_font_plex_10_semibold, 1, black, false};
+inline watchy_text_style_t grid_heading_style(bool black = true) noexcept {
+    return {&watchy_font_plex_11_semibold, 1, black, false};
 }
 
-inline watchy_text_style_t grid_plex11(bool black = true) noexcept {
-    return {&watchy_font_plex_11_regular, 0, black, false};
+inline watchy_text_style_t grid_body_style(bool black = true) noexcept {
+    return {&watchy_font_plex_13_regular, 0, black, false};
 }
 
-inline watchy_text_style_t grid_plex13(bool black = true) noexcept {
-    return {&watchy_font_plex_13_medium, 0, black, false};
+inline watchy_text_style_t grid_value_style(bool black = true) noexcept {
+    return {&watchy_font_plex_15_medium, 0, black, false};
 }
 
-inline watchy_text_style_t grid_heros62(bool black = true) noexcept {
+inline watchy_text_style_t grid_large_clock_style(bool black = true) noexcept {
+    return {&watchy_font_heros_72_bold, 0, black, false};
+}
+
+inline watchy_text_style_t grid_rail_clock_style(bool black = true) noexcept {
     return {&watchy_font_heros_62_bold, 0, black, false};
 }
 
@@ -80,7 +84,7 @@ inline void grid_draw_battery(watchy_canvas_t *canvas, void *user_data,
     } else {
         value = fixed_text("--%");
     }
-    watchy_text_style_t style = grid_plex13();
+    watchy_text_style_t style = grid_value_style();
     watchy_ui_draw_text_font(canvas, x, baseline, value.c_str(), &style);
 }
 

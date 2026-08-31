@@ -8,16 +8,16 @@ static const char kAlarm[] = "--:--";
 
 static void draw_grid02(watchy_canvas_t *canvas, const watchy_time_t &time) noexcept {
     watchy_ui_fill(canvas, false);
-    watchy_text_style_t rail = grid_plex13();
-    watchy_text_style_t heading = grid_plex10();
-    watchy_text_style_t body = grid_plex11();
-    watchy_text_style_t large = grid_heros62();
+    watchy_text_style_t rail = grid_value_style();
+    watchy_text_style_t heading = grid_heading_style();
+    watchy_text_style_t body = grid_body_style();
+    watchy_text_style_t large = grid_rail_clock_style();
     const fixed_text date = format_date(time);
     char date_chars[11]{};
     for (uint8_t i = 0u; i < 10u; ++i) date_chars[i] = date.value[i];
     for (uint8_t i = 0u; i < 10u; ++i) {
         char glyph[2] = {date_chars[i], '\0'};
-        watchy_ui_draw_text_font(canvas, 5, static_cast<int16_t>(25 + i * 17), glyph, &rail);
+        watchy_ui_draw_text_font(canvas, 5, static_cast<int16_t>(25 + i * 18), glyph, &rail);
     }
     watchy_ui_rect(canvas, 29, 8, 1, 184, true);
     watchy_ui_draw_text_font(canvas, 43, 29, "AGENDA", &heading);

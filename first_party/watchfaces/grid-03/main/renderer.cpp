@@ -9,9 +9,9 @@ static const char kNoData[] = "NO DATA";
 static void draw_grid03(watchy_canvas_t *canvas, void *user_data,
                         const watchy_time_t &time) noexcept {
     watchy_ui_fill(canvas, false);
-    watchy_text_style_t heading = grid_plex10();
-    watchy_text_style_t body = grid_plex11();
-    watchy_text_style_t large = grid_heros62();
+    watchy_text_style_t heading = grid_heading_style();
+    watchy_text_style_t body = grid_body_style();
+    watchy_text_style_t large = grid_large_clock_style();
     const fixed_text local = format_hhmm(time, false);
     watchy_time_t tokyo{};
     const bool tokyo_valid = offset_time_checked(time, 540, &tokyo);

@@ -9,10 +9,10 @@ static const char kTemperaturePlaceholder[] = "--°";
 static void draw_grid01(watchy_canvas_t *canvas, void *user_data,
                         const watchy_time_t &time) noexcept {
     watchy_ui_fill(canvas, false);
-    watchy_text_style_t header = grid_plex10();
-    watchy_text_style_t mono = grid_plex11();
-    watchy_text_style_t value = grid_plex13();
-    watchy_text_style_t large = grid_heros62();
+    watchy_text_style_t header = grid_heading_style();
+    watchy_text_style_t mono = grid_body_style();
+    watchy_text_style_t value = grid_value_style();
+    watchy_text_style_t large = grid_large_clock_style();
     const fixed_text weekday = format_weekday(time);
     const fixed_text date = format_date(time);
     const fixed_text clock = format_hhmm(time, false);
@@ -40,7 +40,7 @@ extern "C" watchy_status_t grid01_render(void *user_data, watchy_canvas_t *canva
     watchy_time_t time{};
     if (!watchy_first_party::grid_time(user_data, &time)) {
         watchy_ui_fill(canvas, false);
-        watchy_text_style_t style = watchy_first_party::grid_plex11();
+        watchy_text_style_t style = watchy_first_party::grid_body_style();
         watchy_ui_draw_text_font(canvas, 8, 15, "--/--/----", &style);
         watchy_ui_draw_text_right(canvas, 192, 15, "BT·--", &style);
         watchy_first_party::grid_invalid_mode(user_data, mode);
