@@ -1,4 +1,4 @@
-#include "watchy/packages.h"
+#include "watchy/package_runtime.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -316,6 +316,79 @@ watchy_package_status_t watchy_package_select_watchface(watchy_package_index_man
     memset(next->pending_watchface, 0, sizeof(next->pending_watchface));
     memcpy(next->pending_watchface, package_ref, strlen(package_ref) + 1u);
     return commit_index(manager, next);
+}
+
+watchy_package_status_t watchy_package_select_builtin(watchy_package_index_manager_t *manager) {
+    watchy_package_index_t *next;
+    if (check_manager(manager) != WATCHY_PACKAGE_OK) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    next = &manager->scratch;
+    *next = manager->index;
+    memset(next->active_watchface, 0, sizeof(next->active_watchface));
+    memset(next->pending_watchface, 0, sizeof(next->pending_watchface));
+    memset(next->prior_watchface, 0, sizeof(next->prior_watchface));
+    return commit_index(manager, next);
+}
+
+static bool manifest_matches_installed(const watchy_package_manifest_t *manifest,
+                                       const char *package_ref,
+                                       watchy_package_type_t type) {
+    const size_t id_length = strnlen(manifest->id, sizeof(manifest->id));
+    const size_t name_length = strnlen(manifest->name, sizeof(manifest->name));
+    const size_t version_length = strnlen(manifest->version, sizeof(manifest->version));
+    return id_length != 0u && id_length <= WATCHY_PACKAGE_ID_MAX &&
+           name_length != 0u && name_length <= WATCHY_PACKAGE_NAME_MAX &&
+           version_length != 0u && version_length <= WATCHY_PACKAGE_VERSION_MAX &&
+           manifest->type == type && watchy_package_id_valid(manifest->id) &&
+           watchy_package_version_valid(manifest->version) &&
+           strncmp(package_ref, manifest->id, id_length) == 0 &&
+           package_ref[id_length] == '@' &&
+           strcmp(package_ref + id_length + 1u, manifest->version) == 0;
+}
+
+watchy_package_status_t watchy_package_catalog_snapshot(
+    const watchy_package_index_manager_t *manager,
+    watchy_package_manifest_reader_fn_t read_manifest,
+    void *read_context,
+    watchy_package_manifest_t *manifest_workspace,
+    watchy_package_catalog_t *out_catalog) {
+    const watchy_package_index_t *index;
+    watchy_package_status_t status;
+    if (out_catalog == NULL) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    memset(out_catalog, 0, sizeof(*out_catalog));
+    if (check_manager(manager) != WATCHY_PACKAGE_OK || read_manifest == NULL ||
+        manifest_workspace == NULL) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    index = &manager->index;
+    for (size_t record = 0u; record < index->installed_count; ++record) {
+        watchy_package_info_t *info = &out_catalog->packages[record];
+        const char *package_ref = index->installed[record];
+        memset(manifest_workspace, 0, sizeof(*manifest_workspace));
+        status = read_manifest(read_context, package_ref, manifest_workspace);
+        if (status != WATCHY_PACKAGE_OK ||
+            !manifest_matches_installed(manifest_workspace, package_ref,
+                                        index->installed_types[record])) {
+            memset(out_catalog, 0, sizeof(*out_catalog));
+            return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_MANIFEST;
+        }
+        memcpy(info->package_ref, package_ref, strlen(package_ref));
+        info->package_ref[strlen(package_ref)] = '\0';
+        memcpy(info->name, manifest_workspace->name, strlen(manifest_workspace->name));
+        info->name[strlen(manifest_workspace->name)] = '\0';
+        memcpy(info->version, manifest_workspace->version,
+               strlen(manifest_workspace->version));
+        info->version[strlen(manifest_workspace->version)] = '\0';
+        info->type = index->installed_types[record];
+        info->active = strcmp(index->active_watchface, package_ref) == 0;
+        info->pending = strcmp(index->pending_watchface, package_ref) == 0;
+        info->quarantined = watchy_package_is_quarantined(manager, package_ref);
+        ++out_catalog->count;
+    }
+    return WATCHY_PACKAGE_OK;
 }
 
 watchy_package_status_t watchy_package_promote_pending(watchy_package_index_manager_t *manager,

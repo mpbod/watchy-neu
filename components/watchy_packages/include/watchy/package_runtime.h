@@ -13,6 +13,8 @@ extern "C" {
 
 typedef struct {
     char package_ref[WATCHY_PACKAGE_REF_MAX + 1u];
+    char name[WATCHY_PACKAGE_NAME_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
     watchy_package_type_t type;
     bool active;
     bool pending;
@@ -23,6 +25,11 @@ typedef struct {
     watchy_package_info_t packages[WATCHY_PACKAGE_INSTALLED_MAX];
     size_t count;
 } watchy_package_catalog_t;
+
+typedef watchy_package_status_t (*watchy_package_manifest_reader_fn_t)(
+    void *context,
+    const char *package_ref,
+    watchy_package_manifest_t *out_manifest);
 
 typedef struct {
     watchy_package_status_t (*start)(void *context);
@@ -58,7 +65,14 @@ watchy_package_status_t watchy_packages_install_blob(
     size_t wpk_size,
     char out_package_ref[WATCHY_PACKAGE_REF_MAX + 1u]);
 watchy_package_status_t watchy_packages_select_watchface(const char *package_ref);
+watchy_package_status_t watchy_packages_select_builtin(void);
 watchy_package_status_t watchy_packages_snapshot(watchy_package_catalog_t *out_catalog);
+watchy_package_status_t watchy_package_catalog_snapshot(
+    const watchy_package_index_manager_t *manager,
+    watchy_package_manifest_reader_fn_t read_manifest,
+    void *read_context,
+    watchy_package_manifest_t *manifest_workspace,
+    watchy_package_catalog_t *out_catalog);
 watchy_package_status_t watchy_packages_remove(const char *package_ref);
 watchy_package_status_t watchy_packages_safe_mode_purge(void);
 watchy_package_status_t watchy_packages_upload_begin(size_t expected_size);

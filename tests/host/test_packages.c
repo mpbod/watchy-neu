@@ -1241,6 +1241,7 @@ typedef struct {
     watchy_package_index_t persisted;
     bool present;
     bool fail_save;
+    size_t save_calls;
 } fake_index_store_t;
 
 static watchy_index_store_result_t fake_index_load(void *context,
@@ -1255,6 +1256,7 @@ static watchy_index_store_result_t fake_index_load(void *context,
 
 static bool fake_index_save(void *context, const watchy_package_index_t *index) {
     fake_index_store_t *store = (fake_index_store_t *)context;
+    ++store->save_calls;
     if (store->fail_save) {
         return false;
     }
@@ -1269,6 +1271,328 @@ static watchy_package_index_store_t fake_store_api(fake_index_store_t *store) {
         .save = fake_index_save,
         .context = store,
     };
+}
+
+static void clear_watchface_selection(watchy_package_index_t *index) {
+    memset(index->active_watchface, 0, sizeof(index->active_watchface));
+    memset(index->pending_watchface, 0, sizeof(index->pending_watchface));
+    memset(index->prior_watchface, 0, sizeof(index->prior_watchface));
+}
+
+static int test_builtin_selection_clears_only_watchface_state_atomically(void) {
+    fake_index_store_t store = {0};
+    watchy_package_index_store_t api = fake_store_api(&store);
+    watchy_package_index_manager_t manager;
+    watchy_package_index_t before;
+    watchy_package_index_t expected;
+    watchy_package_index_t persisted_before;
+    size_t save_calls_before;
+
+    CHECK(watchy_package_index_init(&manager, &api) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed_typed(
+              &manager, "clock.old@1.0.0", WATCHY_PACKAGE_TYPE_WATCHFACE) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed_typed(
+              &manager, "utility.app@2", WATCHY_PACKAGE_TYPE_APP) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed_typed(
+              &manager, "clock.next@3", WATCHY_PACKAGE_TYPE_WATCHFACE) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, "clock.old@1.0.0") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_promote_pending(&manager, "clock.old@1.0.0") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, "clock.next@3") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_begin_attempt(&manager, "clock.next@3", false) == WATCHY_PACKAGE_OK);
+
+    before = *watchy_package_index_snapshot(&manager);
+    expected = before;
+    clear_watchface_selection(&expected);
+    save_calls_before = store.save_calls;
+    CHECK(watchy_package_select_builtin(&manager) == WATCHY_PACKAGE_OK);
+    CHECK(store.save_calls == save_calls_before + 1u);
+    CHECK(memcmp(watchy_package_index_snapshot(&manager), &expected, sizeof(expected)) == 0);
+    CHECK(memcmp(&store.persisted, &expected, sizeof(expected)) == 0);
+
+    manager.index = before;
+    store.persisted = before;
+    persisted_before = store.persisted;
+    store.fail_save = true;
+    save_calls_before = store.save_calls;
+    CHECK(watchy_package_select_builtin(&manager) == WATCHY_PACKAGE_ERR_STORE);
+    CHECK(store.save_calls == save_calls_before + 1u);
+    CHECK(memcmp(watchy_package_index_snapshot(&manager), &before, sizeof(before)) == 0);
+    CHECK(memcmp(&store.persisted, &persisted_before, sizeof(persisted_before)) == 0);
+    return 0;
+}
+
+typedef struct {
+    const char *package_ref;
+    const uint8_t *bytes;
+    size_t size;
+    watchy_package_status_t read_status;
+} fake_manifest_record_t;
+
+typedef struct {
+    const fake_manifest_record_t *records;
+    size_t count;
+} fake_manifest_store_t;
+
+static watchy_package_status_t fake_manifest_read(
+    void *context,
+    const char *package_ref,
+    watchy_package_manifest_t *out_manifest) {
+    const fake_manifest_store_t *store = (const fake_manifest_store_t *)context;
+    for (size_t record = 0u; record < store->count; ++record) {
+        const fake_manifest_record_t *entry = &store->records[record];
+        if (strcmp(entry->package_ref, package_ref) != 0) {
+            continue;
+        }
+        if (entry->read_status != WATCHY_PACKAGE_OK) {
+            return entry->read_status;
+        }
+        return watchy_package_manifest_parse(entry->bytes, entry->size, out_manifest);
+    }
+    return WATCHY_PACKAGE_ERR_STORE;
+}
+
+#define MANIFEST_RECORD(ref, text) \
+    {.package_ref = (ref), .bytes = (const uint8_t *)(text), .size = sizeof(text) - 1u}
+
+static bool bytes_are_zero(const void *bytes, size_t size) {
+    const uint8_t *cursor = (const uint8_t *)bytes;
+    for (size_t offset = 0u; offset < size; ++offset) {
+        if (cursor[offset] != 0u) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int test_catalog_snapshot_exposes_validated_metadata_in_index_order(void) {
+    static const char first_manifest[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"clock.first\",\"max_runtime_bytes\":1,\"name\":\"Grid 01\","
+        "\"type\":\"watchface\",\"version\":\"1.0.0\"}";
+    static const char app_manifest[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"utility.app\",\"max_runtime_bytes\":1,\"name\":\"Timer\","
+        "\"type\":\"app\",\"version\":\"2\"}";
+    static const char pending_manifest[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"clock.pending\",\"max_runtime_bytes\":1,\"name\":\"Orbit\","
+        "\"type\":\"watchface\",\"version\":\"3\"}";
+    static const fake_manifest_record_t records[] = {
+        MANIFEST_RECORD("clock.first@1.0.0", first_manifest),
+        MANIFEST_RECORD("utility.app@2", app_manifest),
+        MANIFEST_RECORD("clock.pending@3", pending_manifest),
+    };
+    fake_manifest_store_t manifests = {.records = records, .count = 3u};
+    fake_index_store_t store = {0};
+    watchy_package_index_store_t api = fake_store_api(&store);
+    watchy_package_index_manager_t manager;
+    watchy_package_manifest_t manifest_workspace;
+    watchy_package_catalog_t catalog;
+
+    CHECK(watchy_package_index_init(&manager, &api) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed_typed(
+              &manager, records[0].package_ref, WATCHY_PACKAGE_TYPE_WATCHFACE) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed_typed(
+              &manager, records[1].package_ref, WATCHY_PACKAGE_TYPE_APP) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed_typed(
+              &manager, records[2].package_ref, WATCHY_PACKAGE_TYPE_WATCHFACE) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, records[0].package_ref) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_promote_pending(&manager, records[0].package_ref) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_select_watchface(&manager, records[2].package_ref) == WATCHY_PACKAGE_OK);
+    for (unsigned attempt = 0u; attempt < 3u; ++attempt) {
+        CHECK(watchy_package_begin_attempt(&manager, records[1].package_ref, false) ==
+              WATCHY_PACKAGE_OK);
+        CHECK(watchy_package_finish_attempt(&manager, records[1].package_ref, false) ==
+              WATCHY_PACKAGE_OK);
+    }
+
+    memset(&catalog, 0xa5, sizeof(catalog));
+    CHECK(watchy_package_catalog_snapshot(&manager, fake_manifest_read,
+                                           &manifests, &manifest_workspace, &catalog) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(catalog.count == 3u);
+    CHECK(strcmp(catalog.packages[0].package_ref, "clock.first@1.0.0") == 0);
+    CHECK(strcmp(catalog.packages[0].name, "Grid 01") == 0);
+    CHECK(strcmp(catalog.packages[0].version, "1.0.0") == 0);
+    CHECK(catalog.packages[0].type == WATCHY_PACKAGE_TYPE_WATCHFACE);
+    CHECK(catalog.packages[0].active && !catalog.packages[0].pending &&
+          !catalog.packages[0].quarantined);
+    CHECK(strcmp(catalog.packages[1].package_ref, "utility.app@2") == 0);
+    CHECK(strcmp(catalog.packages[1].name, "Timer") == 0);
+    CHECK(strcmp(catalog.packages[1].version, "2") == 0);
+    CHECK(catalog.packages[1].type == WATCHY_PACKAGE_TYPE_APP);
+    CHECK(!catalog.packages[1].active && !catalog.packages[1].pending &&
+          catalog.packages[1].quarantined);
+    CHECK(strcmp(catalog.packages[2].package_ref, "clock.pending@3") == 0);
+    CHECK(strcmp(catalog.packages[2].name, "Orbit") == 0);
+    CHECK(strcmp(catalog.packages[2].version, "3") == 0);
+    CHECK(!catalog.packages[2].active && catalog.packages[2].pending &&
+          !catalog.packages[2].quarantined);
+    return 0;
+}
+
+static int test_catalog_snapshot_accepts_exact_metadata_bounds(void) {
+    char name[WATCHY_PACKAGE_NAME_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
+    char package_ref[WATCHY_PACKAGE_REF_MAX + 1u];
+    char manifest[512];
+    fake_manifest_record_t record;
+    fake_manifest_store_t manifests = {.records = &record, .count = 1u};
+    fake_index_store_t store = {0};
+    watchy_package_index_store_t api = fake_store_api(&store);
+    watchy_package_index_manager_t manager;
+    watchy_package_manifest_t manifest_workspace;
+    watchy_package_catalog_t catalog;
+
+    memset(name, 'N', WATCHY_PACKAGE_NAME_MAX);
+    name[WATCHY_PACKAGE_NAME_MAX] = '\0';
+    memset(version, '7', WATCHY_PACKAGE_VERSION_MAX);
+    version[WATCHY_PACKAGE_VERSION_MAX] = '\0';
+    CHECK(snprintf(package_ref, sizeof(package_ref), "bounded.face@%s", version) > 0);
+    CHECK(snprintf(manifest, sizeof(manifest),
+                   "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+                   "\"id\":\"bounded.face\",\"max_runtime_bytes\":1,\"name\":\"%s\","
+                   "\"type\":\"watchface\",\"version\":\"%s\"}", name, version) > 0);
+    record = (fake_manifest_record_t){
+        .package_ref = package_ref,
+        .bytes = (const uint8_t *)manifest,
+        .size = strlen(manifest),
+    };
+    CHECK(watchy_package_index_init(&manager, &api) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, package_ref) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_catalog_snapshot(&manager, fake_manifest_read,
+                                           &manifests, &manifest_workspace, &catalog) ==
+          WATCHY_PACKAGE_OK);
+    CHECK(strlen(catalog.packages[0].name) == WATCHY_PACKAGE_NAME_MAX);
+    CHECK(catalog.packages[0].name[WATCHY_PACKAGE_NAME_MAX] == '\0');
+    CHECK(strlen(catalog.packages[0].version) == WATCHY_PACKAGE_VERSION_MAX);
+    CHECK(catalog.packages[0].version[WATCHY_PACKAGE_VERSION_MAX] == '\0');
+    return 0;
+}
+
+static int test_catalog_snapshot_rejects_untrusted_metadata_without_partial_output(void) {
+    static const char valid_manifest[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"valid.face\",\"max_runtime_bytes\":1,\"name\":\"Valid\","
+        "\"type\":\"watchface\",\"version\":\"1\"}";
+    static const char empty_name[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"\","
+        "\"type\":\"watchface\",\"version\":\"1\"}";
+    static const char missing_name[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,"
+        "\"type\":\"watchface\",\"version\":\"1\"}";
+    static const char empty_version[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"type\":\"watchface\",\"version\":\"\"}";
+    static const char missing_version[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"type\":\"watchface\"}";
+    static const char duplicate_name[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"name\":\"Duplicate\",\"type\":\"watchface\",\"version\":\"1\"}";
+    static const char malformed_json[] = "{not-json";
+    static const char id_mismatch[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"other.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"type\":\"watchface\",\"version\":\"1\"}";
+    static const char version_mismatch[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"type\":\"watchface\",\"version\":\"2\"}";
+    static const char type_mismatch[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"type\":\"app\",\"version\":\"1\"}";
+    static const char too_long_name[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,"
+        "\"name\":\"NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN\","
+        "\"type\":\"watchface\",\"version\":\"1\"}";
+    static const char too_long_version[] =
+        "{\"abi_major\":1,\"abi_minor\":0,\"assets\":[],\"capabilities\":0,"
+        "\"id\":\"bad.face\",\"max_runtime_bytes\":1,\"name\":\"Bad\","
+        "\"type\":\"watchface\",\"version\":\"777777777777777777777777777777777\"}";
+    struct invalid_case {
+        const char *label;
+        const uint8_t *bytes;
+        size_t size;
+        watchy_package_status_t read_status;
+        watchy_package_status_t expected;
+    } cases[] = {
+        {"empty name", (const uint8_t *)empty_name, sizeof(empty_name) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"missing name", (const uint8_t *)missing_name, sizeof(missing_name) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"empty version", (const uint8_t *)empty_version, sizeof(empty_version) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"missing version", (const uint8_t *)missing_version, sizeof(missing_version) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"duplicate metadata", (const uint8_t *)duplicate_name, sizeof(duplicate_name) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"malformed json", (const uint8_t *)malformed_json, sizeof(malformed_json) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"name one byte too long", (const uint8_t *)too_long_name, sizeof(too_long_name) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"version one byte too long", (const uint8_t *)too_long_version,
+         sizeof(too_long_version) - 1u, WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"id mismatch", (const uint8_t *)id_mismatch, sizeof(id_mismatch) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"version mismatch", (const uint8_t *)version_mismatch, sizeof(version_mismatch) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"type mismatch", (const uint8_t *)type_mismatch, sizeof(type_mismatch) - 1u,
+         WATCHY_PACKAGE_OK, WATCHY_PACKAGE_ERR_MANIFEST},
+        {"unreadable store", NULL, 0u, WATCHY_PACKAGE_ERR_STORE, WATCHY_PACKAGE_ERR_STORE},
+    };
+    fake_index_store_t index_store = {0};
+    watchy_package_index_store_t api = fake_store_api(&index_store);
+    watchy_package_index_manager_t manager;
+    watchy_package_manifest_t manifest_workspace;
+    watchy_package_catalog_t catalog;
+
+    CHECK(watchy_package_index_init(&manager, &api) == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, "valid.face@1") == WATCHY_PACKAGE_OK);
+    CHECK(watchy_package_register_installed(&manager, "bad.face@1") == WATCHY_PACKAGE_OK);
+    for (size_t test = 0u; test < sizeof(cases) / sizeof(cases[0]); ++test) {
+        const fake_manifest_record_t records[] = {
+            MANIFEST_RECORD("valid.face@1", valid_manifest),
+            {
+                .package_ref = "bad.face@1",
+                .bytes = cases[test].bytes,
+                .size = cases[test].size,
+                .read_status = cases[test].read_status,
+            },
+        };
+        const fake_manifest_store_t manifests = {.records = records, .count = 2u};
+        watchy_package_status_t status;
+        memset(&catalog, 0xa5, sizeof(catalog));
+        status = watchy_package_catalog_snapshot(&manager, fake_manifest_read,
+                                                  (void *)&manifests, &manifest_workspace,
+                                                  &catalog);
+        if (status != cases[test].expected) {
+            fprintf(stderr, "catalog case %s: got %d, want %d\n",
+                    cases[test].label, status, cases[test].expected);
+        }
+        CHECK(status == cases[test].expected);
+        CHECK(bytes_are_zero(&catalog, sizeof(catalog)));
+    }
+
+    memset(&catalog, 0xa5, sizeof(catalog));
+    const fake_manifest_record_t only_valid[] = {
+        MANIFEST_RECORD("valid.face@1", valid_manifest),
+    };
+    const fake_manifest_store_t missing = {.records = only_valid, .count = 1u};
+    CHECK(watchy_package_catalog_snapshot(&manager, fake_manifest_read,
+                                           (void *)&missing, &manifest_workspace, &catalog) ==
+          WATCHY_PACKAGE_ERR_STORE);
+    CHECK(bytes_are_zero(&catalog, sizeof(catalog)));
+    return 0;
 }
 
 static int test_selection_is_transactional_when_persistence_fails(void) {
@@ -2187,6 +2511,10 @@ int main(void) {
     CHECK(test_absolute_wpk_limit_is_80_kib_before_parsing() == 0);
     CHECK(test_complete_wpk_validation_rejects_asset_mismatch_and_trailing_data() == 0);
     CHECK(test_complete_wpk_validation_rejects_unsorted_assets() == 0);
+    CHECK(test_builtin_selection_clears_only_watchface_state_atomically() == 0);
+    CHECK(test_catalog_snapshot_exposes_validated_metadata_in_index_order() == 0);
+    CHECK(test_catalog_snapshot_accepts_exact_metadata_bounds() == 0);
+    CHECK(test_catalog_snapshot_rejects_untrusted_metadata_without_partial_output() == 0);
     CHECK(test_selection_is_transactional_when_persistence_fails() == 0);
     CHECK(test_unregister_removes_health_and_all_selection_references_transactionally() == 0);
     CHECK(test_empty_index_pruning_and_last_version_state_decisions_are_transactional() == 0);
@@ -2202,6 +2530,6 @@ int main(void) {
     CHECK(test_install_duplicate_and_unindexed_final_are_never_deleted() == 0);
     CHECK(test_install_validates_the_exclusive_stage_readback() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 45 package tests");
+    puts("PASS 49 package tests");
     return 0;
 }

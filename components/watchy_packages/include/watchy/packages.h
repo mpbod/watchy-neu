@@ -258,6 +258,7 @@ const watchy_package_index_t *watchy_package_index_snapshot(
     const watchy_package_index_manager_t *manager);
 watchy_package_status_t watchy_package_select_watchface(watchy_package_index_manager_t *manager,
                                                         const char *package_ref);
+watchy_package_status_t watchy_package_select_builtin(watchy_package_index_manager_t *manager);
 watchy_package_status_t watchy_package_promote_pending(watchy_package_index_manager_t *manager,
                                                        const char *package_ref);
 watchy_package_status_t watchy_package_rollback_pending(watchy_package_index_manager_t *manager,

@@ -607,7 +607,9 @@ static bool split_package_ref(const char *package_ref,
     return true;
 }
 
-static bool read_manifest(const char *path, watchy_package_manifest_t *out_manifest) {
+static watchy_package_status_t read_manifest_status(
+    const char *path,
+    watchy_package_manifest_t *out_manifest) {
     uint8_t *bytes;
     struct stat info;
     FILE *file;
@@ -615,22 +617,43 @@ static bool read_manifest(const char *path, watchy_package_manifest_t *out_manif
     bool read_ok;
     if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || S_ISLNK(info.st_mode) ||
         info.st_size <= 0 || info.st_size > (off_t)WATCHY_PACKAGE_MANIFEST_BYTES_MAX) {
-        return false;
+        return WATCHY_PACKAGE_ERR_STORE;
     }
     bytes = malloc((size_t)info.st_size);
     file = bytes != NULL ? fopen(path, "rb") : NULL;
     if (file == NULL) {
         free(bytes);
-        return false;
+        return WATCHY_PACKAGE_ERR_STORE;
     }
     read_ok = fread(bytes, 1u, (size_t)info.st_size, file) == (size_t)info.st_size;
     if (fclose(file) != 0 || !read_ok) {
         free(bytes);
-        return false;
+        return WATCHY_PACKAGE_ERR_STORE;
     }
     status = watchy_package_manifest_parse(bytes, (size_t)info.st_size, out_manifest);
     free(bytes);
-    return status == WATCHY_PACKAGE_OK;
+    return status;
+}
+
+static bool read_manifest(const char *path, watchy_package_manifest_t *out_manifest) {
+    return read_manifest_status(path, out_manifest) == WATCHY_PACKAGE_OK;
+}
+
+static watchy_package_status_t read_installed_manifest(
+    void *context,
+    const char *package_ref,
+    watchy_package_manifest_t *out_manifest) {
+    char identifier[WATCHY_PACKAGE_ID_MAX + 1u];
+    char version[WATCHY_PACKAGE_VERSION_MAX + 1u];
+    char path[WATCHY_IDF_PATH_MAX];
+    (void)context;
+    if (package_ref == NULL || out_manifest == NULL ||
+        !split_package_ref(package_ref, identifier, version) ||
+        snprintf(path, sizeof(path), "/data/packages/%s/%s/manifest.json",
+                 identifier, version) >= (int)sizeof(path)) {
+        return WATCHY_PACKAGE_ERR_MANIFEST;
+    }
+    return read_manifest_status(path, out_manifest);
 }
 
 static bool validate_installed_elf(const char *path, uint32_t declared_runtime_bytes) {
@@ -1268,8 +1291,18 @@ watchy_package_status_t watchy_packages_select_watchface(const char *package_ref
     return status;
 }
 
+watchy_package_status_t watchy_packages_select_builtin(void) {
+    watchy_package_status_t status = watchy_packages_runtime_init();
+    if (status != WATCHY_PACKAGE_OK ||
+        xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
+        return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_STATE;
+    }
+    status = watchy_package_select_builtin(&s_index);
+    (void)xSemaphoreGive(s_package_mutex);
+    return status;
+}
+
 watchy_package_status_t watchy_packages_snapshot(watchy_package_catalog_t *out_catalog) {
-    const watchy_package_index_t *index;
     watchy_package_status_t status;
     if (out_catalog == NULL) {
         return WATCHY_PACKAGE_ERR_ARGUMENT;
@@ -1280,18 +1313,10 @@ watchy_package_status_t watchy_packages_snapshot(watchy_package_catalog_t *out_c
         xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
         return status != WATCHY_PACKAGE_OK ? status : WATCHY_PACKAGE_ERR_STATE;
     }
-    index = watchy_package_index_snapshot(&s_index);
-    out_catalog->count = index->installed_count;
-    for (size_t record = 0u; record < index->installed_count; ++record) {
-        watchy_package_info_t *info = &out_catalog->packages[record];
-        memcpy(info->package_ref, index->installed[record], sizeof(info->package_ref));
-        info->type = index->installed_types[record];
-        info->active = strcmp(index->active_watchface, info->package_ref) == 0;
-        info->pending = strcmp(index->pending_watchface, info->package_ref) == 0;
-        info->quarantined = watchy_package_is_quarantined(&s_index, info->package_ref);
-    }
+    status = watchy_package_catalog_snapshot(&s_index, read_installed_manifest,
+                                              NULL, &s_reconcile_manifest, out_catalog);
     (void)xSemaphoreGive(s_package_mutex);
-    return WATCHY_PACKAGE_OK;
+    return status;
 }
 
 watchy_package_status_t watchy_packages_remove(const char *package_ref) {
@@ -1492,15 +1517,20 @@ bool watchy_packages_link_smoke(void) {
     watchy_package_status_t (*install_fn)(uint8_t *, size_t, char *) =
         watchy_packages_install_blob;
     watchy_package_status_t (*select_fn)(const char *) = watchy_packages_select_watchface;
+    watchy_package_status_t (*builtin_fn)(void) = watchy_packages_select_builtin;
     watchy_package_status_t (*event_fn)(const watchy_event_t *) = watchy_packages_runner_event;
     uintptr_t install_address = 0u;
     uintptr_t select_address = 0u;
+    uintptr_t builtin_address = 0u;
     uintptr_t event_address = 0u;
     _Static_assert(sizeof(install_fn) == sizeof(install_address), "function pointer size");
     _Static_assert(sizeof(select_fn) == sizeof(select_address), "function pointer size");
+    _Static_assert(sizeof(builtin_fn) == sizeof(builtin_address), "function pointer size");
     _Static_assert(sizeof(event_fn) == sizeof(event_address), "function pointer size");
     memcpy(&install_address, &install_fn, sizeof(install_address));
     memcpy(&select_address, &select_fn, sizeof(select_address));
+    memcpy(&builtin_address, &builtin_fn, sizeof(builtin_address));
     memcpy(&event_address, &event_fn, sizeof(event_address));
-    return install_address != 0u && select_address != 0u && event_address != 0u;
+    return install_address != 0u && select_address != 0u && builtin_address != 0u &&
+           event_address != 0u;
 }
