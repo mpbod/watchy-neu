@@ -291,6 +291,25 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(flash.FlashSafetyError, "exactly"):
                 flash.validate_partition_table(table)
 
+    def test_five_field_partition_row_fails_closed_before_any_command(self):
+        import tools.flash_factory as flash
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = self.write_partition_table(root)
+            table.write_text(
+                table.read_text().replace("nvs,data,nvs,0x9000,0x6000,",
+                                          "nvs,data,nvs,0x9000,0x6000"),
+                encoding="utf-8")
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root)
+            commands = []
+            with self.assertRaisesRegex(flash.FlashSafetyError, "six fields"):
+                flash.flash_factory(
+                    "/dev/fake", image, table,
+                    runner=lambda command, **_kwargs: commands.append(command),
+                    build_dir=build)
+            self.assertEqual(commands, [])
+
     def test_fake_serial_run_builds_then_erases_only_exact_nvs_before_all_images(self):
         import tools.flash_factory as flash
         with tempfile.TemporaryDirectory() as directory:
@@ -321,7 +340,15 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             self.assertEqual(commands[0], ["platformio", "run", "-e", "watchy_v2"])
             self.assertEqual(commands[1], ["platformio", "device", "list", "--json-output"])
             self.assertIn("chip-id", commands[2])
-            self.assertEqual(commands[3][-3:], ["erase-region", "0x9000", "0x6000"])
+            self.assertEqual(commands[2][commands[2].index("--after") + 1],
+                             "no-reset")
+            self.assertEqual(commands[3][-5:],
+                             ["--after", "no-reset", "erase-region", "0x9000", "0x6000"])
+            self.assertIn("--before", commands[3])
+            self.assertEqual(commands[3][commands[3].index("--before") + 1],
+                             "default-reset")
+            self.assertEqual(commands[4][commands[4].index("--after") + 1],
+                             "hard-reset")
             self.assertEqual(commands[4][-9:], [
                 "write-flash",
                 "0x1000", str((build / "bootloader.bin").resolve()),
@@ -330,6 +357,44 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 "0x1d0000", str(image.resolve()),
             ])
             self.assertFalse(any("erase-flash" in command for command in commands))
+
+    def test_retained_marker_is_erased_without_reset_before_pristine_seed_write(self):
+        import tools.flash_factory as flash
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            table = self.write_partition_table(root)
+            image = self.write_seed_image(root)
+            build = self.write_flash_images(root)
+            state = {"marker": "retained", "seed": "old", "mutating": False}
+            reset_observations = []
+
+            def fake_runner(command, **_kwargs):
+                if command[1:4] == ["device", "list", "--json-output"]:
+                    stdout = json.dumps([{"port": "/dev/fake", "description": "USB",
+                                          "hwid": "USB VID:PID=1A86:55D4 SER=ABC"}])
+                elif "chip-id" in command:
+                    stdout = "Chip is ESP32-PICO-D4 (revision v1.0)"
+                    self.assertEqual(command[command.index("--after") + 1], "no-reset")
+                else:
+                    stdout = ""
+                if "erase-region" in command:
+                    state["mutating"] = True
+                    self.assertEqual(command[command.index("--after") + 1], "no-reset")
+                    state["marker"] = "erased"
+                elif "write-flash" in command:
+                    self.assertTrue(state["mutating"])
+                    self.assertEqual(state["marker"], "erased")
+                    state["seed"] = "pristine"
+                    self.assertEqual(command[command.index("--after") + 1], "hard-reset")
+                    reset_observations.append((state["marker"], state["seed"]))
+                elif state["mutating"]:
+                    self.fail("no command may run between NVS erase and complete image write")
+                return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+            flash.flash_factory("/dev/fake", image, table, runner=fake_runner,
+                                platformio="platformio", python="python3",
+                                build_dir=build)
+            self.assertEqual(reset_observations, [("erased", "pristine")])
 
     def test_chip_identity_accepts_complete_classic_set_and_rejects_new_families(self):
         import tools.flash_factory as flash
@@ -439,7 +504,8 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             rendered = output.getvalue()
             self.assertIn(hashlib.sha256(image.read_bytes()).hexdigest(), rendered)
             self.assertIn("platformio run -e watchy_v2", rendered)
-            self.assertIn("erase-region 0x9000 0x6000", rendered)
+            self.assertIn("--after no-reset erase-region 0x9000 0x6000", rendered)
+            self.assertIn("--after hard-reset write-flash 0x1000", rendered)
             self.assertIn("write-flash 0x1000", rendered)
             self.assertIn("0x1d0000", rendered)
 

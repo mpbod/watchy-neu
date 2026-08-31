@@ -60,8 +60,10 @@ staging tree plus `build/factory-seed/littlefs.bin`. A normal
 `python3 tools/flash_factory.py --port /dev/...` validates the classic ESP32
 identity, the exact four-partition Watchy layout and binary table, and hashes
 every image before device mutation. It erases only NVS at `0x9000`/`0x6000`
-before writing bootloader, partition table, firmware, and the exact-size
-LittleFS image at `0x1d0000`/`0x230000`. This factory operation resets settings,
+with esptool's post-operation reset disabled, then writes bootloader, partition
+table, firmware, and the exact-size LittleFS image at
+`0x1d0000`/`0x230000`. Only that complete final write resets the ESP32. This
+factory operation resets settings,
 Wi-Fi credentials, package index/health state, and the seed marker; routine
 `platformio run -e watchy_v2 -t upload` remains firmware-only and preserves
 NVS/LittleFS.

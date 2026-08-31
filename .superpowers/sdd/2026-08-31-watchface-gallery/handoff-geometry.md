@@ -11,7 +11,7 @@ Source: `/Users/maxb/Downloads/Pebble Watch Faces (standalone).html`, rendered a
 ## Term 01
 
 - Canvas white, 12px padding, Plex Mono 11px, line-height 1.55.
-- Inverse header with 2px vertical and 5px horizontal padding, 9px/600, 0.1em tracking, and 8px bottom gap. Left `WATCH.LOCAL`; right honest Bluetooth only. Battery is deliberately omitted because Term 01 capability 771 excludes Battery.
+- Inverse header with 2px vertical and 5px horizontal padding, 9px/600, 0.1em tracking, and 8px bottom gap. Left `WATCH.LOCAL`; right honest Bluetooth only. Battery is deliberately omitted because least-privilege Term 01 capability 259 excludes Battery.
 - Command rows: `$ date`, bold date; 4px gap; `$ time`, 30px/700 time; 4px gap; `$ wx`, bold placeholder `NO DATA --°`.
 - Bottom prompt has a solid 7 x 13 cursor. No animation.
 

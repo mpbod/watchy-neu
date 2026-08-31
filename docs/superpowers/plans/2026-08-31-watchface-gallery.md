@@ -649,7 +649,7 @@ On non-safe boot with no `factory_seed` key in the existing `watchy_pkg` NVS nam
 
 - [ ] **Step 4: Generate the LittleFS target and explicit flash tool**
 
-`build_factory_seed.py` builds the staging tree and invokes the ESP-IDF LittleFS partition image target. `flash_factory.py` builds and hashes the local images, verifies the exact CSV and binary partition layout plus classic-ESP32 target, erases only NVS at `0x9000`/`0x6000`, then writes bootloader, partition table, firmware, and the exact `0x230000`-byte LittleFS image at `0x1d0000`. This intentionally clears settings, Wi-Fi credentials, package index/health state, and the seed marker so every factory reinstall imports a coherent gallery. Normal `platformio run -e watchy_v2 -t upload` remains firmware-only.
+`build_factory_seed.py` builds the staging tree and invokes the ESP-IDF LittleFS partition image target. `flash_factory.py` builds and hashes the local images, verifies the exact CSV and binary partition layout plus classic-ESP32 target, erases only NVS at `0x9000`/`0x6000` with the post-operation reset disabled, then writes bootloader, partition table, firmware, and the exact `0x230000`-byte LittleFS image at `0x1d0000`. The ESP32 resets only after that complete final write, so the retained application cannot run between mutations. This intentionally clears settings, Wi-Fi credentials, package index/health state, and the seed marker so every factory reinstall imports a coherent gallery. Normal `platformio run -e watchy_v2 -t upload` remains firmware-only.
 
 - [ ] **Step 5: Run import, reproducibility, and size tests**
 

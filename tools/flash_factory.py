@@ -97,10 +97,8 @@ def validate_partition_table(path: Path) -> tuple[int, int]:
             if not raw.strip() or raw.lstrip().startswith("#"):
                 continue
             row = next(csv.reader(io.StringIO(raw), skipinitialspace=True))
-            if len(row) < 5:
-                raise FlashSafetyError("partition row has fewer than five fields")
-            if len(row) > 6 and any(field.strip() for field in row[6:]):
-                raise FlashSafetyError("partition row has unexpected trailing fields")
+            if len(row) != 6:
+                raise FlashSafetyError("partition row must contain exactly six fields")
             rows.append(tuple(field.strip() for field in row[:6]))
     except (OSError, UnicodeError, csv.Error) as error:
         raise FlashSafetyError(f"cannot read partition table: {error}") from error
@@ -187,15 +185,16 @@ def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
         raise FlashSafetyError("--port must be one explicit /dev/ serial path without whitespace")
     image = Path(image).resolve()
     build_dir = Path(build_dir).resolve()
-    chip = [python, "-m", "esptool", "--chip", "esp32", "--port", port, "chip-id"]
+    esptool = [python, "-m", "esptool", "--chip", "esp32", "--port", port,
+               "--before", "default-reset"]
+    chip = esptool + ["--after", "no-reset", "chip-id"]
     return [
         [platformio, "run", "-e", "watchy_v2"],
         [platformio, "device", "list", "--json-output"],
         chip,
-        [python, "-m", "esptool", "--chip", "esp32", "--port", port,
-         "erase-region", f"0x{NVS_OFFSET:x}", f"0x{NVS_SIZE:x}"],
-        [python, "-m", "esptool", "--chip", "esp32", "--port", port,
-         "write-flash",
+        esptool + ["--after", "no-reset", "erase-region",
+                   f"0x{NVS_OFFSET:x}", f"0x{NVS_SIZE:x}"],
+        esptool + ["--after", "hard-reset", "write-flash",
          f"0x{BOOTLOADER_OFFSET:x}", str(build_dir / "bootloader.bin"),
          f"0x{PARTITION_TABLE_OFFSET:x}", str(build_dir / "partitions.bin"),
          f"0x{FACTORY_OFFSET:x}", str(build_dir / "firmware.bin"),

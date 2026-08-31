@@ -151,7 +151,8 @@ platformio run -e watchy_v2 -t upload
 
 Factory flashing builds and hashes the firmware images, validates the exact
 Watchy partition table and target identity, erases only the exact 24 KiB NVS
-partition, and writes firmware plus the audited LittleFS image. It resets all
+partition without releasing the ESP32 from its bootloader, then writes firmware
+plus the audited LittleFS image and resets only after that complete write. It resets all
 settings, Wi-Fi credentials, the package index/health state, and the factory
 seed marker before first-boot import. It is destructive to package storage and
 requires an explicit discovered classic ESP32 serial device—there is no
