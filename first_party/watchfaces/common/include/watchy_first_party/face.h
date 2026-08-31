@@ -26,6 +26,8 @@ struct watchy_face_data_t {
 
 fixed_text format_hhmm(const watchy_time_t &time, bool twelve_hour) noexcept;
 fixed_text format_date(const watchy_time_t &time) noexcept;
+fixed_text format_day_month(const watchy_time_t &time) noexcept;
+fixed_text format_day_month_year(const watchy_time_t &time) noexcept;
 fixed_text format_weekday(const watchy_time_t &time) noexcept;
 bool valid_time(const watchy_time_t &time) noexcept;
 bool format_hhmm_checked(const watchy_time_t &time, bool twelve_hour, fixed_text *out) noexcept;

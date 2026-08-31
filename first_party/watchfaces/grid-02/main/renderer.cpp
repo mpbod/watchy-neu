@@ -8,24 +8,21 @@ static const char kAlarm[] = "--:--";
 
 static void draw_grid02(watchy_canvas_t *canvas, const watchy_time_t &time) noexcept {
     watchy_ui_fill(canvas, false);
-    watchy_text_style_t rail = grid_value_style();
-    watchy_text_style_t heading = grid_heading_style();
+    watchy_text_style_t rail = grid_small_style();
     watchy_text_style_t body = grid_body_style();
     watchy_text_style_t large = grid_rail_clock_style();
-    const fixed_text date = format_date(time);
-    char date_chars[11]{};
-    for (uint8_t i = 0u; i < 10u; ++i) date_chars[i] = date.value[i];
-    for (uint8_t i = 0u; i < 10u; ++i) {
+    const fixed_text date = format_day_month_year(time);
+    char date_chars[16]{};
+    for (uint8_t i = 0u; i < 15u; ++i) date_chars[i] = date.value[i];
+    for (uint8_t i = 0u; i < 15u; ++i) {
         char glyph[2] = {date_chars[i], '\0'};
-        watchy_ui_draw_text_font(canvas, 5, static_cast<int16_t>(25 + i * 18), glyph, &rail);
+        watchy_ui_draw_text_font(canvas, 9, static_cast<int16_t>(12 + i * 12), glyph, &rail);
     }
-    watchy_ui_rect(canvas, 29, 8, 1, 184, true);
-    watchy_ui_draw_text_font(canvas, 43, 29, "AGENDA", &heading);
-    watchy_ui_rule(canvas, 43, 36, 145, 1u, true);
-    watchy_ui_draw_text_font(canvas, 43, 62, kAgenda, &body);
-    watchy_ui_draw_text_font(canvas, 43, 84, kAlarm, &body);
-    watchy_ui_draw_text_font(canvas, 43, 106, "NEXT", &heading);
-    watchy_ui_draw_text_centered(canvas, 119, 182, format_hhmm(time, false).c_str(), &large);
+    watchy_ui_rect(canvas, 25, 0, 1, 200, true);
+    watchy_ui_draw_text_font(canvas, 40, 28, "NEXT", &body);
+    watchy_ui_draw_text_font(canvas, 40, 54, kAgenda, &body);
+    watchy_ui_draw_text_font(canvas, 40, 76, kAlarm, &body);
+    watchy_ui_draw_text_centered(canvas, 111, 184, format_hhmm(time, false).c_str(), &large);
 }
 }
 

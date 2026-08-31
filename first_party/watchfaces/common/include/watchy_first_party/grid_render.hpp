@@ -37,6 +37,10 @@ inline watchy_text_style_t grid_heading_style(bool black = true) noexcept {
     return {&watchy_font_plex_11_semibold, 1, black, false};
 }
 
+inline watchy_text_style_t grid_small_style(bool black = true) noexcept {
+    return {&watchy_font_plex_8_semibold, 0, black, false};
+}
+
 inline watchy_text_style_t grid_body_style(bool black = true) noexcept {
     return {&watchy_font_plex_13_regular, 0, black, false};
 }
@@ -45,12 +49,20 @@ inline watchy_text_style_t grid_value_style(bool black = true) noexcept {
     return {&watchy_font_plex_15_medium, 0, black, false};
 }
 
+inline watchy_text_style_t grid_day_style(bool black = true) noexcept {
+    return {&watchy_font_plex_22_bold, 0, black, false};
+}
+
 inline watchy_text_style_t grid_large_clock_style(bool black = true) noexcept {
-    return {&watchy_font_heros_72_bold, 0, black, false};
+    return {&watchy_font_heros_62_bold, -10, black, false};
 }
 
 inline watchy_text_style_t grid_rail_clock_style(bool black = true) noexcept {
-    return {&watchy_font_heros_62_bold, 0, black, false};
+    return {&watchy_font_heros_62_regular, -14, black, false};
+}
+
+inline watchy_text_style_t grid_modular_clock_style(bool black = true) noexcept {
+    return {&watchy_font_heros_74_regular, -13, black, false};
 }
 
 inline void grid_time_mode(void *user_data, const watchy_time_t &time,
@@ -65,11 +77,11 @@ inline void grid_invalid_mode(void *user_data, watchy_refresh_mode_t *mode) noex
 }
 
 inline void grid_footer_rule(watchy_canvas_t *canvas) noexcept {
-    watchy_ui_rule(canvas, 8, 151, 184, 1u, true);
-    watchy_ui_rect(canvas, 8, 151, 1, 46, true);
-    watchy_ui_rect(canvas, 71, 151, 1, 46, true);
-    watchy_ui_rect(canvas, 135, 151, 1, 46, true);
-    watchy_ui_rect(canvas, 191, 151, 1, 46, true);
+    watchy_ui_rule(canvas, 14, 158, 172, 1u, true);
+    watchy_ui_rect(canvas, 14, 158, 1, 41, true);
+    watchy_ui_rect(canvas, 71, 158, 1, 41, true);
+    watchy_ui_rect(canvas, 128, 158, 1, 41, true);
+    watchy_ui_rect(canvas, 185, 158, 1, 41, true);
 }
 
 inline void grid_draw_battery(watchy_canvas_t *canvas, void *user_data,

@@ -10,27 +10,23 @@ static void draw_grid01(watchy_canvas_t *canvas, void *user_data,
                         const watchy_time_t &time) noexcept {
     watchy_ui_fill(canvas, false);
     watchy_text_style_t header = grid_heading_style();
-    watchy_text_style_t mono = grid_body_style();
     watchy_text_style_t value = grid_value_style();
     watchy_text_style_t large = grid_large_clock_style();
     const fixed_text weekday = format_weekday(time);
-    const fixed_text date = format_date(time);
+    const fixed_text date = format_day_month(time);
     const fixed_text clock = format_hhmm(time, false);
-    watchy_ui_draw_text_font(canvas, 8, 15, weekday.c_str(), &header);
-    watchy_ui_draw_text_font(canvas, 45, 15, date.c_str(), &header);
-    watchy_ui_draw_text_right(canvas, 192, 15,
-                              grid_bluetooth(user_data) ? "BT·ON" : kBluetoothPlaceholder,
-                              &mono);
-    watchy_ui_rule(canvas, 8, 22, 184, 1u, true);
-    watchy_ui_draw_text_centered(canvas, 100, 105, clock.c_str(), &large);
+    watchy_ui_draw_text_font(canvas, 14, 23, weekday.c_str(), &header);
+    watchy_ui_draw_text_right(canvas, 186, 23, date.c_str(), &header);
+    watchy_ui_rule(canvas, 14, 32, 172, 1u, true);
+    watchy_ui_draw_text_centered(canvas, 100, 111, clock.c_str(), &large);
     grid_footer_rule(canvas);
-    watchy_ui_draw_text_font(canvas, 15, 166, "TEMP", &header);
-    watchy_ui_draw_text_font(canvas, 79, 166, "BATT", &header);
-    watchy_ui_draw_text_font(canvas, 145, 166, "LINK", &header);
-    watchy_ui_draw_text_font(canvas, 15, 187, kTemperaturePlaceholder, &value);
-    grid_draw_battery(canvas, user_data, 79, 187);
-    watchy_ui_draw_text_font(canvas, 145, 187,
-                             grid_bluetooth(user_data) ? "BT·ON" : kBluetoothPlaceholder, &value);
+    watchy_ui_draw_text_font(canvas, 14, 174, "TEMP", &header);
+    watchy_ui_draw_text_font(canvas, 76, 174, "BATT", &header);
+    watchy_ui_draw_text_font(canvas, 140, 174, "LINK", &header);
+    watchy_ui_draw_text_font(canvas, 14, 196, kTemperaturePlaceholder, &value);
+    grid_draw_battery(canvas, user_data, 76, 196);
+    watchy_ui_draw_text_right(canvas, 184, 196,
+                              grid_bluetooth(user_data) ? "BT·ON" : kBluetoothPlaceholder, &value);
 }
 }
 

@@ -22,7 +22,9 @@
     {"id":"heros_40_regular","font":"texgyreheros-regular.otf","px":40,"threshold":150,"glyphs":" 0123456789:"},
     {"id":"heros_46_regular","font":"texgyreheros-regular.otf","px":46,"threshold":150,"glyphs":" 0123456789:"},
     {"id":"heros_60_bold","font":"texgyreheros-bold.otf","px":60,"threshold":128,"glyphs":" 0123456789:"},
+    {"id":"heros_62_regular","font":"texgyreheros-regular.otf","px":62,"threshold":150,"glyphs":" 0123456789:"},
     {"id":"heros_62_bold","font":"texgyreheros-bold.otf","px":62,"threshold":128,"glyphs":" 0123456789:"},
+    {"id":"heros_74_regular","font":"texgyreheros-regular.otf","px":74,"threshold":150,"glyphs":" 0123456789:"},
     {"id":"heros_72_bold","font":"texgyreheros-bold.otf","px":72,"threshold":128,"glyphs":" 0123456789:"},
     {"id":"heros_82_bold","font":"texgyreheros-bold.otf","px":82,"threshold":128,"glyphs":" 0123456789"}
   ]

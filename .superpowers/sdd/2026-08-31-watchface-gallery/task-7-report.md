@@ -82,3 +82,73 @@ compile of generated fonts passed. Host/Python reruns are recorded in
 
 The package projects, manifests, renderers, common Grid rendering helpers,
 approved PBM goldens, and focused host coverage are included in this change.
+
+## Visual-alignment fix round (2026-09-01)
+
+The native-scale handoff review corrected the initial geometry drift before
+freezing the PBMs:
+
+- Grid 01 now uses a 14px inset, `MON` at left and `DD MON` at right, a bold
+  Heros 62 clock with the handoff whitespace, and an inset footer whose right
+  link value is right-aligned to avoid clipping.
+- Grid 02 now uses a 26px vertical `MON DD MON YYYY` rail, `NEXT` followed by
+  `NO EVENT` and `--:--`, no agenda heading/rule, and a regular Heros 62
+  bottom-baseline clock.
+- Grid 03 now ends its top row at y=118, uses regular Heros 74 numerals,
+  weekday/day/month date content, weather placeholders, and a fixed-offset TYO
+  clock without fake battery or displaced UTC detail.
+
+Only deterministic Heros regular 62px and 74px strikes were added. Their
+generated C outputs retain the existing source/license provenance banners.
+
+### Commands and results
+
+```text
+python3 tools/generate_fonts.py
+python3 tools/generate_fonts.py --check
+font strikes are up to date
+
+/Users/maxb/.platformio/packages/tool-cmake/bin/cmake --build build/host-make --target watchy_first_party_face_tests -j2
+./build/host-make/tests/host/watchy_first_party_face_tests
+100% built; test exited 0
+
+WATCHY_UPDATE_GOLDENS=1 ./build/host-make/tests/host/watchy_first_party_face_tests
+./build/host-make/tests/host/watchy_first_party_face_tests
+goldens regenerated; clean comparison exited 0
+
+env IDF_PATH=/Users/maxb/.platformio/packages/framework-espidf \
+  IDF_PYTHON_ENV_PATH=/Users/maxb/.espressif/python_env/idf5.5_py3.14_env \
+  ESP_IDF_VERSION=5.5.0 \
+  ESP_ROM_ELF_DIR=/Users/maxb/.platformio/packages/tool-esp-rom-elfs \
+  PATH=/Users/maxb/.platformio/packages/toolchain-xtensa-esp-elf/bin:/Users/maxb/.platformio/packages/tool-ninja:/Users/maxb/.platformio/packages/tool-cmake/bin:$PATH \
+  python3 tools/build_first_party.py --only grid-01 grid-02 grid-03 --reproducible
+EXIT=0
+all three projects: clean round 1 + clean round 2, Xtensa ELF audit,
+WPK build/verify, and byte reproducibility comparison passed
+```
+
+Final published package audits and hashes:
+
+| package | WPK bytes | SHA-256 |
+| --- | ---: | --- |
+| Grid 01 | 23,912 | `7730424423d7595896f4394c54aae98db8bbb2193a6705902984ecb5d03b6c28` |
+| Grid 02 | 18,036 | `e5342077618509c64fd3e834c38448d66ddca636e4cd0552eaa82154ca02c1c8` |
+| Grid 03 | 21,708 | `c3353d5d52e0fef02503d707856118991dbb3db3c6043061f0f38d2577f846bb` |
+
+Each published WPK independently re-verified as ABI 1.2 with its expected
+identifier/version; the build log reports `exports=watchy_package_entry
+undefined=0 symbol_relocations=0` for each ELF. Native 1x and nearest-neighbor
+4x PNGs are under `build/task7-artifacts/` and were inspected at all panel
+edges. No Task 8 or Task 9 files were touched. Per the direct fix-round
+instruction, no additional full-suite or firmware command was run after the
+milestone gate.
+
+### Self-review
+
+The independent host assertions cover the fixed fixture, descriptor metadata,
+font roles, content fit, region geometry, full-clear behavior, exact standards
+PBM polarity, and Full/Partial/Full refresh sequencing. Optional capability
+failures still resolve to honest placeholders and Grid 03 performs no battery
+or radio read. The remaining acceptance concern is ordinary device-side
+e-paper tuning of negative tracking at native scale; the reviewed 1x/4x
+artifacts show no panel-edge clipping, but physical hardware was not available.

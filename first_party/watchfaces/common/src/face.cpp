@@ -88,6 +88,37 @@ fixed_text format_date(const watchy_time_t &time) noexcept {
     return out;
 }
 
+fixed_text format_day_month(const watchy_time_t &time) noexcept {
+    fixed_text out;
+    if (!valid_time(time)) return out;
+    put_two(out.value, time.day);
+    out.value[2] = ' ';
+#if defined(__ELF__)
+    static const char *names[] __attribute__((section(".data"))) = {
+#else
+    static const char *const names[] = {
+#endif
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+    };
+    const char *month = names[time.month - 1u];
+    for (uint8_t i = 0u; i < 3u; ++i) out.value[3u + i] = month[i];
+    out.value[6] = '\0';
+    return out;
+}
+
+fixed_text format_day_month_year(const watchy_time_t &time) noexcept {
+    fixed_text out = format_day_month(time);
+    if (!valid_time(time)) return out;
+    out.value[6] = ' ';
+    out.value[7] = static_cast<char>('0' + (time.year / 1000) % 10);
+    out.value[8] = static_cast<char>('0' + (time.year / 100) % 10);
+    out.value[9] = static_cast<char>('0' + (time.year / 10) % 10);
+    out.value[10] = static_cast<char>('0' + time.year % 10);
+    out.value[11] = '\0';
+    return out;
+}
+
 fixed_text format_weekday(const watchy_time_t &time) noexcept {
 #if defined(__ELF__)
     /* The Xtensa ELF package loader relocates writable .data at load time;

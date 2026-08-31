@@ -79,6 +79,19 @@ static bool centered_text_ink_fits(const watchy_text_style_t &style,
                          left, top, right, bottom);
 }
 
+static bool right_text_ink_fits(const watchy_text_style_t &style,
+                                const char *text,
+                                int right_x,
+                                int baseline,
+                                int left,
+                                int top,
+                                int right,
+                                int bottom) {
+    const watchy_text_metrics_t metrics = watchy_ui_measure_text(&style, text);
+    return text_ink_fits(style, text, right_x - metrics.width, baseline,
+                         left, top, right, bottom);
+}
+
 static int read_pbm(const char *path, const uint8_t *fb) {
     FILE *file = std::fopen(path, "rb");
     char header[32]{};
@@ -171,14 +184,14 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
     assert(mode == WATCHY_REFRESH_FULL);
     assert(ink(framebuffer, 0, 0, 199, 199) > 80);
     if (face == 1) {
-        assert(ink(framebuffer, 0, 0, 199, 22) > 5);
-        assert(ink(framebuffer, 8, 154, 191, 198) > 50);
+        assert(ink(framebuffer, 14, 14, 185, 31) > 5);
+        assert(ink(framebuffer, 14, 158, 185, 198) > 50);
     } else if (face == 2) {
-        assert(ink(framebuffer, 0, 0, 31, 199) > 50);
-        assert(ink(framebuffer, 40, 28, 190, 92) > 20);
+        assert(ink(framebuffer, 0, 0, 25, 199) > 50);
+        assert(ink(framebuffer, 31, 27, 185, 90) > 20);
     } else {
-        assert(ink(framebuffer, 38, 0, 195, 82) > 80);
-        assert(ink(framebuffer, 8, 88, 192, 190) > 40);
+        assert(ink(framebuffer, 0, 0, 199, 117) > 80);
+        assert(ink(framebuffer, 0, 119, 199, 199) > 40);
     }
     if (std::getenv("WATCHY_UPDATE_GOLDENS") != nullptr) {
         write_pbm(golden, framebuffer);
@@ -202,22 +215,30 @@ int main() {
     const watchy_text_style_t grid_value = grid_value_style();
     const watchy_text_style_t grid_clock = grid_large_clock_style();
     const watchy_text_style_t grid_rail_clock = grid_rail_clock_style();
+    const watchy_text_style_t grid_modular_clock = grid_modular_clock_style();
     assert(grid_heading.font == &watchy_font_plex_11_semibold);
     assert(grid_body.font == &watchy_font_plex_13_regular);
     assert(grid_value.font == &watchy_font_plex_15_medium);
-    assert(grid_clock.font == &watchy_font_heros_72_bold);
-    assert(grid_rail_clock.font == &watchy_font_heros_62_bold);
+    assert(grid_clock.font == &watchy_font_heros_62_bold);
+    assert(grid_rail_clock.font == &watchy_font_heros_62_regular);
+    assert(grid_modular_clock.font == &watchy_font_heros_74_regular);
     assert(watchy_ui_measure_text(&grid_clock, "09:41").width <= 184);
-    assert(centered_text_ink_fits(grid_clock, "09:41", 100, 105,
-                                  0, 23, 199, 150));
-    assert(centered_text_ink_fits(grid_rail_clock, "09:41", 119, 182,
-                                  30, 107, 199, 199));
-    assert(centered_text_ink_fits(grid_clock, "09:41", 100, 73,
-                                  0, 0, 199, 86));
-    assert(text_ink_fits(grid_body, "UTC+09", 148, 148,
-                         136, 88, 199, 178));
-    assert(text_ink_fits(grid_value, "9", 5, 187,
-                         0, 0, 28, 199));
+    assert(text_ink_fits(grid_heading, "MON", 14, 23, 14, 14, 70, 31));
+    assert(right_text_ink_fits(grid_heading, "31 AUG", 186, 23, 120, 14, 185, 31));
+    assert(centered_text_ink_fits(grid_clock, "09:41", 100, 111,
+                                  14, 33, 185, 157));
+    assert(centered_text_ink_fits(grid_rail_clock, "09:41", 111, 184,
+                                  31, 113, 185, 199));
+    assert(centered_text_ink_fits(grid_modular_clock, "09:41", 100, 94,
+                                  0, 0, 199, 117));
+    assert(text_ink_fits(grid_body, "NO EVENT", 40, 58,
+                         31, 30, 185, 90));
+    assert(text_ink_fits(grid_body, "--:--", 40, 76,
+                         31, 30, 185, 90));
+    assert(text_ink_fits(grid_value, "--", 75, 160,
+                         67, 119, 132, 199));
+    assert(right_text_ink_fits(grid_value, "BT--", 184, 196,
+                               128, 158, 184, 198));
     watchy_time_t value{2026, 8, 31, 9, 41, 0, 1, 420};
     assert(format_hhmm(value, true) == fixed_text("09:41"));
     assert(format_hhmm(value, false) == fixed_text("09:41"));
@@ -230,6 +251,8 @@ int main() {
     assert(moon_octant(watchy_time_t{2000, 1, 7, 0, 0, 0, 5, 0}) == 0u);
     assert(moon_octant(watchy_time_t{2000, 1, 7, 0, 0, 0, 5, 60}) == 0u);
     assert(format_weekday(value) == fixed_text("MON"));
+    assert(format_day_month(value) == fixed_text("31 AUG"));
+    assert(format_day_month_year(value) == fixed_text("31 AUG 2026"));
     assert(format_weekday(watchy_time_t{2000, 1, 1, 0, 0, 0, 6, 0}) == fixed_text("SAT"));
     assert(format_weekday(watchy_time_t{2000, 2, 29, 0, 0, 0, 2, 0}) == fixed_text("TUE"));
     watchy_time_t rollover = offset_time(value, -720);
