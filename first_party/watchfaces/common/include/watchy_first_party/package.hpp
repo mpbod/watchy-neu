@@ -5,16 +5,47 @@
 #include <cstddef>
 
 namespace watchy_first_party {
-static_assert(offsetof(watchy_package_descriptor_v1_t, metadata) >= sizeof(uint32_t), "descriptor prefix changed");
-static_assert(offsetof(watchy_package_descriptor_v1_t, callbacks) > offsetof(watchy_package_descriptor_v1_t, metadata), "descriptor callback order changed");
+/* These assertions are the C++ side of the append-only package ABI contract.
+ * Keep the uint32 size prefix and callback order byte-for-byte stable. */
+constexpr std::size_t abi_align_up(std::size_t value, std::size_t alignment) noexcept {
+    return (value + alignment - 1u) / alignment * alignment;
+}
+static_assert(offsetof(watchy_package_descriptor_v1_t, size) == 0, "descriptor size prefix changed");
+static_assert(offsetof(watchy_package_descriptor_v1_t, metadata) ==
+                  abi_align_up(sizeof(uint32_t), alignof(watchy_package_metadata_t)),
+              "descriptor metadata prefix changed");
+static_assert(offsetof(watchy_package_descriptor_v1_t, callbacks) ==
+                  abi_align_up(offsetof(watchy_package_descriptor_v1_t, metadata) +
+                                   sizeof(watchy_package_metadata_t),
+                               alignof(watchy_package_callbacks_t)),
+              "descriptor callbacks moved");
+static_assert(offsetof(watchy_system_api_v1_t, request_transition) ==
+                  sizeof(void *) + sizeof(uint32_t (*)(void *)) +
+                  sizeof(void (*)(void *, uint32_t)) + sizeof(void (*)(void *, const char *)) +
+                  sizeof(watchy_status_t (*)(void *)) +
+                  sizeof(watchy_status_t (*)(void *, watchy_refresh_mode_t)),
+              "ABI 1.1 system prefix changed");
 static_assert(sizeof(watchy_abi_version_t) == 4, "ABI version layout changed");
 using RenderFn = watchy_status_t (*)(void *, watchy_canvas_t *, watchy_refresh_mode_t *);
-struct face_context { const watchy_host_caps_v1_t *host; };
-inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept { return user_data == nullptr ? nullptr : static_cast<const face_context *>(user_data)->host; }
-inline face_context &state() noexcept { static face_context value{nullptr}; return value; }
+struct face_context { const watchy_host_caps_v1_t *host; bool loaded; };
+inline const watchy_host_caps_v1_t *host(const void *user_data) noexcept {
+    return user_data == nullptr ? nullptr : static_cast<const face_context *>(user_data)->host;
+}
+inline face_context &state() noexcept { static face_context value{nullptr, false}; return value; }
 
-inline watchy_status_t load(const watchy_host_caps_v1_t *caps, void **user_data) noexcept { if (caps == nullptr || user_data == nullptr) return WATCHY_STATUS_INVALID_ARGUMENT; state().host = caps; *user_data = &state(); return WATCHY_STATUS_OK; }
-inline void unload(void *) noexcept {}
+inline watchy_status_t load(const watchy_host_caps_v1_t *caps, void **user_data) noexcept {
+    if (caps == nullptr || user_data == nullptr) return WATCHY_STATUS_INVALID_ARGUMENT;
+    if (state().loaded) return WATCHY_STATUS_INVALID_STATE;
+    state().host = caps;
+    state().loaded = true;
+    *user_data = &state();
+    return WATCHY_STATUS_OK;
+}
+inline void unload(void *user_data) noexcept {
+    (void)user_data;
+    state().host = nullptr;
+    state().loaded = false;
+}
 inline watchy_status_t start(void *) noexcept { return WATCHY_STATUS_OK; }
 inline void stop(void *) noexcept {}
 inline watchy_status_t event(void *, const watchy_event_t *) noexcept { return WATCHY_STATUS_OK; }

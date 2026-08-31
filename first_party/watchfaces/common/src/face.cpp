@@ -1,17 +1,182 @@
 #include "watchy_first_party/face.h"
-namespace watchy_first_party { namespace {
-bool leap(int y) noexcept { return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0); }
-uint8_t dim(int y,uint8_t m) noexcept { static const uint8_t d[]={31,28,31,30,31,30,31,31,30,31,30,31}; return d[m-1]+(m==2&&leap(y)); }
-void put2(char *p,uint8_t v) noexcept { p[0]=char('0'+v/10); p[1]=char('0'+v%10); }
-int64_t days(const watchy_time_t&t) noexcept { int y=t.year,m=t.month;y-=m<=2;int era=(y>=0?y:y-399)/400;unsigned yoe=unsigned(y-era*400);unsigned doy=(153*(m+(m>2?-3:9))+2)/5+t.day-1;unsigned doe=yoe*365+yoe/4-yoe/100+doy;return int64_t(era)*146097+int64_t(doe)-719468; }
-uint8_t weekday_for(const watchy_time_t&t) noexcept { int64_t v=(days(t)+4)%7;if(v<0)v+=7;return uint8_t(v); }
+
+namespace watchy_first_party {
+namespace {
+
+bool leap_year(int year) noexcept {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 }
-bool valid_time(const watchy_time_t&t) noexcept { return t.year>=1&&t.year<=9999&&t.month>=1&&t.month<=12&&t.day>=1&&t.day<=dim(t.year,t.month)&&t.hour<24&&t.minute<60&&t.second<60&&t.utc_offset_minutes>=-720&&t.utc_offset_minutes<=840; }
-bool format_hhmm_checked(const watchy_time_t&t,bool twelve,fixed_text*out) noexcept { if(!out||!valid_time(t))return false;uint8_t h=t.hour;if(twelve){h=uint8_t(h%12);if(!h)h=12;}put2(out->value,h);out->value[2]=':';put2(out->value+3,t.minute);out->value[5]='\0';return true; }
-fixed_text format_hhmm(const watchy_time_t&t,bool twelve) noexcept { fixed_text r;(void)format_hhmm_checked(t,twelve,&r);return r; }
-fixed_text format_date(const watchy_time_t&t) noexcept { fixed_text r;if(!valid_time(t))return r;r.value[0]=char('0'+t.month/10);r.value[1]=char('0'+t.month%10);r.value[2]='/';put2(r.value+3,t.day);r.value[5]='/';r.value[6]=char('0'+(t.year/1000)%10);r.value[7]=char('0'+(t.year/100)%10);r.value[8]=char('0'+(t.year/10)%10);r.value[9]=char('0'+t.year%10);r.value[10]='\0';return r; }
-fixed_text format_weekday(const watchy_time_t&t) noexcept { static const char*n[]={"SUN","MON","TUE","WED","THU","FRI","SAT"};return valid_time(t)?fixed_text(n[weekday_for(t)]):fixed_text(); }
-bool offset_time_checked(const watchy_time_t&t,int16_t target,watchy_time_t*out) noexcept { if(!out||!valid_time(t)||target<-720||target>840)return false;watchy_time_t r=t;int total=t.hour*60+t.minute+target-t.utc_offset_minutes,delta=0;while(total<0){total+=1440;--delta;}while(total>=1440){total-=1440;++delta;}r.hour=uint8_t(total/60);r.minute=uint8_t(total%60);r.utc_offset_minutes=target;while(delta<0){if(r.day==1){if(r.month==1){if(r.year==1)return false;--r.year;r.month=12;}else --r.month;r.day=dim(r.year,r.month);}else --r.day;++delta;}while(delta>0){if(r.day==dim(r.year,r.month)){r.day=1;if(r.month==12){if(r.year==9999)return false;++r.year;r.month=1;}else ++r.month;}else ++r.day;--delta;}r.weekday=weekday_for(r);*out=r;return true; }
-watchy_time_t offset_time(const watchy_time_t&t,int16_t target) noexcept { watchy_time_t r{};(void)offset_time_checked(t,target,&r);return r; }
-uint8_t moon_octant(const watchy_time_t&t) noexcept { if(!valid_time(t))return 0;constexpr int64_t epoch_day=10962,epoch_minute=1094,cycle=42524;int64_t minute=(days(t)-epoch_day)*1440+t.hour*60+t.minute-epoch_minute;int64_t phase=minute%cycle;if(phase<0)phase+=cycle;return uint8_t((phase*8)/cycle); }
+
+uint8_t days_in_month(int year, uint8_t month) noexcept {
+    static const uint8_t days[] = {31, 28, 31, 30, 31, 30,
+                                   31, 31, 30, 31, 30, 31};
+    return static_cast<uint8_t>(days[month - 1u] +
+                                (month == 2u && leap_year(year) ? 1u : 0u));
 }
+
+void put_two(char *out, uint8_t value) noexcept {
+    out[0] = static_cast<char>('0' + value / 10u);
+    out[1] = static_cast<char>('0' + value % 10u);
+}
+
+/* Proleptic Gregorian days since 1970-01-01. */
+int64_t days_since_epoch(const watchy_time_t &time) noexcept {
+    int year = time.year;
+    int month = time.month;
+    year -= month <= 2;
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const unsigned year_of_era = static_cast<unsigned>(year - era * 400);
+    const unsigned day_of_year =
+        static_cast<unsigned>((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 +
+                              time.day - 1);
+    const unsigned day_of_era = year_of_era * 365u + year_of_era / 4u -
+                                year_of_era / 100u + day_of_year;
+    return static_cast<int64_t>(era) * 146097 + day_of_era - 719468;
+}
+
+uint8_t weekday_for(const watchy_time_t &time) noexcept {
+    int64_t weekday = (days_since_epoch(time) + 4) % 7;
+    if (weekday < 0) weekday += 7;
+    return static_cast<uint8_t>(weekday);
+}
+
+}  // namespace
+
+bool valid_time(const watchy_time_t &time) noexcept {
+    return time.year >= 1 && time.year <= 9999 &&
+           time.month >= 1 && time.month <= 12 && time.day >= 1 &&
+           time.day <= days_in_month(time.year, time.month) &&
+           time.hour < 24 && time.minute < 60 && time.second < 60 &&
+           time.utc_offset_minutes >= -720 && time.utc_offset_minutes <= 840;
+}
+
+bool format_hhmm_checked(const watchy_time_t &time,
+                         bool twelve_hour,
+                         fixed_text *out) noexcept {
+    if (out == nullptr || !valid_time(time)) return false;
+    uint8_t hour = time.hour;
+    if (twelve_hour) {
+        hour = static_cast<uint8_t>(hour % 12u);
+        if (hour == 0u) hour = 12u;
+    }
+    put_two(out->value, hour);
+    out->value[2] = ':';
+    put_two(out->value + 3, time.minute);
+    out->value[5] = '\0';
+    return true;
+}
+
+fixed_text format_hhmm(const watchy_time_t &time, bool twelve_hour) noexcept {
+    fixed_text out;
+    (void)format_hhmm_checked(time, twelve_hour, &out);
+    return out;
+}
+
+fixed_text format_date(const watchy_time_t &time) noexcept {
+    fixed_text out;
+    if (!valid_time(time)) return out;
+    put_two(out.value, time.month);
+    out.value[2] = '/';
+    put_two(out.value + 3, time.day);
+    out.value[5] = '/';
+    out.value[6] = static_cast<char>('0' + (time.year / 1000) % 10);
+    out.value[7] = static_cast<char>('0' + (time.year / 100) % 10);
+    out.value[8] = static_cast<char>('0' + (time.year / 10) % 10);
+    out.value[9] = static_cast<char>('0' + time.year % 10);
+    out.value[10] = '\0';
+    return out;
+}
+
+fixed_text format_weekday(const watchy_time_t &time) noexcept {
+    static const char *const names[] = {
+        "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
+    };
+    return valid_time(time) ? fixed_text(names[weekday_for(time)]) : fixed_text();
+}
+
+bool offset_time_checked(const watchy_time_t &time,
+                         int16_t target_offset_minutes,
+                         watchy_time_t *out) noexcept {
+    if (out == nullptr || !valid_time(time) ||
+        target_offset_minutes < -720 || target_offset_minutes > 840) {
+        return false;
+    }
+
+    watchy_time_t result = time;
+    int total_minutes = static_cast<int>(time.hour) * 60 + time.minute +
+                        target_offset_minutes - time.utc_offset_minutes;
+    int day_delta = 0;
+    while (total_minutes < 0) {
+        total_minutes += 1440;
+        --day_delta;
+    }
+    while (total_minutes >= 1440) {
+        total_minutes -= 1440;
+        ++day_delta;
+    }
+    result.hour = static_cast<uint8_t>(total_minutes / 60);
+    result.minute = static_cast<uint8_t>(total_minutes % 60);
+    result.utc_offset_minutes = target_offset_minutes;
+
+    while (day_delta < 0) {
+        if (result.day == 1u) {
+            if (result.month == 1u) {
+                if (result.year == 1) return false;
+                --result.year;
+                result.month = 12u;
+            } else {
+                --result.month;
+            }
+            result.day = days_in_month(result.year, result.month);
+        } else {
+            --result.day;
+        }
+        ++day_delta;
+    }
+    while (day_delta > 0) {
+        if (result.day == days_in_month(result.year, result.month)) {
+            result.day = 1u;
+            if (result.month == 12u) {
+                if (result.year == 9999) return false;
+                ++result.year;
+                result.month = 1u;
+            } else {
+                ++result.month;
+            }
+        } else {
+            ++result.day;
+        }
+        --day_delta;
+    }
+    result.weekday = weekday_for(result);
+    *out = result;
+    return true;
+}
+
+watchy_time_t offset_time(const watchy_time_t &time,
+                          int16_t target_offset_minutes) noexcept {
+    watchy_time_t out{};
+    (void)offset_time_checked(time, target_offset_minutes, &out);
+    return out;
+}
+
+uint8_t moon_octant(const watchy_time_t &time) noexcept {
+    if (!valid_time(time)) return 0u;
+
+    /* Approved UTC epoch: 2000-01-06 18:14.  Signed 64-bit arithmetic keeps
+     * pre-epoch dates and the complete supported calendar range safe. */
+    constexpr int64_t epoch_day = 10962;
+    constexpr int64_t epoch_minute = epoch_day * 1440 + 18 * 60 + 14;
+    constexpr int64_t cycle_seconds = 2551443;
+    const int64_t local_minute = days_since_epoch(time) * 1440 +
+                                 static_cast<int64_t>(time.hour) * 60 +
+                                 time.minute;
+    const int64_t utc_seconds =
+        (local_minute - time.utc_offset_minutes) * 60 + time.second;
+    int64_t phase = utc_seconds - epoch_minute * 60;
+    phase %= cycle_seconds;
+    if (phase < 0) phase += cycle_seconds;
+    return static_cast<uint8_t>((phase * 8) / cycle_seconds);
+}
+
+}  // namespace watchy_first_party
