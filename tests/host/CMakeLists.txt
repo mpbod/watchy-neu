@@ -202,6 +202,19 @@ if(CMAKE_NM AND (APPLE OR UNIX))
 endif()
 add_test(NAME watchy_ui_draw_tests COMMAND watchy_ui_draw_tests)
 
+add_executable(watchy_first_party_face_tests
+  test_first_party_faces.cpp
+  ../../first_party/watchfaces/common/src/face.cpp
+)
+target_include_directories(watchy_first_party_face_tests PRIVATE
+  ../../first_party/watchfaces/common/include
+  ../../sdk/include
+  ../../components/watchy_packages/include
+)
+target_compile_features(watchy_first_party_face_tests PRIVATE cxx_std_17)
+target_compile_options(watchy_first_party_face_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_first_party_face_tests COMMAND watchy_first_party_face_tests)
+
 add_executable(watchy_elf_fixture_validator
   validate_elf_fixture.c
   ../../components/watchy_packages/src/elf_validate.c
