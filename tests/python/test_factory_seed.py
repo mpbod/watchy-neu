@@ -82,8 +82,8 @@ class FactorySeedCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             first = Path(directory) / "first"
             second = Path(directory) / "second"
-            one = seed.stage_seed(FIRST_PARTY, first)
-            two = seed.stage_seed(FIRST_PARTY, second)
+            one = seed._write_new_staging_tree(FIRST_PARTY, first)
+            two = seed._write_new_staging_tree(FIRST_PARTY, second)
             expected_paths = ["factory/seed.bin"] + [f"factory/{name}" for name in EXPECTED_DIGESTS]
             self.assertEqual(sorted(path.relative_to(first).as_posix()
                                     for path in first.rglob("*") if path.is_file()),
@@ -107,9 +107,10 @@ class FactorySeedCatalogTests(unittest.TestCase):
                 calls.append(staging)
                 image.write_bytes(b"LFS" + (staging / "factory" / "seed.bin").read_bytes())
 
-            result = seed.build_factory_seed(
+            result = seed._build_factory_seed_owned(
                 source_dir=FIRST_PARTY, staging_dir=root / "stage",
-                image_path=root / "littlefs.bin", reproducible=True,
+                image_path=root / "littlefs.bin", staging_sentinel=root / "stage.owner",
+                image_sentinel=root / "image.owner", reproducible=True,
                 image_builder=image_builder)
             self.assertEqual(len(calls), 2)
             self.assertEqual(result.image_size, 3 + 520)
@@ -121,10 +122,13 @@ class FactorySeedCatalogTests(unittest.TestCase):
                 image.write_bytes(bytes([len(calls)]))
                 calls.append(image)
             with self.assertRaisesRegex(seed.SeedError, "not reproducible"):
-                seed.build_factory_seed(
+                seed._build_factory_seed_owned(
                     source_dir=FIRST_PARTY, staging_dir=root / "stage",
-                    image_path=root / "littlefs.bin", reproducible=True,
+                    image_path=root / "littlefs.bin", staging_sentinel=root / "stage.owner",
+                    image_sentinel=root / "image.owner", reproducible=True,
                     image_builder=changing_builder)
+            self.assertEqual((root / "littlefs.bin").read_bytes(),
+                             b"LFS" + (root / "stage" / "factory" / "seed.bin").read_bytes())
 
     def test_builder_rejects_oversize_or_missing_image_output(self):
         import tools.build_factory_seed as seed
@@ -134,11 +138,109 @@ class FactorySeedCatalogTests(unittest.TestCase):
                 with image.open("wb") as output:
                     output.truncate(seed.LITTLEFS_PARTITION_SIZE + 1)
             with self.assertRaisesRegex(seed.SeedError, "exceeds"):
-                seed.build_factory_seed(FIRST_PARTY, root / "stage", root / "image.bin",
-                                        image_builder=oversized)
+                seed._build_factory_seed_owned(
+                    FIRST_PARTY, root / "stage", root / "image.bin",
+                    root / "stage.owner", root / "image.owner", image_builder=oversized)
             with self.assertRaisesRegex(seed.SeedError, "did not produce"):
-                seed.build_factory_seed(FIRST_PARTY, root / "stage", root / "image.bin",
-                                        image_builder=lambda _stage, _image: None)
+                seed._build_factory_seed_owned(
+                    FIRST_PARTY, root / "stage", root / "image.bin",
+                    root / "stage.owner", root / "image.owner",
+                    image_builder=lambda _stage, _image: None)
+
+    def test_rejected_broad_arbitrary_and_symlink_staging_paths_are_untouched(self):
+        import tools.build_factory_seed as seed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arbitrary = root / "existing"
+            (arbitrary / "nested").mkdir(parents=True)
+            (arbitrary / "nested" / "keep.bin").write_bytes(b"must-survive")
+            link = root / "staging-link"
+            link.symlink_to(arbitrary, target_is_directory=True)
+            repo_probe = (ROOT / "CMakeLists.txt").read_bytes()
+            workspace_probe = (seed.WORKSPACE_ROOT / "watchy-fw" / "partitions.csv").read_bytes()
+            arbitrary_before = {
+                path.relative_to(arbitrary).as_posix(): path.read_bytes()
+                for path in arbitrary.rglob("*") if path.is_file()
+            }
+            for unsafe in (ROOT, seed.WORKSPACE_ROOT, arbitrary, link):
+                called = []
+                with self.assertRaisesRegex(seed.SeedError, "unsupported|unsafe|owned"):
+                    seed.build_factory_seed(
+                        FIRST_PARTY, unsafe, seed.DEFAULT_IMAGE,
+                        image_builder=lambda *_args: called.append(True))
+                self.assertEqual(called, [])
+            self.assertEqual((ROOT / "CMakeLists.txt").read_bytes(), repo_probe)
+            self.assertEqual(
+                (seed.WORKSPACE_ROOT / "watchy-fw" / "partitions.csv").read_bytes(),
+                workspace_probe)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual({
+                path.relative_to(arbitrary).as_posix(): path.read_bytes()
+                for path in arbitrary.rglob("*") if path.is_file()
+            }, arbitrary_before)
+
+    def test_rejected_existing_and_nondefault_image_paths_are_never_unlinked(self):
+        import tools.build_factory_seed as seed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "do-not-delete.bin"
+            existing.write_bytes(b"irreplaceable")
+            linked_target = root / "linked-target.bin"
+            linked_target.write_bytes(b"linked-irreplaceable")
+            linked = root / "image-link.bin"
+            linked.symlink_to(linked_target)
+            staged_seed = seed.DEFAULT_STAGING / "factory" / "seed.bin"
+            staging_existed = seed.DEFAULT_STAGING.exists()
+            staging_probe = staged_seed.read_bytes() if staged_seed.is_file() else None
+            for unsafe in (existing, linked, root / "unsupported.bin", ROOT, seed.WORKSPACE_ROOT):
+                called = []
+                with self.assertRaisesRegex(seed.SeedError, "unsupported|unsafe"):
+                    seed.build_factory_seed(
+                        FIRST_PARTY, seed.DEFAULT_STAGING, unsafe,
+                        image_builder=lambda *_args: called.append(True))
+                self.assertEqual(called, [])
+            self.assertEqual(existing.read_bytes(), b"irreplaceable")
+            self.assertTrue(linked.is_symlink())
+            self.assertEqual(linked_target.read_bytes(), b"linked-irreplaceable")
+            self.assertEqual(seed.DEFAULT_STAGING.exists(), staging_existed)
+            if staging_probe is not None:
+                self.assertEqual(staged_seed.read_bytes(), staging_probe)
+
+    def test_existing_default_staging_requires_owner_or_exact_canonical_content(self):
+        import tools.build_factory_seed as seed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staging = root / "factory_seed"
+            staging.mkdir()
+            (staging / "personal.txt").write_bytes(b"personal")
+            sentinel = root / ".factory_seed.watchy-owned"
+            with self.assertRaisesRegex(seed.SeedError, "not tool-owned"):
+                seed._validate_existing_staging(staging, sentinel, FIRST_PARTY)
+            self.assertEqual((staging / "personal.txt").read_bytes(), b"personal")
+
+            shutil.rmtree(staging)
+            seed._write_new_staging_tree(FIRST_PARTY, staging)
+            seed._validate_existing_staging(staging, sentinel, FIRST_PARTY)
+            self.assertFalse(sentinel.exists())  # validation itself never mutates
+
+    def test_cli_rejects_overrides_before_mutating_any_destination(self):
+        import tools.build_factory_seed as seed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing"
+            existing.mkdir()
+            canary = existing / "canary"
+            canary.write_bytes(b"unchanged")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(seed.main(["--staging-dir", str(existing)]), 2)
+            self.assertRegex(stderr.getvalue(), "unsupported|unsafe")
+            self.assertEqual(canary.read_bytes(), b"unchanged")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(seed.main(["--source-dir", str(existing)]), 2)
+            self.assertRegex(stderr.getvalue(), "unsupported|unsafe")
+            self.assertEqual(canary.read_bytes(), b"unchanged")
 
 
 class FactoryFlashSafetyTests(unittest.TestCase):
@@ -170,13 +272,18 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             commands = []
             messages = []
 
+            chip_responses = iter((
+                "Chip is ESP32-PICO-D4 (revision v1.0)",
+                "Chip type: ESP32-PICO-V3-02 (revision v3.1)",
+            ))
+
             def fake_runner(command, **kwargs):
                 commands.append([str(item) for item in command])
                 if command[1:4] == ["device", "list", "--json-output"]:
                     stdout = json.dumps([{"port": "/dev/fake-watchy", "description": "USB Serial",
                                           "hwid": "USB VID:PID=1A86:55D4 SER=ABC"}])
                 elif "chip-id" in command:
-                    stdout = "Chip type: ESP32-D0WD-V3 (revision v3.1)"
+                    stdout = next(chip_responses)
                 else:
                     stdout = ""
                 return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
@@ -194,6 +301,25 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             self.assertIn("chip-id", commands[3])
             self.assertEqual(commands[4][-3:],
                              ["write-flash", "0x1d0000", str(image.resolve())])
+
+    def test_chip_identity_accepts_complete_classic_set_and_rejects_new_families(self):
+        import tools.flash_factory as flash
+        classics = (
+            "Chip is ESP32 (revision v1.0)",
+            "Chip type: ESP32-D0WDQ6 (revision v1.0)",
+            "Chip type: ESP32-D0WD-V3 (revision v3.1)",
+            "Chip is ESP32-PICO-D4 (revision v1.0)",
+            "Chip type: ESP32-PICO-V3 (revision v3.0)",
+            "Chip type: ESP32-PICO-V3-02 (revision v3.1)",
+            "Chip is ESP32-U4WDH (revision v3.1)",
+        )
+        for identity in classics:
+            flash._validate_chip(identity)
+        for family in ("ESP32-S2", "ESP32-S3", "ESP32-C2", "ESP32-C3",
+                       "ESP32-C6", "ESP32-H2", "ESP32-P4"):
+            with self.subTest(family=family):
+                with self.assertRaisesRegex(flash.FlashSafetyError, "classic ESP32"):
+                    flash._validate_chip(f"Chip type: {family} (revision v1.0)")
 
     def test_flash_rejects_oversize_undiscovered_or_wrong_chip_before_upload(self):
         import tools.flash_factory as flash

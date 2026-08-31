@@ -24,7 +24,7 @@ from typing import Callable, Iterable, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_OFFSET = 0x1D0000
 EXPECTED_SIZE = 0x230000
-DEFAULT_IMAGE = ROOT / ".pio" / "build" / "watchy_v2" / "littlefs.bin"
+DEFAULT_IMAGE = ROOT / "build" / "factory-seed" / "littlefs.bin"
 DEFAULT_PARTITIONS = ROOT / "partitions.csv"
 
 
@@ -126,9 +126,12 @@ def _validate_discovery(output: str, port: str) -> None:
 
 
 def _validate_chip(output: str) -> None:
-    match = re.search(r"Chip type:\s*([^\r\n]+)", output, re.IGNORECASE)
+    match = re.search(r"Chip\s+(?:type:\s*|is\s+)([^\r\n]+)", output, re.IGNORECASE)
     chip = match.group(1).strip() if match else ""
-    if not (chip.upper() == "ESP32" or chip.upper().startswith("ESP32-D")):
+    identity = chip.split("(", 1)[0].strip().upper()
+    classic = (identity == "ESP32" or identity.startswith("ESP32-D") or
+               identity.startswith("ESP32-PICO-") or identity == "ESP32-U4WDH")
+    if not classic:
         raise FlashSafetyError(f"serial target is not the classic ESP32 target: {chip or 'unknown'}")
 
 

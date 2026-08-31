@@ -1,6 +1,7 @@
 /build/
 /build-host/
 /factory_seed/
+/.factory_seed.watchy-owned
 /.pio/
 /samples/*/.pio/
 /samples/*/managed_components/
