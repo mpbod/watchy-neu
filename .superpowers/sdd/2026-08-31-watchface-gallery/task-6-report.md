@@ -86,6 +86,10 @@ evidence above.
 
 - `36a2b56 fix: harden first-party package builder`
 - `b14e076 fix: make first-party face helpers ABI-safe`
+- `9734fc6 fix: reject stale face lifecycle contexts`
+- `a9c326b docs: record Task 6 rescue evidence`
+- `2c6ece2 docs: capture pinned Python verification`
+- `96a56b3 test: keep first-party runner injectable`
 
 Remaining work is Tasks 7–9 renderer implementation and their real ESP-IDF
 build/audit evidence; this report intentionally does not claim those builds.
