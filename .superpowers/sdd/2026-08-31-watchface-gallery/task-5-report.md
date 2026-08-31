@@ -46,4 +46,4 @@ PBMs are under `tests/golden/shell/`. Native 1x and nearest-neighbor 4x PNG revi
 
 ## Commit
 
-This rescue implementation is committed as new commits `cecddbc` (`feat: complete watchface gallery shell renderer`), `2f92a5c` (`fix: match gallery label casing`), `ccb96f1` (`test: assert selector metadata raster content`), `1535a02` (`fix: align shell renderer handoff geometry`), and this final pixel-fix commit; no prior history was amended.
+This rescue implementation is committed as new commits `cecddbc` (`feat: complete watchface gallery shell renderer`), `2f92a5c` (`fix: match gallery label casing`), `ccb96f1` (`test: assert selector metadata raster content`), `1535a02` (`fix: align shell renderer handoff geometry`), and `6452f2a` (`fix: match final gallery pixel geometry`); no prior history was amended.
