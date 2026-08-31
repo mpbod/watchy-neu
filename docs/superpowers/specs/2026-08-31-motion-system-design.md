@@ -18,7 +18,7 @@ This subsystem applies one motion language to the system shell and to native WPK
 - Move one visual subject per transition.
 - Use equal spatial fractions instead of easing, springs, or smooth interpolation.
 - Keep a visible one- or two-pixel leading edge on directional transitions.
-- Cap a transition at five physical writes after the already-visible source.
+- Cap an optional transition at three physical writes after the already-visible source.
 - Never loop, pulse, blink, breathe, or animate while idle.
 - Use motion only for user actions or meaningful data changes.
 - Allow the kernel to shorten, replace, or reject any requested transition.

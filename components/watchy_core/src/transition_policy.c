@@ -45,17 +45,15 @@ static uint8_t write_count_for_effect(watchy_transition_effect_t effect) {
         return 1u;
     case WATCHY_TRANSITION_FLASH:
     case WATCHY_TRANSITION_DITHER:
-        return 2u;
     case WATCHY_TRANSITION_PUSH:
     case WATCHY_TRANSITION_GROW:
     case WATCHY_TRANSITION_ODOMETER:
     case WATCHY_TRANSITION_SPLIT:
-        return 3u;
+        return 2u;
     case WATCHY_TRANSITION_WIPE:
-        return 4u;
     case WATCHY_TRANSITION_FILL:
     case WATCHY_TRANSITION_SHUTTER:
-        return 5u;
+        return 3u;
     }
     return 0u;
 }

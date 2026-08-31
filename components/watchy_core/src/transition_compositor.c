@@ -17,17 +17,15 @@ static uint8_t expected_write_count(watchy_transition_effect_t effect) {
         return 1u;
     case WATCHY_TRANSITION_FLASH:
     case WATCHY_TRANSITION_DITHER:
-        return 2u;
     case WATCHY_TRANSITION_PUSH:
     case WATCHY_TRANSITION_GROW:
     case WATCHY_TRANSITION_ODOMETER:
     case WATCHY_TRANSITION_SPLIT:
-        return 3u;
+        return 2u;
     case WATCHY_TRANSITION_WIPE:
-        return 4u;
     case WATCHY_TRANSITION_FILL:
     case WATCHY_TRANSITION_SHUTTER:
-        return 5u;
+        return 3u;
     }
     return 0u;
 }
@@ -76,9 +74,6 @@ static bool valid_plan(const watchy_transition_plan_t *plan, clipped_rect_t *rec
                plan->target_full && plan->rect.x == 0 && plan->rect.y == 0 &&
                plan->rect.width == WATCHY_TRANSITION_CANVAS_WIDTH &&
                plan->rect.height == WATCHY_TRANSITION_CANVAS_HEIGHT;
-    }
-    if (plan->effect == WATCHY_TRANSITION_FILL) {
-        return plan->write_count == 4u || plan->write_count == 5u;
     }
     return plan->write_count == count;
 }
@@ -377,26 +372,13 @@ watchy_status_t watchy_transition_resolve_plan(const watchy_transition_plan_t *p
                                               uint8_t *scratch,
                                               size_t size,
                                               watchy_transition_plan_t *out_plan) {
-    watchy_transition_plan_t fill_plan;
-
     if (plan == NULL || out_plan == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
+    (void)source;
+    (void)target;
+    (void)scratch;
+    (void)size;
     *out_plan = *plan;
-    if (plan->effect != WATCHY_TRANSITION_FILL) {
-        return WATCHY_STATUS_OK;
-    }
-
-    fill_plan = *plan;
-    fill_plan.write_count = 5u;
-    if (watchy_transition_compose_frame(&fill_plan, 3u, source, target, scratch, size) !=
-        WATCHY_STATUS_OK) {
-        return WATCHY_STATUS_INVALID_ARGUMENT;
-    }
-    out_plan->write_count =
-        memcmp(scratch, target, WATCHY_TRANSITION_FRAME_BYTES) == 0 ? 4u : 5u;
-    if (plan->write_count == 4u && out_plan->write_count != 4u) {
-        return WATCHY_STATUS_INVALID_ARGUMENT;
-    }
     return WATCHY_STATUS_OK;
 }

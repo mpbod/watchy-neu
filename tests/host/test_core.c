@@ -300,7 +300,7 @@ static int test_transition_normalizes_omitted_rectangle(void) {
     CHECK(plan.rect.width == 200 && plan.rect.height == 200);
     CHECK(plan.effect == WATCHY_TRANSITION_WIPE);
     CHECK(plan.direction == WATCHY_TRANSITION_DIRECTION_RIGHT);
-    CHECK(plan.write_count == 4u);
+    CHECK(plan.write_count == 3u);
     CHECK(!plan.target_full && !plan.mandatory_clear);
     return 0;
 }
@@ -351,14 +351,14 @@ static int test_transition_assigns_bounded_write_counts(void) {
     } cases[] = {
         {WATCHY_TRANSITION_CUT, 1u},
         {WATCHY_TRANSITION_FLASH, 2u},
-        {WATCHY_TRANSITION_WIPE, 4u},
-        {WATCHY_TRANSITION_PUSH, 3u},
+        {WATCHY_TRANSITION_WIPE, 3u},
+        {WATCHY_TRANSITION_PUSH, 2u},
         {WATCHY_TRANSITION_DITHER, 2u},
-        {WATCHY_TRANSITION_GROW, 3u},
-        {WATCHY_TRANSITION_ODOMETER, 3u},
-        {WATCHY_TRANSITION_SPLIT, 3u},
-        {WATCHY_TRANSITION_FILL, 5u},
-        {WATCHY_TRANSITION_SHUTTER, 5u},
+        {WATCHY_TRANSITION_GROW, 2u},
+        {WATCHY_TRANSITION_ODOMETER, 2u},
+        {WATCHY_TRANSITION_SPLIT, 2u},
+        {WATCHY_TRANSITION_FILL, 3u},
+        {WATCHY_TRANSITION_SHUTTER, 3u},
     };
     watchy_transition_policy_context_t context = {
         .level = WATCHY_TRANSITION_LEVEL_FULL,
@@ -409,7 +409,7 @@ static int test_transition_policy_matrix_downgrades_optional_motion(void) {
     watchy_transition_plan_t plan;
 
     CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
-    CHECK(plan.effect == WATCHY_TRANSITION_WIPE && plan.write_count == 4u);
+    CHECK(plan.effect == WATCHY_TRANSITION_WIPE && plan.write_count == 3u);
     context.level = WATCHY_TRANSITION_LEVEL_REDUCED;
     CHECK(watchy_transition_plan(&request, &context, &plan) == WATCHY_STATUS_OK);
     CHECK(plan.effect == WATCHY_TRANSITION_FLASH && plan.write_count == 2u);
@@ -542,7 +542,7 @@ static int test_transition_compositor_clips_intersecting_rectangles(void) {
 
     plan.effect = WATCHY_TRANSITION_GROW;
     plan.rect = (watchy_transition_rect_t){0, 0, 3, 1};
-    plan.write_count = 3u;
+    plan.write_count = 2u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(memcmp(scratch, source, sizeof(source)) == 0);
@@ -568,7 +568,7 @@ static int test_transition_effect_edges_and_checkerboard(void) {
     CHECK(transition_pixel_black(scratch, 79u, 84u) == transition_pixel_black(source, 79u, 84u));
 
     plan.effect = WATCHY_TRANSITION_WIPE;
-    plan.write_count = 4u;
+    plan.write_count = 3u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 84u, 84u) == transition_pixel_black(target, 84u, 84u));
@@ -577,7 +577,7 @@ static int test_transition_effect_edges_and_checkerboard(void) {
     CHECK(transition_pixel_black(scratch, 91u, 84u) == transition_pixel_black(source, 91u, 84u));
 
     plan.effect = WATCHY_TRANSITION_PUSH;
-    plan.write_count = 3u;
+    plan.write_count = 2u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 83u, 84u) == transition_pixel_black(target, 110u, 84u));
@@ -592,7 +592,7 @@ static int test_transition_effect_edges_and_checkerboard(void) {
     CHECK(transition_pixel_black(scratch, 87u, 84u) == transition_pixel_black(target, 87u, 84u));
 
     plan.effect = WATCHY_TRANSITION_GROW;
-    plan.write_count = 3u;
+    plan.write_count = 2u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 90u, 98u) == transition_pixel_black(source, 90u, 98u));
@@ -601,7 +601,7 @@ static int test_transition_effect_edges_and_checkerboard(void) {
 
     plan.effect = WATCHY_TRANSITION_ODOMETER;
     plan.direction = WATCHY_TRANSITION_DIRECTION_UP;
-    plan.write_count = 3u;
+    plan.write_count = 2u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 84u, 84u) == transition_pixel_black(source, 84u, 96u));
@@ -610,7 +610,7 @@ static int test_transition_effect_edges_and_checkerboard(void) {
 
     plan.effect = WATCHY_TRANSITION_SPLIT;
     plan.direction = WATCHY_TRANSITION_DIRECTION_NONE;
-    plan.write_count = 3u;
+    plan.write_count = 2u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 84u, 90u));
@@ -618,14 +618,14 @@ static int test_transition_effect_edges_and_checkerboard(void) {
     CHECK(transition_pixel_black(scratch, 84u, 104u));
 
     plan.effect = WATCHY_TRANSITION_FILL;
-    plan.write_count = 5u;
+    plan.write_count = 3u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 84u, 84u));
     CHECK(transition_pixel_black(scratch, 91u, 84u) == transition_pixel_black(source, 91u, 84u));
 
     plan.effect = WATCHY_TRANSITION_SHUTTER;
-    plan.write_count = 5u;
+    plan.write_count = 3u;
     CHECK(watchy_transition_compose_frame(&plan, 0u, source, target, scratch, sizeof(scratch)) ==
           WATCHY_STATUS_OK);
     CHECK(transition_pixel_black(scratch, 84u, 84u));
@@ -636,7 +636,7 @@ static int test_transition_effect_edges_and_checkerboard(void) {
 }
 
 static int test_transition_effects_match_frozen_frames(void) {
-    static const uint8_t write_counts[] = {1u, 2u, 4u, 3u, 2u, 3u, 3u, 3u, 5u, 5u};
+    static const uint8_t write_counts[] = {1u, 2u, 3u, 2u, 2u, 2u, 2u, 2u, 3u, 3u};
     static const watchy_transition_direction_t directions[] = {
         WATCHY_TRANSITION_DIRECTION_NONE, WATCHY_TRANSITION_DIRECTION_NONE,
         WATCHY_TRANSITION_DIRECTION_RIGHT, WATCHY_TRANSITION_DIRECTION_RIGHT,
@@ -739,7 +739,7 @@ static watchy_transition_plan_t test_transition_wipe_plan(void) {
         .effect = WATCHY_TRANSITION_WIPE,
         .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
         .rect = {0, 0, 200, 200},
-        .write_count = 4u,
+        .write_count = 3u,
     };
 }
 
@@ -760,19 +760,17 @@ static int test_transition_executor_writes_bounded_sequence_and_target(void) {
     CHECK(writer.cancel_count == plan.write_count - 1u);
     CHECK(writer.modes[0] == WATCHY_REFRESH_PARTIAL);
     CHECK(writer.modes[1] == WATCHY_REFRESH_PARTIAL);
-    CHECK(writer.modes[2] == WATCHY_REFRESH_PARTIAL);
-    CHECK(writer.modes[3] == WATCHY_REFRESH_FULL);
+    CHECK(writer.modes[2] == WATCHY_REFRESH_FULL);
     CHECK(!writer.frames_are_target[0]);
     CHECK(!writer.frames_are_target[1]);
-    CHECK(!writer.frames_are_target[2]);
-    CHECK(writer.frames_are_target[3]);
+    CHECK(writer.frames_are_target[2]);
     CHECK(result.writes_completed == plan.write_count);
     CHECK(result.completed && !result.cancelled && result.source_valid && result.last_frame_is_target);
     CHECK(result.failure_cause == WATCHY_TRANSITION_FAILURE_NONE);
     return 0;
 }
 
-static int test_transition_fill_omits_only_a_redundant_target_write(void) {
+static int test_transition_fill_keeps_snappy_budget_for_dark_targets(void) {
     static uint8_t source[WATCHY_TRANSITION_FRAME_BYTES];
     static uint8_t target[WATCHY_TRANSITION_FRAME_BYTES];
     static uint8_t scratch[WATCHY_TRANSITION_FRAME_BYTES];
@@ -780,7 +778,7 @@ static int test_transition_fill_omits_only_a_redundant_target_write(void) {
         .effect = WATCHY_TRANSITION_FILL,
         .direction = WATCHY_TRANSITION_DIRECTION_NONE,
         .rect = {0, 0, WATCHY_TRANSITION_CANVAS_WIDTH, WATCHY_TRANSITION_CANVAS_HEIGHT},
-        .write_count = 5u,
+        .write_count = 3u,
         .target_full = true,
     };
     watchy_transition_result_t result;
@@ -794,14 +792,13 @@ static int test_transition_fill_omits_only_a_redundant_target_write(void) {
     };
     CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
                                     fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
-    CHECK(writer.write_count == 4u && writer.feed_count == 4u && writer.cancel_count == 3u);
+    CHECK(writer.write_count == 3u && writer.feed_count == 3u && writer.cancel_count == 2u);
     CHECK(!writer.frames_are_target[0] && !writer.frames_are_target[1] &&
-          !writer.frames_are_target[2] && writer.frames_are_target[3]);
+          writer.frames_are_target[2]);
     CHECK(writer.modes[0] == WATCHY_REFRESH_PARTIAL &&
           writer.modes[1] == WATCHY_REFRESH_PARTIAL &&
-          writer.modes[2] == WATCHY_REFRESH_PARTIAL &&
-          writer.modes[3] == WATCHY_REFRESH_FULL);
-    CHECK(result.completed && !result.cancelled && result.writes_completed == 4u &&
+          writer.modes[2] == WATCHY_REFRESH_FULL);
+    CHECK(result.completed && !result.cancelled && result.writes_completed == 3u &&
           result.last_frame_is_target);
 
     target[0] = 0x80u;
@@ -812,11 +809,11 @@ static int test_transition_fill_omits_only_a_redundant_target_write(void) {
     };
     CHECK(watchy_transition_execute(&plan, source, target, scratch, sizeof(scratch), fake_write,
                                     fake_cancel, fake_feed, &writer, &result) == WATCHY_STATUS_OK);
-    CHECK(writer.write_count == 5u && writer.feed_count == 5u && writer.cancel_count == 4u);
-    CHECK(!writer.frames_are_target[3] && writer.frames_are_target[4]);
-    CHECK(writer.modes[3] == WATCHY_REFRESH_PARTIAL &&
-          writer.modes[4] == WATCHY_REFRESH_FULL);
-    CHECK(result.completed && !result.cancelled && result.writes_completed == 5u &&
+    CHECK(writer.write_count == 3u && writer.feed_count == 3u && writer.cancel_count == 2u);
+    CHECK(!writer.frames_are_target[1] && writer.frames_are_target[2]);
+    CHECK(writer.modes[1] == WATCHY_REFRESH_PARTIAL &&
+          writer.modes[2] == WATCHY_REFRESH_FULL);
+    CHECK(result.completed && !result.cancelled && result.writes_completed == 3u &&
           result.last_frame_is_target);
     return 0;
 }
@@ -1079,7 +1076,7 @@ int main(void) {
         test_transition_effects_match_frozen_frames,
         test_transition_mandatory_clear_inverts_then_targets,
         test_transition_executor_writes_bounded_sequence_and_target,
-        test_transition_fill_omits_only_a_redundant_target_write,
+        test_transition_fill_keeps_snappy_budget_for_dark_targets,
         test_transition_executor_cancels_optional_sequence_at_write_boundaries,
         test_transition_executor_completes_mandatory_clear_without_cancellation,
         test_transition_executor_invalidates_source_for_each_failed_write,

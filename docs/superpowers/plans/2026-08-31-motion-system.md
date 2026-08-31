@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Target Watchy 2.0 and its 200 x 200, 25-byte-stride monochrome display only.
-- Count physical writes after the already-visible source; never exceed five writes for one optional transition.
+- Count physical writes after the already-visible source; never exceed three writes for one optional transition.
 - The kernel may shorten, replace, or reject every WPK request.
 - No opacity, grayscale, easing, idle loops, pulses, or timer-driven animation.
 - Every intermediate framebuffer must be independently legible.

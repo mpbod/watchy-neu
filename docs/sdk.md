@@ -135,9 +135,9 @@ visible on the panel:
 | --- | ---: |
 | Cut | 1 |
 | Flash, Dither | 2 |
-| Push, Grow, Odometer, Split | 3 |
-| Wipe | 4 |
-| Fill, Shutter | 5 |
+| Push, Grow, Odometer, Split | 2 |
+| Wipe | 3 |
+| Fill, Shutter | 3 |
 | Mandatory direct Clear | 2 full writes |
 
 Every intermediate write advances the refresh/ghosting counters and may be

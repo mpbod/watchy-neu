@@ -83,7 +83,7 @@ display timing method **pending**.
       full refresh and the shell's bounded display-error recovery remains usable.
 - [ ] Every intermediate frame is readable at native 200×200 resolution and the
       sequence never exceeds its budget: Cut 1, Flash/Dither 2,
-      Push/Grow/Odometer/Split 3, Wipe 4, Fill/Shutter 5, direct Clear 2 full.
+      Push/Grow/Odometer/Split 2, Wipe 3, Fill/Shutter 3, direct Clear 2 full.
 
 Live evidence still to record:
 

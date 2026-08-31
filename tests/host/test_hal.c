@@ -265,7 +265,7 @@ static watchy_transition_plan_t push_right_plan(void) {
         .effect = WATCHY_TRANSITION_PUSH,
         .direction = WATCHY_TRANSITION_DIRECTION_RIGHT,
         .rect = {0, 0, WATCHY_DISPLAY_WIDTH, WATCHY_DISPLAY_HEIGHT},
-        .write_count = 3u,
+        .write_count = 2u,
     };
 }
 
