@@ -1,0 +1,22 @@
+{
+  "glyphs": " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:$%./_#?!+-→—·°",
+  "strikes": [
+    {"id":"plex_8_semibold","font":"IBMPlexMono-SemiBold.otf","px":8,"threshold":128},
+    {"id":"plex_9_semibold","font":"IBMPlexMono-SemiBold.otf","px":9,"threshold":128},
+    {"id":"plex_10_semibold","font":"IBMPlexMono-SemiBold.otf","px":10,"threshold":128},
+    {"id":"plex_11_regular","font":"IBMPlexMono-Regular.otf","px":11,"threshold":128},
+    {"id":"plex_13_medium","font":"IBMPlexMono-Medium.otf","px":13,"threshold":128},
+    {"id":"plex_15_medium","font":"IBMPlexMono-Medium.otf","px":15,"threshold":128},
+    {"id":"plex_22_bold","font":"IBMPlexMono-Bold.otf","px":22,"threshold":128,"glyphs":" 0123456789%"},
+    {"id":"plex_30_bold","font":"IBMPlexMono-Bold.otf","px":30,"threshold":128,"glyphs":" 0123456789:%"},
+    {"id":"plex_32_bold","font":"IBMPlexMono-Bold.otf","px":32,"threshold":128,"glyphs":" 0123456789:"},
+    {"id":"plex_38_bold","font":"IBMPlexMono-Bold.otf","px":38,"threshold":128,"glyphs":" 0123456789:"},
+    {"id":"plex_44_bold","font":"IBMPlexMono-Bold.otf","px":44,"threshold":128,"glyphs":" 0123456789"},
+    {"id":"heros_13_bold","font":"texgyreheros-bold.otf","px":13,"threshold":128},
+    {"id":"heros_17_bold","font":"texgyreheros-bold.otf","px":17,"threshold":128},
+    {"id":"heros_40_regular","font":"texgyreheros-regular.otf","px":40,"threshold":150,"glyphs":" 0123456789:"},
+    {"id":"heros_60_bold","font":"texgyreheros-bold.otf","px":60,"threshold":128,"glyphs":" 0123456789:"},
+    {"id":"heros_62_bold","font":"texgyreheros-bold.otf","px":62,"threshold":128,"glyphs":" 0123456789:"},
+    {"id":"heros_82_bold","font":"texgyreheros-bold.otf","px":82,"threshold":128,"glyphs":" 0123456789"}
+  ]
+}
