@@ -157,6 +157,20 @@ add_executable(watchy_ui_draw_tests
 watchy_package_add_ui_sources(watchy_ui_draw_tests)
 target_compile_features(watchy_ui_draw_tests PRIVATE c_std_11)
 target_compile_options(watchy_ui_draw_tests PRIVATE -Wall -Wextra -Werror)
+if(CMAKE_NM AND (APPLE OR UNIX))
+  if(APPLE)
+    target_link_options(watchy_ui_draw_tests PRIVATE -Wl,-dead_strip)
+  else()
+    target_link_options(watchy_ui_draw_tests PRIVATE -Wl,--gc-sections)
+  endif()
+  add_custom_command(TARGET watchy_ui_draw_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+            "-DNM=${CMAKE_NM}"
+            "-DBINARY=$<TARGET_FILE:watchy_ui_draw_tests>"
+            -P "${CMAKE_CURRENT_LIST_DIR}/check_ui_sections.cmake"
+    VERBATIM
+  )
+endif()
 add_test(NAME watchy_ui_draw_tests COMMAND watchy_ui_draw_tests)
 
 add_executable(watchy_elf_fixture_validator

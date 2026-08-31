@@ -106,3 +106,76 @@ git diff --check
 
 (no output; exit 0)
 ```
+
+## Fix Round 1
+
+### Review Findings Addressed
+
+- Replaced the generated-font black-pixel-count Unicode check with an independent font fixture. Its `?`, U+00B0 degree, U+00B7 middle dot, U+2014 em dash, and U+2192 right arrow glyphs have distinct advances and bit patterns. Measurement is asserted exactly at 21 pixels, and drawing is asserted at each expected set and clear pixel. A separate valid U+2603 absent-scalar case proves the distinct `?` advance and bitmap are used.
+- Added a POSIX protected-page regression. For every prefix shorter than valid two-, three-, and four-byte sequences—including the empty prefix—the terminating NUL is the final readable byte before a `PROT_NONE` page. Both `watchy_ui_measure_text` and `watchy_ui_draw_text_font` run for every prefix. The fixture checks exact fallback advances, pixels, framebuffer guards, and deterministic `munmap` cleanup. Non-POSIX builds retain a guarded portability stub; the supported macOS host executes the protected-memory path.
+- Added exact negative and positive `bearing_x` placement assertions.
+- Added a font without `?` and proved valid-missing and invalid input are skipped without advance, tracking, or drawing, while surrounding supported input retains its normal advance.
+- Deleted the obsolete `components/watchy_shell/src/ui.c`. `watchy/ui.h` is now only an include-compatible shim over `watchy/ui_draw.h`, leaving `sdk/ui/src/ui_draw.c` as the sole symbol implementation.
+- Added a post-link CMake/nm assertion. The host test links with Darwin `dead_strip` or ELF `--gc-sections`, verifies referenced `watchy_font_heros_62_bold` remains, and fails if unreferenced `watchy_font_heros_82_bold` remains. This proves the per-object data sections emitted by `watchy_package_add_ui_sources` are actually removable by a garbage-collecting final link.
+
+### Fix Round 1 RED Evidence
+
+Before enabling the host final-link garbage collector, the new linked-symbol gate failed as intended:
+
+```text
+cmake --build build/host --target watchy_ui_draw_tests
+
+CMake Error at tests/host/check_ui_sections.cmake:18 (message):
+  unreferenced Heros 82 strike was not garbage-collected
+ninja: build stopped: subcommand failed.
+```
+
+The stronger Unicode fixture exercises existing correct decoder behavior, so its sensitivity was verified with a temporary mutation that resolved every non-ASCII scalar as `?`. The rebuilt executable failed at the exact independent-width assertion:
+
+```text
+CHECK failed at tests/host/test_ui_draw.c:321:
+watchy_ui_measure_text(&style,
+  "\\xc2\\xb0\\xc2\\xb7\\xe2\\x80\\x94\\xe2\\x86\\x92").width == 21
+```
+
+The mutation was immediately reverted before implementation and is not present in the final diff.
+
+### Fix Round 1 GREEN Evidence
+
+```text
+cmake -S . -B build/host -G Ninja
+cmake --build build/host --target watchy_ui_draw_tests
+./build/host/tests/host/watchy_ui_draw_tests
+
+ui draw tests passed
+
+nm -g build/host/tests/host/watchy_ui_draw_tests |
+  rg 'watchy_font_(heros_62_bold|heros_82_bold)'
+
+0000000100008158 S _watchy_font_heros_62_bold
+```
+
+The absent Heros 82 match is the asserted garbage-collection result. The shared renderer object remains package-safe:
+
+```text
+nm -u build/host/tests/host/CMakeFiles/watchy_ui_draw_tests.dir/__/__/sdk/ui/src/ui_draw.c.o
+
+___stack_chk_fail
+___stack_chk_guard
+_watchy_font_find_glyph
+```
+
+There are no heap, C++ runtime, RTTI, exception, STL, or ESP-IDF imports.
+
+Full host verification after removing the duplicate implementation:
+
+```text
+cmake --build build/host
+ctest --test-dir build/host --output-on-failure
+
+100% tests passed, 0 tests failed out of 10
+
+git diff --check
+
+(no output; exit 0)
+```

@@ -1,8 +1,22 @@
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#endif
+
 #include "watchy/ui_draw.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#if defined(MAP_ANONYMOUS)
+#define WATCHY_TEST_MAP_ANONYMOUS MAP_ANONYMOUS
+#elif defined(MAP_ANON)
+#define WATCHY_TEST_MAP_ANONYMOUS MAP_ANON
+#endif
+#endif
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -30,6 +44,8 @@ static const uint8_t fixture_bitmap[] = {
     0x80,
     0xe0, 0xe0, 0xe0,
     0x80, 0x80, 0x80,
+    0x80,
+    0x80,
 };
 
 static const watchy_font_glyph_t fixture_glyphs[] = {
@@ -37,10 +53,40 @@ static const watchy_font_glyph_t fixture_glyphs[] = {
     {63u, 0u, 0, 1, 1u, 1u, 3u, 1u},
     {65u, 1u, 0, 3, 3u, 3u, 4u, 1u},
     {66u, 4u, 0, 3, 1u, 3u, 5u, 1u},
+    {78u, 7u, -2, 1, 1u, 1u, 3u, 1u},
+    {80u, 8u, 2, 1, 1u, 1u, 3u, 1u},
 };
 
 static const watchy_font_t fixture_font = {
-    fixture_glyphs, fixture_bitmap, 4u, 4u, 3, -1, 4u,
+    fixture_glyphs, fixture_bitmap, 6u, 4u, 3, -1, 4u,
+};
+
+static const uint8_t unicode_fixture_bitmap[] = {
+    0x80, /* ? */
+    0xc0, /* degree */
+    0xa0, /* middle dot */
+    0xf0, /* em dash */
+    0x88, /* right arrow */
+};
+
+static const watchy_font_glyph_t unicode_fixture_glyphs[] = {
+    {63u, 0u, 0, 1, 1u, 1u, 2u, 1u},
+    {176u, 1u, 0, 1, 2u, 1u, 3u, 1u},
+    {183u, 2u, 0, 1, 3u, 1u, 4u, 1u},
+    {8212u, 3u, 0, 1, 4u, 1u, 5u, 1u},
+    {8594u, 4u, 0, 1, 5u, 1u, 6u, 1u},
+};
+
+static const watchy_font_t unicode_fixture_font = {
+    unicode_fixture_glyphs, unicode_fixture_bitmap, 5u, 6u, 1, 0, 1u,
+};
+
+static const uint8_t questionless_bitmap[] = {0x80};
+static const watchy_font_glyph_t questionless_glyphs[] = {
+    {65u, 0u, 0, 1, 1u, 1u, 4u, 1u},
+};
+static const watchy_font_t questionless_font = {
+    questionless_glyphs, questionless_bitmap, 1u, 4u, 1, 0, 1u,
 };
 
 static void init_canvas(guarded_canvas_t *fixture, bool black) {
@@ -209,6 +255,26 @@ static int test_text_uses_baseline_bearings_normal_and_outlined_glyphs(void) {
     return 0;
 }
 
+static int test_text_honors_positive_and_negative_horizontal_bearings(void) {
+    guarded_canvas_t fixture;
+    const watchy_text_style_t style = {
+        .font = &fixture_font, .tracking = 0, .black = true, .outlined = false,
+    };
+    init_canvas(&fixture, false);
+
+    watchy_ui_draw_text_font(&fixture.canvas, 10, 4, "N", &style);
+    CHECK(pixel_black(&fixture, 8, 3));
+    CHECK(!pixel_black(&fixture, 9, 3));
+    CHECK(!pixel_black(&fixture, 10, 3));
+
+    init_canvas(&fixture, false);
+    watchy_ui_draw_text_font(&fixture.canvas, 10, 4, "P", &style);
+    CHECK(pixel_black(&fixture, 12, 3));
+    CHECK(!pixel_black(&fixture, 10, 3));
+    CHECK(!pixel_black(&fixture, 11, 3));
+    return 0;
+}
+
 static int test_centered_and_right_aligned_text_use_measured_advance(void) {
     guarded_canvas_t fixture;
     const watchy_text_style_t style = {
@@ -246,22 +312,51 @@ static int test_white_text_on_black_canvas_inverts_only_glyph_pixels(void) {
     return 0;
 }
 
-static int test_configured_unicode_decodes_measures_and_draws(void) {
+static int test_configured_unicode_uses_each_independent_glyph(void) {
     guarded_canvas_t fixture;
     const watchy_text_style_t style = {
-        .font = &watchy_font_plex_9_semibold,
-        .tracking = 2,
+        .font = &unicode_fixture_font,
+        .tracking = 1,
         .black = true,
         .outlined = false,
     };
     init_canvas(&fixture, false);
 
-    CHECK(watchy_ui_measure_text(&style, "BT\xc2\xb7--").width == 33);
-    CHECK(watchy_ui_measure_text(&style, "\xe2\x86\x92\xe2\x80\x94").width == 12);
-    watchy_ui_draw_text_font(&fixture.canvas, -2, 10, "--\xc2\xb0", &style);
-    watchy_ui_draw_text_font(&fixture.canvas, 20, 10, "\xe2\x86\x92\xe2\x80\x94", &style);
-    CHECK(black_pixel_count(&fixture) > 0u);
+    CHECK(watchy_ui_measure_text(
+        &style, "\xc2\xb0\xc2\xb7\xe2\x80\x94\xe2\x86\x92").width == 21);
+    watchy_ui_draw_text_font(
+        &fixture.canvas, 0, 1, "\xc2\xb0\xc2\xb7\xe2\x80\x94\xe2\x86\x92", &style);
+    CHECK(black_pixel_count(&fixture) == 10u);
+    CHECK(pixel_black(&fixture, 0, 0));
+    CHECK(pixel_black(&fixture, 1, 0));
+    CHECK(!pixel_black(&fixture, 2, 0));
+    CHECK(pixel_black(&fixture, 4, 0));
+    CHECK(!pixel_black(&fixture, 5, 0));
+    CHECK(pixel_black(&fixture, 6, 0));
+    CHECK(pixel_black(&fixture, 9, 0));
+    CHECK(pixel_black(&fixture, 12, 0));
+    CHECK(pixel_black(&fixture, 15, 0));
+    CHECK(!pixel_black(&fixture, 16, 0));
+    CHECK(pixel_black(&fixture, 19, 0));
     CHECK(guards_unchanged(&fixture));
+    return 0;
+}
+
+static int test_valid_absent_scalar_uses_distinct_question_mark_fallback(void) {
+    guarded_canvas_t fixture;
+    const watchy_text_style_t style = {
+        .font = &unicode_fixture_font,
+        .tracking = 0,
+        .black = true,
+        .outlined = false,
+    };
+    init_canvas(&fixture, false);
+
+    CHECK(watchy_ui_measure_text(&style, "\xe2\x98\x83").width == 2);
+    watchy_ui_draw_text_font(&fixture.canvas, 7, 1, "\xe2\x98\x83", &style);
+    CHECK(black_pixel_count(&fixture) == 1u);
+    CHECK(pixel_black(&fixture, 7, 0));
+    CHECK(!pixel_black(&fixture, 8, 0));
     return 0;
 }
 
@@ -277,6 +372,83 @@ static int test_invalid_utf8_consumes_one_bad_byte_and_uses_question_mark(void) 
     CHECK(watchy_ui_measure_text(&style, "\xe2\x82").width == 6);
     CHECK(watchy_ui_measure_text(&style, "\xe2\x98\x83").width == 3);
     CHECK(watchy_ui_measure_text(&style, "A").width == 4);
+    return 0;
+}
+
+#if defined(WATCHY_TEST_MAP_ANONYMOUS)
+static int test_truncated_utf8_never_reads_past_page_boundary_nul(void) {
+    static const uint8_t sequences[][4] = {
+        {0xc2u, 0xb0u, 0u, 0u},
+        {0xe2u, 0x80u, 0x94u, 0u},
+        {0xf0u, 0x9fu, 0x98u, 0x80u},
+    };
+    static const size_t sequence_lengths[] = {2u, 3u, 4u};
+    const watchy_text_style_t style = {
+        .font = &unicode_fixture_font,
+        .tracking = 0,
+        .black = true,
+        .outlined = false,
+    };
+    guarded_canvas_t fixture;
+    const long page_size_value = sysconf(_SC_PAGESIZE);
+    uint8_t *mapping;
+    uint8_t *boundary;
+    bool passed = true;
+
+    CHECK(page_size_value > 0);
+    mapping = mmap(NULL, (size_t)page_size_value * 2u, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | WATCHY_TEST_MAP_ANONYMOUS, -1, 0);
+    CHECK(mapping != MAP_FAILED);
+    boundary = mapping + page_size_value;
+    if (mprotect(boundary, (size_t)page_size_value, PROT_NONE) != 0) {
+        (void)munmap(mapping, (size_t)page_size_value * 2u);
+        CHECK(false);
+    }
+
+    for (size_t sequence = 0u; sequence < 3u && passed; ++sequence) {
+        for (size_t prefix = 0u; prefix < sequence_lengths[sequence]; ++prefix) {
+            char *text = (char *)(boundary - prefix - 1u);
+            memset(mapping, 0, (size_t)page_size_value);
+            memcpy(text, sequences[sequence], prefix);
+            text[prefix] = '\0';
+            init_canvas(&fixture, false);
+            if (watchy_ui_measure_text(&style, text).width != (int32_t)(prefix * 2u)) {
+                passed = false;
+                break;
+            }
+            watchy_ui_draw_text_font(&fixture.canvas, 0, 1, text, &style);
+            if (black_pixel_count(&fixture) != prefix || !guards_unchanged(&fixture)) {
+                passed = false;
+                break;
+            }
+        }
+    }
+    CHECK(munmap(mapping, (size_t)page_size_value * 2u) == 0);
+    CHECK(passed);
+    return 0;
+}
+#else
+static int test_truncated_utf8_never_reads_past_page_boundary_nul(void) {
+    return 0;
+}
+#endif
+
+static int test_missing_question_mark_skips_missing_and_invalid_input(void) {
+    guarded_canvas_t fixture;
+    const watchy_text_style_t style = {
+        .font = &questionless_font,
+        .tracking = 3,
+        .black = true,
+        .outlined = false,
+    };
+    init_canvas(&fixture, false);
+
+    CHECK(watchy_ui_measure_text(&style, "\xe2\x98\x83").width == 0);
+    CHECK(watchy_ui_measure_text(&style, "\x80").width == 0);
+    CHECK(watchy_ui_measure_text(&style, "A\xe2\x98\x83").width == 4);
+    watchy_ui_draw_text_font(&fixture.canvas, 0, 1, "\xe2\x98\x83\x80", &style);
+    CHECK(black_pixel_count(&fixture) == 0u);
+    CHECK(guards_unchanged(&fixture));
     return 0;
 }
 
@@ -319,10 +491,14 @@ int main(void) {
     failures += test_outline_and_filled_circles_render_expected_pixels();
     failures += test_measurement_uses_advances_tracking_and_no_trailing_tracking();
     failures += test_text_uses_baseline_bearings_normal_and_outlined_glyphs();
+    failures += test_text_honors_positive_and_negative_horizontal_bearings();
     failures += test_centered_and_right_aligned_text_use_measured_advance();
     failures += test_white_text_on_black_canvas_inverts_only_glyph_pixels();
-    failures += test_configured_unicode_decodes_measures_and_draws();
+    failures += test_configured_unicode_uses_each_independent_glyph();
+    failures += test_valid_absent_scalar_uses_distinct_question_mark_fallback();
     failures += test_invalid_utf8_consumes_one_bad_byte_and_uses_question_mark();
+    failures += test_truncated_utf8_never_reads_past_page_boundary_nul();
+    failures += test_missing_question_mark_skips_missing_and_invalid_input();
     failures += test_tabular_font_digits_have_equal_nonzero_advances();
     failures += test_null_invalid_and_missing_inputs_are_deterministic();
     if (failures == 0) {
