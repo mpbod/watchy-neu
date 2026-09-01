@@ -156,9 +156,10 @@ and hashes the firmware images, validates the exact
 Watchy partition table and target identity, erases only the exact 24 KiB NVS
 partition without releasing the ESP32 from its bootloader, then writes firmware
 plus the audited LittleFS image without resetting. Only after that write reports
-success does a separate non-mutating esptool `run` start the application. It resets all
-settings, Wi-Fi credentials, the package index/health state, and the factory
-seed marker before first-boot import. It is destructive to package storage and
+success does a separate no-stub `chip-id` identity read finish with an RTS hard
+reset into the application. The handoff does not mutate flash or NVS. The
+factory reinstall resets all settings, Wi-Fi credentials, the package
+index/health state, and the factory seed marker before first-boot import. It is destructive to package storage and
 requires an explicit discovered classic ESP32 serial device—there is no
 automatic port selection:
 
@@ -180,6 +181,9 @@ executable is used. The parser preflight constructs command contexts only: it
 does not invoke an esptool command or open the port. The only external
 pre-build command is read-only `platformio device list --json-output`; chip
 identity and every mutation remain in the post-build, fail-closed flash stage.
+The success-only handoff is exactly `--before no-reset --after hard-reset
+--no-stub chip-id`; unlike esptool's `run` command, it does not issue a ROM
+SPI-flash attach operation before resetting the Watchy.
 
 `PYTHON` is the provisioned test/factory-tool interpreter. `IDF_PYTHON` is the
 ESP-IDF-ready interpreter used for sample, first-party, and factory-seed

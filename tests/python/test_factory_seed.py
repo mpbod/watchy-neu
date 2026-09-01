@@ -255,7 +255,11 @@ class FactoryFlashSafetyTests(unittest.TestCase):
         self.assertEqual(vectors[1][-3:], ("erase-region", "0x9000", "0x6000"))
         self.assertEqual(vectors[2][-3:-1], ("write-flash", "0x1000"))
         self.assertTrue(Path(vectors[2][-1]).is_file())
-        self.assertEqual(vectors[3][-2:], ("--no-stub", "run"))
+        self.assertEqual(
+            vectors[3][-6:],
+            ("--before", "no-reset", "--after", "hard-reset", "--no-stub",
+             "chip-id"),
+        )
         self.assertFalse(any("--help" in vector for vector in vectors))
         self.assertEqual(flash.validate_esptool_environment(), "5.3.1")
 
@@ -448,7 +452,7 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                     build_dir=build)
             self.assertEqual(commands, [])
 
-    def test_fake_serial_run_builds_then_erases_only_exact_nvs_before_all_images(self):
+    def test_fake_serial_handoff_builds_then_erases_only_exact_nvs_before_all_images(self):
         import tools.flash_factory as flash
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -495,8 +499,10 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                 "0x1d0000", str(image.resolve()),
             ])
             self.assertEqual(commands[5][-6:],
-                             ["--before", "no-reset", "--after", "no-reset",
-                              "--no-stub", "run"])
+                             ["--before", "no-reset", "--after", "hard-reset",
+                              "--no-stub", "chip-id"])
+            self.assertEqual(sum("chip-id" in command for command in commands), 2)
+            self.assertFalse(any(command[-1:] == ["run"] for command in commands))
             self.assertFalse(any("erase-flash" in command for command in commands))
 
     def test_failed_complete_write_never_runs_application(self):
@@ -527,6 +533,11 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                                     platformio="platformio",
                                     build_dir=build)
             self.assertEqual(sum("write-flash" in command for command in commands), 1)
+            self.assertEqual(sum("chip-id" in command for command in commands), 1)
+            self.assertFalse(any(
+                "chip-id" in command and
+                command[command.index("--after") + 1] == "hard-reset"
+                for command in commands))
             self.assertFalse(any(command[-1:] == ["run"] for command in commands))
 
     def test_retained_marker_is_erased_without_reset_before_pristine_seed_write(self):
@@ -545,7 +556,6 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                                           "hwid": "USB VID:PID=1A86:55D4 SER=ABC"}])
                 elif "chip-id" in command:
                     stdout = "Chip is ESP32-PICO-D4 (revision v1.0)"
-                    self.assertEqual(command[command.index("--after") + 1], "no-reset")
                 else:
                     stdout = ""
                 if "erase-region" in command:
@@ -557,9 +567,11 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                     self.assertEqual(state["marker"], "erased")
                     state["seed"] = "pristine"
                     self.assertEqual(command[command.index("--after") + 1], "no-reset")
-                elif command[-1:] == ["run"]:
+                elif ("chip-id" in command and
+                      command[command.index("--after") + 1] == "hard-reset"):
                     self.assertEqual(state["seed"], "pristine")
                     self.assertEqual(command[command.index("--before") + 1], "no-reset")
+                    self.assertIn("--no-stub", command)
                     reset_observations.append((state["marker"], state["seed"]))
                 elif state["mutating"]:
                     self.fail("no command may run between NVS erase and complete image write")
@@ -680,7 +692,11 @@ class FactoryFlashSafetyTests(unittest.TestCase):
             self.assertIn("platformio run -e watchy_v2", rendered)
             self.assertIn("--after no-reset erase-region 0x9000 0x6000", rendered)
             self.assertIn("--after no-reset write-flash 0x1000", rendered)
-            self.assertIn("--before no-reset --after no-reset --no-stub run", rendered)
+            self.assertIn(
+                "--before no-reset --after hard-reset --no-stub chip-id",
+                rendered,
+            )
+            self.assertNotIn("--no-stub run", rendered)
             self.assertIn("write-flash 0x1000", rendered)
             self.assertIn("0x1d0000", rendered)
 

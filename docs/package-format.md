@@ -63,9 +63,10 @@ every image before device mutation. It erases only NVS at `0x9000`/`0x6000`
 with esptool's post-operation reset disabled, then writes bootloader, partition
 table, firmware, and the exact-size LittleFS image at
 `0x1d0000`/`0x230000` without resetting. Only after that write reports success
-does a separate non-mutating esptool `run` start the complete application. This
-factory operation resets settings,
-Wi-Fi credentials, package index/health state, and the seed marker; routine
+does a separate no-stub `chip-id` identity read use `--after hard-reset` to
+start the complete application via RTS. This handoff does not mutate flash or
+NVS. The factory operation resets settings, Wi-Fi credentials, package
+index/health state, and the seed marker; routine
 `platformio run -e watchy_v2 -t upload` remains firmware-only and preserves
 NVS/LittleFS.
 
@@ -74,13 +75,16 @@ Factory tooling pins `esptool==5.3.1` in
 virtual environment and run `flash_factory.py` with the same environment's
 Python. Before any build runner or serial discovery, the tool verifies the
 explicit port syntax and imported version, then parses complete representative
-chip-id, erase-region, write-flash, and no-stub run argument vectors. This
+chip-id, erase-region, write-flash, and no-stub chip-id/hard-reset argument
+vectors. This
 parser-only check constructs contexts without invoking callbacks or opening a
 device. It then confirms the requested port appears exactly once in read-only
-PlatformIO USB serial discovery. The `factory-flash` Make target completes this preflight before it
-builds the first-party packages or factory seed. It
+PlatformIO USB serial discovery. The `factory-flash` Make target completes this
+preflight before it builds the first-party packages or factory seed. It
 uses `python -m esptool`, never an ambient executable from `PATH`; the final
-success-only ROM-loader `run` includes `--no-stub`.
+success-only handoff is exactly `--before no-reset --after hard-reset --no-stub
+chip-id`. This avoids esptool `run`, whose ROM path attaches SPI flash before
+attempting to launch the application.
 
 Provision the interpreter used by both the Python/gallery gate and the factory
 tool explicitly:

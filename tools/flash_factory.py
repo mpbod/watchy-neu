@@ -93,7 +93,7 @@ def esptool_parser_vectors() -> tuple[tuple[str, ...], ...]:
         common + ("erase-region", "0x9000", "0x6000"),
         common + ("write-flash", "0x1000", safe_existing_input),
         ("--chip", "esp32", "--port", "/dev/null", "--before", "no-reset",
-         "--after", "no-reset", "--no-stub", "run"),
+         "--after", "hard-reset", "--no-stub", "chip-id"),
     )
 
 
@@ -284,7 +284,8 @@ def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
          f"0x{FACTORY_OFFSET:x}", str(build_dir / "firmware.bin"),
          f"0x{EXPECTED_OFFSET:x}", str(image)],
         [sys.executable, "-m", "esptool", "--chip", "esp32", "--port", port,
-         "--before", "no-reset", "--after", "no-reset", "--no-stub", "run"],
+         "--before", "no-reset", "--after", "hard-reset", "--no-stub",
+         "chip-id"],
     ]
 
 
@@ -360,7 +361,8 @@ def flash_factory(port: str,
     _validate_chip(_run(runner, commands[2]).stdout)
     _run(runner, commands[3])  # exact NVS reset removes factory_seed and settings/index
     _run(runner, commands[4])
-    _run(runner, commands[5])  # success-only, non-mutating handoff to the complete image
+    # Success-only identity read followed by RTS hard reset into the complete image.
+    _run(runner, commands[5])
     return digest
 
 

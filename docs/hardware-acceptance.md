@@ -11,9 +11,19 @@ Builds and host simulations are not physical acceptance evidence. The motion
 checks, measurements, and firmware/device metadata below remain pending for the
 integrated motion-plus-gallery controller run.
 
-No Task 11 factory flash or gallery device run was performed. All gallery
+No factory flash or gallery device run was performed during Task 11. All gallery
 checkboxes, measurements, firmware/device metadata, and photographs below are
 explicitly pending until the post-review controller run.
+
+Post-review provisioning evidence reported by the controller on 2026-09-01:
+the complete factory image set was written to ESP32-PICO-D4 serial
+`/dev/cu.usbserial-5B0B0425311`, but esptool 5.3.1 `run` failed while configuring
+SPI flash pins and left the board in the ROM loader. A subsequent read-only
+no-stub `chip-id` command with `--before no-reset --after hard-reset` identified
+the same PICO-D4 and started the complete image through the RTS reset. This
+closes neither the functional nor current/visual checkboxes below; it records
+only the observed provisioning/handoff boundary that motivated the tooling
+hotfix.
 
 ## Display and controls
 
