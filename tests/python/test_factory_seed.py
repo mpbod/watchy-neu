@@ -250,7 +250,107 @@ class FactoryFlashSafetyTests(unittest.TestCase):
         requirement = ROOT / "tools" / "factory-flash-requirements.txt"
         self.assertEqual(requirement.read_text(encoding="utf-8"),
                          "esptool==5.3.1\n")
+        vectors = flash.esptool_parser_vectors()
+        self.assertEqual([vector[-1] for vector in vectors[:1]], ["chip-id"])
+        self.assertEqual(vectors[1][-3:], ("erase-region", "0x9000", "0x6000"))
+        self.assertEqual(vectors[2][-3:-1], ("write-flash", "0x1000"))
+        self.assertTrue(Path(vectors[2][-1]).is_file())
+        self.assertEqual(vectors[3][-2:], ("--no-stub", "run"))
+        self.assertFalse(any("--help" in vector for vector in vectors))
         self.assertEqual(flash.validate_esptool_environment(), "5.3.1")
+
+    def test_ci_installs_pin_into_the_exact_python_test_interpreter(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8")
+        create = "python3 -m venv build/python-tools-venv"
+        install = ("build/python-tools-venv/bin/python -m pip install "
+                   "--requirement tools/font-requirements.txt --requirement "
+                   "tools/factory-flash-requirements.txt")
+        tests = ("build/python-tools-venv/bin/python -m unittest discover "
+                 "-s tests/python -v")
+        self.assertLess(workflow.index(create), workflow.index(install))
+        self.assertLess(workflow.index(install), workflow.index(tests))
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("-r tools/font-requirements.txt", readme)
+        self.assertIn("-r tools/factory-flash-requirements.txt", readme)
+        self.assertIn("make gallery-test PYTHON=build/gallery-python/bin/python",
+                      readme)
+        self.assertIn("IDF_PYTHON=python3", readme)
+
+    def test_make_factory_flash_preflights_before_building_seed(self):
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("PYTHON ?= python3", makefile)
+        self.assertIn("IDF_PYTHON ?= python3", makefile)
+        self.assertIn("FACTORY_FLASH_PYTHON ?= $(PYTHON)", makefile)
+        self.assertIn("$(IDF_PYTHON) tools/build_first_party.py --reproducible",
+                      makefile)
+        preflight = makefile.index("factory-flash-preflight:")
+        factory = makefile.index("factory-flash: factory-flash-preflight")
+        seed_build = makefile.index("$(MAKE) factory-seed", factory)
+        flash = makefile.index("tools/flash_factory.py --port", seed_build)
+        self.assertIn("--preflight-only", makefile[preflight:factory])
+        self.assertLess(preflight, factory)
+        self.assertIn('IDF_PYTHON="$(IDF_PYTHON)"',
+                      makefile[seed_build:flash])
+        self.assertLess(factory, seed_build)
+        self.assertLess(seed_build, flash)
+
+    def test_preflight_only_checks_port_and_esptool_without_seed_inputs(self):
+        import tools.flash_factory as flash
+        output = io.StringIO()
+        commands = []
+
+        def discovery_runner(command, **_kwargs):
+            commands.append([str(part) for part in command])
+            return subprocess.CompletedProcess(
+                command, 0,
+                stdout=json.dumps([{
+                    "port": "/dev/fake-watchy",
+                    "description": "USB Serial",
+                    "hwid": "USB VID:PID=1A86:55D4 SER=ABC",
+                }]), stderr="")
+
+        with mock.patch.object(flash, "validate_partition_table",
+                               side_effect=AssertionError("seed input touched")), \
+             mock.patch.object(flash, "validate_image",
+                               side_effect=AssertionError("seed input touched")), \
+             mock.patch.object(flash, "validate_flash_images",
+                               side_effect=AssertionError("build input touched")), \
+             mock.patch.object(flash.shutil, "which", return_value="platformio"), \
+             mock.patch.object(flash.subprocess, "run",
+                               side_effect=discovery_runner), \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(flash.main([
+                "--port", "/dev/fake-watchy", "--preflight-only",
+                "--image", "/does/not/exist/littlefs.bin",
+                "--build-dir", "/does/not/exist/watchy_v2",
+            ]), 0)
+        self.assertIn("esptool=5.3.1", output.getvalue())
+        self.assertIn("port=/dev/fake-watchy", output.getvalue())
+        self.assertEqual(commands,
+                         [["platformio", "device", "list", "--json-output"]])
+
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(flash.main([
+                "--port", "not-a-device", "--preflight-only",
+            ]), 2)
+        self.assertIn("explicit /dev/ serial path", error.getvalue())
+
+    def test_preflight_rejects_an_undiscovered_port_before_any_build(self):
+        import tools.flash_factory as flash
+        commands = []
+
+        def no_device(command, **_kwargs):
+            commands.append([str(part) for part in command])
+            return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
+
+        with self.assertRaisesRegex(flash.FlashSafetyError, "not discovered"):
+            flash.preflight_factory("/dev/missing-watchy", runner=no_device,
+                                    platformio="platformio")
+        self.assertEqual(commands,
+                         [["platformio", "device", "list", "--json-output"]])
 
     def test_missing_or_wrong_esptool_fails_before_any_runner_command(self):
         import tools.flash_factory as flash
@@ -273,6 +373,14 @@ class FactoryFlashSafetyTests(unittest.TestCase):
                             runner=lambda command, **_kwargs: commands.append(command),
                             build_dir=build)
                     self.assertEqual(commands, [])
+                    preflight_commands = []
+                    with self.assertRaisesRegex(flash.FlashSafetyError,
+                                                "esptool.*5.3.1"):
+                        flash.preflight_factory(
+                            "/dev/fake", platformio="platformio",
+                            runner=lambda command, **_kwargs:
+                                preflight_commands.append(command))
+                    self.assertEqual(preflight_commands, [])
 
     def write_partition_table(self, root: Path, offset="0x1d0000", size="0x230000") -> Path:
         table = root / "partitions.csv"

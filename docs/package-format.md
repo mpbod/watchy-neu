@@ -72,7 +72,30 @@ NVS/LittleFS.
 Factory tooling pins `esptool==5.3.1` in
 `tools/factory-flash-requirements.txt`. Install that file into a dedicated
 virtual environment and run `flash_factory.py` with the same environment's
-Python. Before any build runner or device discovery, the tool verifies the
-imported version and parser support for every chip-id/erase/write/run form. It
+Python. Before any build runner or serial discovery, the tool verifies the
+explicit port syntax and imported version, then parses complete representative
+chip-id, erase-region, write-flash, and no-stub run argument vectors. This
+parser-only check constructs contexts without invoking callbacks or opening a
+device. It then confirms the requested port appears exactly once in read-only
+PlatformIO USB serial discovery. The `factory-flash` Make target completes this preflight before it
+builds the first-party packages or factory seed. It
 uses `python -m esptool`, never an ambient executable from `PATH`; the final
 success-only ROM-loader `run` includes `--no-stub`.
+
+Provision the interpreter used by both the Python/gallery gate and the factory
+tool explicitly:
+
+```sh
+python3 -m venv build/gallery-python
+build/gallery-python/bin/python -m pip install \
+  -r tools/font-requirements.txt \
+  -r tools/factory-flash-requirements.txt
+make gallery-test PYTHON=build/gallery-python/bin/python IDF_PYTHON=python3
+make factory-flash PORT=/dev/ttyUSB0 \
+  PYTHON=build/gallery-python/bin/python IDF_PYTHON=python3
+```
+
+Here `PYTHON` is the dedicated, pinned Python tooling interpreter used by the
+host Python suite and factory flasher. `IDF_PYTHON` is the separate
+ESP-IDF-ready interpreter used by ELF, sample, and seed builds; it defaults to
+`python3` and must satisfy the installed ESP-IDF's Python requirements.

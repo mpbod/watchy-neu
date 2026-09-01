@@ -149,7 +149,10 @@ Normal developer upload is firmware-only and preserves LittleFS:
 platformio run -e watchy_v2 -t upload
 ```
 
-Factory flashing builds and hashes the firmware images, validates the exact
+Factory flashing first validates the explicit port syntax, confirms the port
+appears exactly once in read-only USB serial discovery, and validates the
+pinned esptool parser before it builds any package, seed, or firmware artifact. It then builds
+and hashes the firmware images, validates the exact
 Watchy partition table and target identity, erases only the exact 24 KiB NVS
 partition without releasing the ESP32 from its bootloader, then writes firmware
 plus the audited LittleFS image without resetting. Only after that write reports
@@ -160,16 +163,29 @@ requires an explicit discovered classic ESP32 serial device—there is no
 automatic port selection:
 
 ```sh
-python3 -m venv build/factory-flash-venv
-build/factory-flash-venv/bin/python -m pip install \
+python3 -m venv build/gallery-python
+build/gallery-python/bin/python -m pip install \
+  -r tools/font-requirements.txt \
   -r tools/factory-flash-requirements.txt
 make factory-flash PORT=/dev/ttyUSB0 \
-  FACTORY_FLASH_PYTHON=build/factory-flash-venv/bin/python
+  PYTHON=build/gallery-python/bin/python \
+  IDF_PYTHON=python3
 ```
 
 The tool requires exactly esptool 5.3.1, validates the imported module and all
-used parser forms before running even the firmware build, and invokes it only
-as a module of `FACTORY_FLASH_PYTHON`; no ambient `esptool` executable is used.
+used parser forms with complete required arguments before running even the
+factory seed or firmware build, and invokes it only as a module of the selected
+`PYTHON` (`FACTORY_FLASH_PYTHON` may override it); no ambient `esptool`
+executable is used. The parser preflight constructs command contexts only: it
+does not invoke an esptool command or open the port. The only external
+pre-build command is read-only `platformio device list --json-output`; chip
+identity and every mutation remain in the post-build, fail-closed flash stage.
+
+`PYTHON` is the provisioned test/factory-tool interpreter. `IDF_PYTHON` is the
+ESP-IDF-ready interpreter used for sample, first-party, and factory-seed
+builds; it defaults to `python3` and must provide the Python modules required by
+the installed ESP-IDF. Keeping these roles separate avoids installing the full
+ESP-IDF Python environment into the small tooling virtual environment.
 
 Do not use `factory-flash` for routine firmware development. See the pending
 [hardware acceptance checklist](docs/hardware-acceptance.md) before treating a
@@ -190,13 +206,19 @@ See [Package SDK](docs/sdk.md), [WPK format](docs/package-format.md), and the
 ## Tests
 
 ```sh
+python3 -m venv build/gallery-python
+build/gallery-python/bin/python -m pip install \
+  -r tools/font-requirements.txt \
+  -r tools/factory-flash-requirements.txt
 cmake -S . -B build/host -G Ninja
 cmake --build build/host
 ctest --test-dir build/host --output-on-failure
-python3 -m unittest discover -s tests/python -v
+make python-test PYTHON=build/gallery-python/bin/python
+make gallery-test PYTHON=build/gallery-python/bin/python IDF_PYTHON=python3
 ```
 
-The complete software gallery gate is also available as `make gallery-test`;
+The complete software gallery gate is `make gallery-test` with the provisioned
+`PYTHON` and `IDF_PYTHON` shown above;
 it builds and verifies the two samples, all eight reproducible first-party WPKs,
 the reproducible factory seed, and the `watchy_v2` firmware. It never flashes.
 

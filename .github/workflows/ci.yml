@@ -15,8 +15,12 @@ jobs:
         run: cmake --build build/host
       - name: Run C and C++ tests
         run: ctest --test-dir build/host --output-on-failure
+      - name: Provision pinned Python tooling
+        run: |
+          python3 -m venv build/python-tools-venv
+          build/python-tools-venv/bin/python -m pip install --requirement tools/font-requirements.txt --requirement tools/factory-flash-requirements.txt
       - name: Run Python tooling tests
-        run: python3 -m unittest discover -s tests/python -v
+        run: build/python-tools-venv/bin/python -m unittest discover -s tests/python -v
 
   esp-idf-5-5:
     runs-on: ubuntu-latest

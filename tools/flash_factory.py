@@ -10,7 +10,6 @@ Wi-Fi credentials, package index/health state, and the factory-seed marker.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import csv
 from dataclasses import dataclass
 import hashlib
@@ -84,6 +83,65 @@ class FlashImage:
     sha256: str
 
 
+def esptool_parser_vectors() -> tuple[tuple[str, ...], ...]:
+    """Return complete parser-only examples for every esptool form we execute."""
+    safe_existing_input = str(Path(__file__).resolve())
+    common = ("--chip", "esp32", "--port", "/dev/null",
+              "--before", "default-reset", "--after", "no-reset")
+    return (
+        common + ("chip-id",),
+        common + ("erase-region", "0x9000", "0x6000"),
+        common + ("write-flash", "0x1000", safe_existing_input),
+        ("--chip", "esp32", "--port", "/dev/null", "--before", "no-reset",
+         "--after", "no-reset", "--no-stub", "run"),
+    )
+
+
+def _validate_esptool_parser(module: object) -> None:
+    """Parse complete commands without invoking callbacks or touching a device."""
+    cli = getattr(module, "cli", None)
+    required = ("make_context", "resolve_command")
+    if cli is None or any(not callable(getattr(cli, name, None)) for name in required):
+        raise FlashSafetyError(
+            f"esptool {PINNED_ESPTOOL_VERSION} parser semantics are unsupported")
+
+    missing = object()
+    previous_esp = getattr(cli, "_esp", missing)
+    try:
+        # esptool's Group.__call__ normally initializes this. Parsing directly
+        # deliberately avoids Group.invoke(), which would connect to a device.
+        cli._esp = None
+        for arguments in esptool_parser_vectors():
+            with cli.make_context("esptool", list(arguments)) as root_context:
+                remaining = [*root_context._protected_args, *root_context.args]
+                command_name, command, command_arguments = cli.resolve_command(
+                    root_context, remaining)
+                if command is None:
+                    raise FlashSafetyError(
+                        f"esptool parser did not resolve {command_name}")
+                with command.make_context(command_name, command_arguments,
+                                          parent=root_context) as command_context:
+                    # Click 8.3 does not register esptool's addr/file tuple with
+                    # Context.close(), so close the parser-opened smoke input
+                    # ourselves. The file is never read and no callback runs.
+                    for _address, source in command_context.params.get(
+                            "addr_filename", ()):
+                        source.close()
+    except FlashSafetyError:
+        raise
+    except (Exception, SystemExit) as error:
+        raise FlashSafetyError(
+            f"esptool {PINNED_ESPTOOL_VERSION} parser semantics are unsupported") from error
+    finally:
+        if previous_esp is missing:
+            try:
+                del cli._esp
+            except AttributeError:
+                pass
+        else:
+            cli._esp = previous_esp
+
+
 def validate_esptool_environment() -> str:
     try:
         with warnings.catch_warnings():
@@ -97,24 +155,7 @@ def validate_esptool_environment() -> str:
     if version != PINNED_ESPTOOL_VERSION or not callable(getattr(module, "main", None)):
         raise FlashSafetyError(
             f"esptool {PINNED_ESPTOOL_VERSION} is required; imported {version or 'unknown'}")
-    parser_smoke = (
-        ["--chip", "esp32", "--port", "/dev/null", "--before", "default-reset",
-         "--after", "no-reset", "chip-id", "--help"],
-        ["--chip", "esp32", "--port", "/dev/null", "--before", "default-reset",
-         "--after", "no-reset", "erase-region", "--help"],
-        ["--chip", "esp32", "--port", "/dev/null", "--before", "default-reset",
-         "--after", "no-reset", "write-flash", "--help"],
-        ["--chip", "esp32", "--port", "/dev/null", "--before", "no-reset",
-         "--after", "no-reset", "--no-stub", "run", "--help"],
-    )
-    try:
-        for arguments in parser_smoke:
-            with contextlib.redirect_stdout(io.StringIO()), \
-                 contextlib.redirect_stderr(io.StringIO()):
-                module.main(arguments)
-    except (Exception, SystemExit) as error:
-        raise FlashSafetyError(
-            f"esptool {PINNED_ESPTOOL_VERSION} parser semantics are unsupported") from error
+    _validate_esptool_parser(module)
     return version
 
 
@@ -217,10 +258,15 @@ def validate_flash_images(build_dir: Path, image: Path) -> tuple[FlashImage, ...
     )
 
 
-def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
-                 platformio: str) -> list[list[str]]:
+def validate_port(port: str) -> str:
     if not port or any(character.isspace() for character in port) or not port.startswith("/dev/"):
         raise FlashSafetyError("--port must be one explicit /dev/ serial path without whitespace")
+    return port
+
+
+def commands_for(port: str, image: Path, *, build_dir: Path = DEFAULT_BUILD_DIR,
+                 platformio: str) -> list[list[str]]:
+    validate_port(port)
     image = Path(image).resolve()
     build_dir = Path(build_dir).resolve()
     esptool = [sys.executable, "-m", "esptool", "--chip", "esp32", "--port", port,
@@ -265,6 +311,18 @@ def _validate_discovery(output: str, port: str) -> None:
         raise FlashSafetyError(f"discovered target is not an identified USB serial device: {port}")
 
 
+def preflight_factory(port: str, *, runner: Runner | None = None,
+                      platformio: str | None = None) -> str:
+    """Validate tooling and read-only serial discovery before expensive builds."""
+    validate_port(port)
+    version = validate_esptool_environment()
+    runner = runner or subprocess.run
+    platformio = platformio or shutil.which("platformio") or "platformio"
+    discovery = _run(runner, [platformio, "device", "list", "--json-output"])
+    _validate_discovery(discovery.stdout, port)
+    return version
+
+
 def _validate_chip(output: str) -> None:
     match = re.search(r"Chip\s+(?:type:\s*|is\s+)([^\r\n]+)", output, re.IGNORECASE)
     chip = match.group(1).strip() if match else ""
@@ -283,6 +341,7 @@ def flash_factory(port: str,
                   printer: Callable[[str], None] = print,
                   platformio: str | None = None,
                   build_dir: Path = DEFAULT_BUILD_DIR) -> str:
+    validate_port(port)
     validate_esptool_environment()
     offset, _ = validate_partition_table(partition_table)
     image = Path(image).resolve()
@@ -316,12 +375,19 @@ def make_parser() -> argparse.ArgumentParser:
                         help="prebuilt watchy_v2 image directory")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate local inputs and print commands without opening a device")
+    parser.add_argument("--preflight-only", action="store_true",
+                        help="validate port syntax and pinned esptool without build/device access")
     return parser
 
 
 def main(arguments: Iterable[str] | None = None) -> int:
     try:
         args = make_parser().parse_args(arguments)
+        if args.preflight_only:
+            esptool_version = preflight_factory(args.port)
+            print(f"PREFLIGHT port={args.port} esptool={esptool_version}")
+            return 0
+        validate_port(args.port)
         validate_esptool_environment()
         offset, _ = validate_partition_table(args.partition_table)
         size, digest = validate_image(args.image)
