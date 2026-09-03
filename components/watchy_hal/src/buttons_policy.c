@@ -4,6 +4,34 @@
 
 #include <stddef.h>
 
+bool watchy_buttons_sleep_veto(bool event_pending, bool overflowed) {
+    return event_pending || overflowed;
+}
+
+watchy_status_t watchy_buttons_apply_quiesce(
+    const watchy_button_quiesce_ops_t *operations,
+    bool preserve_events,
+    bool *out_pending) {
+    watchy_status_t status;
+
+    if (operations == NULL || operations->stop_production == NULL ||
+        operations->event_pending == NULL ||
+        operations->discard_events == NULL || out_pending == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_pending = false;
+    status = operations->stop_production(operations->context);
+    if (status != WATCHY_STATUS_OK) {
+        return status;
+    }
+    if (preserve_events) {
+        *out_pending = operations->event_pending(operations->context);
+    } else {
+        operations->discard_events(operations->context);
+    }
+    return WATCHY_STATUS_OK;
+}
+
 void watchy_buttons_filter_init(watchy_button_filter_t *filter,
                                 watchy_button_mask_t initial_mask,
                                 uint32_t debounce_ms) {

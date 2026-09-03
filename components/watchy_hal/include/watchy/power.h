@@ -56,6 +56,12 @@ bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,
 bool watchy_power_button_needs_internal_pulldown(uint8_t pin);
 bool watchy_power_release_pin_for_sleep(uint8_t pin);
 bool watchy_power_safe_mode_chord_allowed(watchy_wake_cause_t wake_cause);
+bool watchy_power_boot_should_initialize_motion(bool timer_configured,
+                                                 bool motion_wake_enabled);
+watchy_status_t watchy_power_sleep_handoff_status(
+    watchy_status_t quiesce_status,
+    bool sleep_veto,
+    bool awake_services_restored);
 watchy_status_t watchy_power_prepare_deep_sleep(bool timer_configured);
 watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configured,
                                                             bool motion_wake_enabled);

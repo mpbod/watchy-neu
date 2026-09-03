@@ -48,6 +48,22 @@ bool watchy_power_safe_mode_chord_allowed(watchy_wake_cause_t wake_cause) {
     return wake_cause == WATCHY_WAKE_COLD || wake_cause == WATCHY_WAKE_OTHER;
 }
 
+bool watchy_power_boot_should_initialize_motion(bool timer_configured,
+                                                 bool motion_wake_enabled) {
+    return timer_configured && motion_wake_enabled;
+}
+
+watchy_status_t watchy_power_sleep_handoff_status(
+    watchy_status_t quiesce_status,
+    bool sleep_veto,
+    bool awake_services_restored) {
+    if (quiesce_status != WATCHY_STATUS_OK ||
+        (sleep_veto && !awake_services_restored)) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    return sleep_veto ? WATCHY_STATUS_CANCELLED : WATCHY_STATUS_OK;
+}
+
 bool watchy_power_wake_sources_observe(watchy_wake_source_filter_t *filter,
                                        uint64_t active_sources) {
     if (filter == NULL) {

@@ -149,6 +149,70 @@ static int test_button_filter_debounces_each_semantic_edge_once(void) {
     return 0;
 }
 
+typedef struct {
+    bool producer_running;
+    bool event_pending;
+    bool publish_before_stop;
+} button_quiesce_fixture_t;
+
+static watchy_status_t stop_button_production(void *context) {
+    button_quiesce_fixture_t *fixture = context;
+    if (fixture->publish_before_stop) {
+        fixture->event_pending = true;
+    }
+    fixture->producer_running = false;
+    return WATCHY_STATUS_OK;
+}
+
+static bool button_event_pending(void *context) {
+    const button_quiesce_fixture_t *fixture = context;
+    return !fixture->producer_running && fixture->event_pending;
+}
+
+static void discard_button_events(void *context) {
+    button_quiesce_fixture_t *fixture = context;
+    fixture->event_pending = false;
+}
+
+static int test_sleep_quiesce_stops_production_without_deleting_pending_event(void) {
+    button_quiesce_fixture_t fixture = {
+        .producer_running = true,
+        .event_pending = true,
+    };
+    const watchy_button_quiesce_ops_t operations = {
+        .stop_production = stop_button_production,
+        .event_pending = button_event_pending,
+        .discard_events = discard_button_events,
+        .context = &fixture,
+    };
+    bool pending = false;
+
+    CHECK(watchy_buttons_apply_quiesce(&operations, true, &pending) ==
+          WATCHY_STATUS_OK);
+    CHECK(!fixture.producer_running);
+    CHECK(pending);
+    CHECK(fixture.event_pending);
+
+    fixture.producer_running = true;
+    fixture.event_pending = false;
+    fixture.publish_before_stop = true;
+    CHECK(watchy_buttons_apply_quiesce(&operations, true, &pending) ==
+          WATCHY_STATUS_OK);
+    CHECK(pending);
+    CHECK(fixture.event_pending);
+
+    fixture.producer_running = true;
+    fixture.publish_before_stop = false;
+    CHECK(watchy_buttons_apply_quiesce(&operations, false, &pending) ==
+          WATCHY_STATUS_OK);
+    CHECK(!pending);
+    CHECK(!fixture.event_pending);
+    CHECK(!watchy_buttons_sleep_veto(false, false));
+    CHECK(watchy_buttons_sleep_veto(true, false));
+    CHECK(watchy_buttons_sleep_veto(false, true));
+    return 0;
+}
+
 static int test_battery_percentage_and_install_boundaries_are_conservative(void) {
     CHECK(watchy_battery_percent_from_mv(3300) == 0u);
     CHECK(watchy_battery_percent_from_mv(3400) == 0u);
@@ -711,6 +775,26 @@ static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
     return 0;
 }
 
+static int test_boot_initializes_motion_only_for_enabled_timer_sleep(void) {
+    CHECK(!watchy_power_boot_should_initialize_motion(true, false));
+    CHECK(!watchy_power_boot_should_initialize_motion(false, true));
+    CHECK(watchy_power_boot_should_initialize_motion(true, true));
+    return 0;
+}
+
+static int test_sleep_handoff_reports_preserved_input_only_after_restore(void) {
+    CHECK(watchy_power_sleep_handoff_status(WATCHY_STATUS_OK, false, true) ==
+          WATCHY_STATUS_OK);
+    CHECK(watchy_power_sleep_handoff_status(WATCHY_STATUS_OK, true, true) ==
+          WATCHY_STATUS_CANCELLED);
+    CHECK(watchy_power_sleep_handoff_status(WATCHY_STATUS_OK, true, false) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(watchy_power_sleep_handoff_status(WATCHY_STATUS_INVALID_STATE, false,
+                                            true) ==
+          WATCHY_STATUS_INVALID_STATE);
+    return 0;
+}
+
 static int test_motor_pin_is_retained_low_instead_of_generically_released(void) {
     CHECK(watchy_power_button_needs_internal_pulldown(WATCHY_PIN_BUTTON_MENU));
     CHECK(watchy_power_button_needs_internal_pulldown(WATCHY_PIN_BUTTON_BACK));
@@ -756,6 +840,7 @@ int main(void) {
     CHECK(test_button_wake_gpio_decodes_semantic_mask() == 0);
     CHECK(test_safe_mode_requires_back_and_down_held_together() == 0);
     CHECK(test_button_filter_debounces_each_semantic_edge_once() == 0);
+    CHECK(test_sleep_quiesce_stops_production_without_deleting_pending_event() == 0);
     CHECK(test_battery_percentage_and_install_boundaries_are_conservative() == 0);
     CHECK(test_wake_cause_mapping_distinguishes_hardware_sources() == 0);
     CHECK(test_ssd1681_busy_is_active_high_and_requires_settling() == 0);
@@ -771,10 +856,12 @@ int main(void) {
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
     CHECK(test_pcf8563_alarm_encodes_documented_next_match_fields() == 0);
     CHECK(test_sleep_admission_and_wake_source_debounce_are_fail_closed() == 0);
+    CHECK(test_boot_initializes_motion_only_for_enabled_timer_sleep() == 0);
+    CHECK(test_sleep_handoff_reports_preserved_input_only_after_restore() == 0);
     CHECK(test_motor_pin_is_retained_low_instead_of_generically_released() == 0);
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 23 HAL tests");
+    puts("PASS 26 HAL tests");
     return 0;
 }

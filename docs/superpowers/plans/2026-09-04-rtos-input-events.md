@@ -137,6 +137,7 @@ bool watchy_buttons_take_press(watchy_button_press_event_t *out_event,
                                uint32_t timeout_ms);
 bool watchy_buttons_press_pending(void);
 bool watchy_buttons_overflowed(void);
+watchy_status_t watchy_buttons_quiesce_for_sleep(bool *out_pending);
 watchy_status_t watchy_buttons_quiesce(void);
 watchy_status_t watchy_buttons_resume(void);
 ```
@@ -167,7 +168,9 @@ In `buttons.c`:
 - In the producer task, sample immediately after a notification and once per native FreeRTOS tick while any candidate bit remains pending. Feed samples and `esp_timer_get_time()/1000` into the Task 1 filter. The configured 100 Hz tick makes this a 10 ms cadence while preserving the exact 30 ms acceptance boundary.
 - Enqueue each nonzero stable rising-edge mask with its timestamp. If the queue is full, latch overflow without blocking.
 - `watchy_buttons_take_press` validates its output pointer and converts `timeout_ms` to FreeRTOS ticks, with zero remaining nonblocking.
-- `watchy_buttons_quiesce` disables/removes handlers, stops and joins the producer, drains the queue, and prevents an in-flight ISR from publishing.
+- Serialize sampling, debounce advancement, publication, and the stop-state transition with the same mutex so an accepted rise cannot be suppressed after sleep inspection.
+- `watchy_buttons_quiesce_for_sleep` disables/removes handlers, stops and joins the producer, then reports queued/overflow input without clearing the static queue.
+- `watchy_buttons_quiesce` disables/removes handlers, stops and joins the producer, and intentionally drains the queue for destructive lifecycle use.
 - `watchy_buttons_resume` restores the filter baseline from current levels and reinstalls the service without synthesizing a press.
 - `watchy_buttons_deinit` quiesces and marks the HAL unready.
 - Treat `ESP_ERR_INVALID_STATE` from `gpio_install_isr_service` as an already-installed shared service; remove only this component's handlers and do not uninstall the global ISR service.
@@ -206,7 +209,7 @@ git commit -m "feat: capture buttons with a FreeRTOS event service"
 
 **Interfaces:**
 - Consumes: the Task 2 event and lifecycle API.
-- Produces: no new public interface beyond any sleep-requirement field needed to verify quiescence.
+- Produces: the preserving `watchy_buttons_quiesce_for_sleep(...)` lifecycle correction, sleep-requirement fields needed to verify quiescence, and host-testable sleep routing/recovery policies.
 
 - [ ] **Step 1: Write failing integration-policy tests**
 
@@ -269,12 +272,13 @@ Add `bool buttons_quiesced` and `bool motion_wake_enabled` to `watchy_sleep_requ
 
 In both sleep-preparation paths:
 
-1. Keep the input producer active while checking that wake pins have become inactive.
-2. Quiesce it before converting button GPIOs to RTC mode.
-3. Set `buttons_quiesced` only after successful quiescence.
-4. Resume it if preparation returns before RTC wake ownership has safely transferred.
+1. Keep the input producer active through display power-off, unrelated peripheral teardown, and the final wake-pin inactivity wait.
+2. Atomically stop production and inspect the queue/overflow latch without clearing either; pending input is a sleep veto, not a successful quiescence to discard.
+3. On a veto, resume the producer with the queue intact, reconstruct the formerly ready awake services (including deinit/init display recovery), and return `CANCELLED` so `main` re-enters the shell.
+4. On any other preparation failure, restore GPIO/peripheral/input ownership before remaining awake fail-closed.
+5. Only after a no-veto handoff convert button GPIOs to RTC mode; perform no further blocking work before deep sleep.
 
-In `watchy_power_prepare_deep_sleep_with_motion`, initialize/configure the BMA423 only when motion wake is enabled. In `main.c`, remove the unconditional `timer_configured && !watchy_motion_ready()` initialization and initialize motion before sleep only when `settings.motion_wake` is true.
+In `watchy_power_prepare_deep_sleep_with_motion`, initialize/configure the BMA423 only when motion wake is enabled. In `main.c`, remove pre-settings motion initialization and initialize motion for sleep only when a host-tested decision over `timer_configured && settings.motion_wake` is true. Capture `watchy_buttons_init()` failure, show the specific input/system error, and remain awake with a bounded delay instead of entering an unusable shell or reboot loop.
 
 - [ ] **Step 5: Verify focused tests and firmware compilation**
 

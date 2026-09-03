@@ -126,6 +126,43 @@ static shell_presentation_result_t refresh_shell(
     return shell_presentation(WATCHY_SHELL_PRESENT_TARGET, 0u);
 }
 
+static void remain_awake_with_delay(void) __attribute__((noreturn));
+
+static void remain_awake_with_delay(void) {
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void show_input_failure_and_remain_awake(
+    watchy_shell_t *shell,
+    watchy_shell_presentation_state_t *presentation,
+    const watchy_settings_t *settings,
+    const watchy_time_t *time,
+    const watchy_battery_state_t *battery,
+    const watchy_package_catalog_t *catalog,
+    const watchy_diagnostic_report_t *diagnostics) __attribute__((noreturn));
+
+static void show_input_failure_and_remain_awake(
+    watchy_shell_t *shell,
+    watchy_shell_presentation_state_t *presentation,
+    const watchy_settings_t *settings,
+    const watchy_time_t *time,
+    const watchy_battery_state_t *battery,
+    const watchy_package_catalog_t *catalog,
+    const watchy_diagnostic_report_t *diagnostics) {
+    ESP_LOGE(TAG, "button input service unavailable; remaining awake");
+    (void)watchy_portal_stop();
+    watchy_shell_fail(shell, WATCHY_SHELL_ERROR_INPUT);
+    watchy_display_invalidate_previous();
+    const shell_presentation_result_t result = refresh_shell(
+        shell, settings, time, battery, catalog, diagnostics, NULL,
+        WATCHY_REFRESH_FULL, NULL);
+    watchy_shell_presentation_observe(presentation, shell, result.outcome,
+                                      result.cancelled_buttons);
+    remain_awake_with_delay();
+}
+
 static watchy_shell_input_t input_from_mask(watchy_button_mask_t mask) {
     if ((mask & WATCHY_BUTTON_MASK_MENU) != 0u) return WATCHY_SHELL_INPUT_MENU;
     if ((mask & WATCHY_BUTTON_MASK_BACK) != 0u) return WATCHY_SHELL_INPUT_BACK;
@@ -519,7 +556,6 @@ static void run_shell(watchy_shell_t *shell,
                       watchy_diagnostic_report_t *diagnostics,
                       package_boot_state_t *package_boot,
                       const char *safe_reason) {
-    bool input_overflow_reported = false;
     uint64_t last_activity = milliseconds();
     char detail[192] = {0};
     if (shell->safe_mode && safe_reason != NULL) snprintf(detail, sizeof(detail), "%s", safe_reason);
@@ -532,10 +568,10 @@ static void run_shell(watchy_shell_t *shell,
                 pressed = event.mask;
             }
         }
-        if (pressed == 0u && !input_overflow_reported && watchy_buttons_overflowed()) {
-            ESP_LOGE(TAG, "button input queue overflow; navigation event was lost");
-            input_overflow_reported = true;
-            shell->package_warning = true;
+        if (pressed == 0u && watchy_buttons_overflowed()) {
+            show_input_failure_and_remain_awake(
+                shell, presentation, settings, time, battery, catalog,
+                diagnostics);
         }
         if (watchy_portal_active()) {
             if ((pressed & WATCHY_BUTTON_MASK_BACK) != 0u || watchy_portal_timed_out()) {
@@ -914,6 +950,7 @@ void app_main(void) {
     bool settings_load_failed = false;
     bool settings_save_failed = false;
     bool display_failed = false;
+    watchy_status_t buttons_status;
     const char *safe_reason = "BACK+DOWN HELD";
 
     ESP_LOGI(TAG, "boot wake_cause=%d", wake_cause);
@@ -922,7 +959,7 @@ void app_main(void) {
         safe_reason = "STORAGE UNAVAILABLE";
     }
     if (watchy_buses_init() != WATCHY_STATUS_OK) ESP_LOGE(TAG, "bus initialization failed");
-    (void)watchy_buttons_init();
+    buttons_status = watchy_buttons_init();
     /* Prepare AP credentials while ESP-IDF's early-boot hardware entropy
      * source can be safely bracketed, before the battery ADC is initialized. */
     (void)watchy_portal_prepare_ap_password();
@@ -934,7 +971,6 @@ void app_main(void) {
         watchy_watchface_boot_should_defer(wake_cause, safe_mode);
     (void)watchy_haptics_init();
     (void)watchy_rtc_init();
-    if (!defer_package_boot) (void)watchy_motion_init();
     (void)watchy_battery_init();
     display_failed = watchy_display_init() != WATCHY_STATUS_OK;
     if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
@@ -971,7 +1007,8 @@ void app_main(void) {
     }
     const bool package_wake = wake_cause != WATCHY_WAKE_BUTTON &&
                               !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake);
-    if (rtc_valid && !safe_mode && !package_boot.execution_blocked &&
+    if (buttons_status == WATCHY_STATUS_OK && rtc_valid && !safe_mode &&
+        !package_boot.execution_blocked &&
         package_wake && package_selected) {
         package_rendered = watchy_packages_run_watchface(false, false);
         if (watchy_display_take_cancelled_buttons(&boot_cancelled_buttons)) {
@@ -1009,12 +1046,19 @@ void app_main(void) {
     memset(&diagnostics, 0, sizeof(diagnostics));
     if (!defer_package_boot) collect_and_log_diagnostics(&diagnostics);
     watchy_shell_set_diagnostic_count(&shell, diagnostics.count);
-    if (settings_load_failed) {
+    if (buttons_status != WATCHY_STATUS_OK) {
+        watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_INPUT);
+    } else if (settings_load_failed) {
         watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_SETTINGS_LOAD);
     } else if (settings_save_failed) {
         watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
     } else if (display_failed) {
         watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_DISPLAY);
+    }
+    if (buttons_status != WATCHY_STATUS_OK) {
+        show_input_failure_and_remain_awake(
+            &shell, &presentation, &settings, &time, &battery, &catalog,
+            &diagnostics);
     }
     if (!package_rendered &&
         !watchy_shell_presentation_has_pending_input(&presentation) &&
@@ -1054,21 +1098,54 @@ void app_main(void) {
                   &diagnostics, &package_boot,
                   safe_mode ? safe_reason : NULL);
     }
-    (void)watchy_portal_stop();
-    if (!watchy_shell_presentation_allows_sleep(&presentation)) {
-        ESP_LOGE(TAG, "display target not presented; remaining awake");
-        for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
+    for (;;) {
+        bool sleep_preparation_attempted = false;
+        const bool input_pending = watchy_buttons_press_pending();
+        watchy_status_t sleep_status = WATCHY_STATUS_OK;
+
+        (void)watchy_portal_stop();
+        if (!watchy_shell_presentation_allows_sleep(&presentation)) {
+            ESP_LOGE(TAG, "display target not presented; remaining awake");
+            remain_awake_with_delay();
+        }
+        if (!input_pending) {
+            timer_configured = watchy_rtc_ready() &&
+                               watchy_rtc_set_minute_timer(1u) == WATCHY_STATUS_OK;
+            if (watchy_power_boot_should_initialize_motion(
+                    timer_configured, settings.motion_wake) &&
+                !watchy_motion_ready()) {
+                (void)watchy_motion_init();
+            }
+            sleep_status = timer_configured
+                ? watchy_power_prepare_deep_sleep_with_motion(
+                      true, settings.motion_wake)
+                : watchy_power_prepare_button_only_sleep();
+            sleep_preparation_attempted = true;
+        }
+        const watchy_shell_sleep_route_t sleep_route =
+            watchy_shell_sleep_route(&shell, input_pending, sleep_status);
+        if (sleep_route == WATCHY_SHELL_SLEEP_PROCESS_INPUT) {
+            if (sleep_preparation_attempted) {
+                if (!watchy_display_ready() ||
+                    watchy_display_set_partial_limit(
+                        settings.partial_refresh_limit) != WATCHY_STATUS_OK ||
+                    watchy_display_set_transition_policy(
+                        settings.transition_level, true, shell.safe_mode,
+                        battery.millivolts) != WATCHY_STATUS_OK) {
+                    ESP_LOGE(TAG, "display restore failed after sleep veto");
+                    remain_awake_with_delay();
+                }
+                watchy_display_invalidate_previous();
+            }
+            run_shell(&shell, &presentation, &settings, &time, &battery,
+                      &catalog, &diagnostics, &package_boot,
+                      safe_mode ? safe_reason : NULL);
+            continue;
+        }
+        if (sleep_route == WATCHY_SHELL_SLEEP_FAIL_CLOSED) {
+            ESP_LOGE(TAG, "sleep preparation failed; remaining awake");
+            remain_awake_with_delay();
+        }
+        watchy_power_enter_deep_sleep();
     }
-    if (watchy_rtc_ready()) timer_configured = watchy_rtc_set_minute_timer(1u) == WATCHY_STATUS_OK;
-    if (timer_configured && settings.motion_wake && !watchy_motion_ready()) {
-        (void)watchy_motion_init();
-    }
-    const watchy_status_t sleep_status = timer_configured
-        ? watchy_power_prepare_deep_sleep_with_motion(true, settings.motion_wake)
-        : watchy_power_prepare_button_only_sleep();
-    if (sleep_status != WATCHY_STATUS_OK) {
-        ESP_LOGE(TAG, "sleep preparation failed; remaining awake");
-        for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    watchy_power_enter_deep_sleep();
 }

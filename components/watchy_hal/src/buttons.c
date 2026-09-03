@@ -172,23 +172,23 @@ static const gpio_isr_t s_button_handlers[WATCHY_BUTTON_COUNT] = {
 };
 
 static void enqueue_stable_presses(void) {
-    const uint32_t timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    const watchy_button_mask_t pressed_mask = watchy_buttons_filter_observe(
-        &s_filter, watchy_buttons_sample(), timestamp_ms);
-
-    if (pressed_mask != 0u &&
-        xSemaphoreTake(s_publication_mutex, portMAX_DELAY) == pdPASS) {
+    if (xSemaphoreTake(s_publication_mutex, portMAX_DELAY) == pdPASS) {
+        if (!service_is_running()) {
+            (void)xSemaphoreGive(s_publication_mutex);
+            return;
+        }
+        const uint32_t timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        const watchy_button_mask_t pressed_mask = watchy_buttons_filter_observe(
+            &s_filter, watchy_buttons_sample(), timestamp_ms);
         const watchy_button_press_event_t event = {
             .mask = pressed_mask,
             .timestamp_ms = timestamp_ms,
         };
 
-        if (service_is_running()) {
-            if (xQueueSend(s_event_queue, &event, 0) != pdPASS) {
-                portENTER_CRITICAL(&s_service_lock);
-                s_overflowed = true;
-                portEXIT_CRITICAL(&s_service_lock);
-            }
+        if (pressed_mask != 0u && xQueueSend(s_event_queue, &event, 0) != pdPASS) {
+            portENTER_CRITICAL(&s_service_lock);
+            s_overflowed = true;
+            portEXIT_CRITICAL(&s_service_lock);
         }
         (void)xSemaphoreGive(s_publication_mutex);
     }
@@ -220,7 +220,7 @@ static void button_producer_task(void *argument) {
     }
 }
 
-static void stop_event_service(void) {
+static void stop_event_production(void) {
     TaskHandle_t producer_task;
 
     if (s_publication_mutex != NULL) {
@@ -241,16 +241,35 @@ static void stop_event_service(void) {
         xTaskNotifyGive(producer_task);
         wait_for_producer_park();
     }
-    if (s_event_queue != NULL) {
-        (void)xQueueReset(s_event_queue);
-        s_event_queue = NULL;
-    }
+}
+
+static void discard_event_queue(void) {
+    if (s_event_queue == NULL) return;
+    (void)xQueueReset(s_event_queue);
+    s_event_queue = NULL;
+}
+
+static watchy_status_t stop_button_production(void *context) {
+    (void)context;
+    stop_event_production();
+    return WATCHY_STATUS_OK;
+}
+
+static bool button_event_pending(void *context) {
+    (void)context;
+    return watchy_buttons_sleep_veto(watchy_buttons_press_pending(),
+                                     watchy_buttons_overflowed());
+}
+
+static void discard_button_events(void *context) {
+    (void)context;
+    discard_event_queue();
 }
 
 static watchy_status_t start_event_service(void) {
     esp_err_t result;
 
-    if (s_event_queue != NULL) {
+    if (service_is_running()) {
         return WATCHY_STATUS_OK;
     }
 
@@ -261,12 +280,14 @@ static watchy_status_t start_event_service(void) {
         }
     }
 
-    s_event_queue = xQueueCreateStatic(WATCHY_BUTTON_EVENT_QUEUE_LENGTH,
-                                       sizeof(watchy_button_press_event_t),
-                                       s_event_queue_buffer,
-                                       &s_event_queue_storage);
     if (s_event_queue == NULL) {
-        return WATCHY_STATUS_INVALID_STATE;
+        s_event_queue = xQueueCreateStatic(WATCHY_BUTTON_EVENT_QUEUE_LENGTH,
+                                           sizeof(watchy_button_press_event_t),
+                                           s_event_queue_buffer,
+                                           &s_event_queue_storage);
+        if (s_event_queue == NULL) {
+            return WATCHY_STATUS_INVALID_STATE;
+        }
     }
 
     watchy_buttons_filter_init(&s_filter,
@@ -274,7 +295,6 @@ static watchy_status_t start_event_service(void) {
                                 WATCHY_BUTTON_DEBOUNCE_MS);
     result = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
     if (result != ESP_OK && result != ESP_ERR_INVALID_STATE) {
-        s_event_queue = NULL;
         return WATCHY_STATUS_INVALID_STATE;
     }
 
@@ -287,7 +307,6 @@ static watchy_status_t start_event_service(void) {
                                             s_producer_stack,
                                             &s_producer_task_storage);
         if (s_producer_task == NULL) {
-            s_event_queue = NULL;
             return WATCHY_STATUS_INVALID_STATE;
         }
         s_producer_created = true;
@@ -296,7 +315,7 @@ static watchy_status_t start_event_service(void) {
     for (size_t index = 0u; index < WATCHY_BUTTON_COUNT; ++index) {
         result = gpio_isr_handler_add(s_button_gpios[index], s_button_handlers[index], NULL);
         if (result != ESP_OK) {
-            stop_event_service();
+            stop_event_production();
             return WATCHY_STATUS_INVALID_STATE;
         }
         s_handler_registered[index] = true;
@@ -339,7 +358,8 @@ watchy_status_t watchy_buttons_init(void) {
     s_overflowed = false;
     status = start_event_service();
     if (status != WATCHY_STATUS_OK) {
-        disable_button_interrupts();
+        stop_event_production();
+        discard_event_queue();
         s_ready = false;
     }
     return status;
@@ -392,8 +412,29 @@ bool watchy_buttons_overflowed(void) {
 }
 
 watchy_status_t watchy_buttons_quiesce(void) {
-    stop_event_service();
-    return WATCHY_STATUS_OK;
+    static const watchy_button_quiesce_ops_t operations = {
+        .stop_production = stop_button_production,
+        .event_pending = button_event_pending,
+        .discard_events = discard_button_events,
+        .context = NULL,
+    };
+    bool pending;
+
+    return watchy_buttons_apply_quiesce(&operations, false, &pending);
+}
+
+watchy_status_t watchy_buttons_quiesce_for_sleep(bool *out_pending) {
+    static const watchy_button_quiesce_ops_t operations = {
+        .stop_production = stop_button_production,
+        .event_pending = button_event_pending,
+        .discard_events = discard_button_events,
+        .context = NULL,
+    };
+
+    if (!s_ready) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    return watchy_buttons_apply_quiesce(&operations, true, out_pending);
 }
 
 watchy_status_t watchy_buttons_resume(void) {

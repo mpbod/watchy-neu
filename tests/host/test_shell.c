@@ -211,6 +211,30 @@ static int test_presentation_outcomes_gate_sleep_and_post_action_refresh(void) {
     return 0;
 }
 
+static int test_sleep_route_returns_pending_input_to_awake_shell(void) {
+    watchy_shell_t shell;
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_RTC, true, false, false);
+    shell.sleep_requested = true;
+    CHECK(watchy_shell_sleep_route(&shell, true, WATCHY_STATUS_OK) ==
+          WATCHY_SHELL_SLEEP_PROCESS_INPUT);
+    CHECK(!shell.sleep_requested);
+
+    shell.sleep_requested = true;
+    CHECK(watchy_shell_sleep_route(&shell, false, WATCHY_STATUS_CANCELLED) ==
+          WATCHY_SHELL_SLEEP_PROCESS_INPUT);
+    CHECK(!shell.sleep_requested);
+
+    shell.sleep_requested = true;
+    CHECK(watchy_shell_sleep_route(&shell, false, WATCHY_STATUS_OK) ==
+          WATCHY_SHELL_SLEEP_ENTER);
+    CHECK(shell.sleep_requested);
+
+    CHECK(watchy_shell_sleep_route(&shell, false, WATCHY_STATUS_INVALID_STATE) ==
+          WATCHY_SHELL_SLEEP_FAIL_CLOSED);
+    return 0;
+}
+
 static int test_wifi_settings_accept_only_open_or_valid_psk_credentials(void) {
     watchy_settings_t settings;
     watchy_settings_defaults(&settings);
@@ -835,6 +859,7 @@ static int test_all_operation_failures_enter_a_bounded_safe_error_screen(void) {
         WATCHY_SHELL_ERROR_PORTAL,
         WATCHY_SHELL_ERROR_DISPLAY,
         WATCHY_SHELL_ERROR_PACKAGE,
+        WATCHY_SHELL_ERROR_INPUT,
     };
     watchy_shell_t shell;
     for (size_t index = 0u; index < sizeof(failures) / sizeof(failures[0]); ++index) {
@@ -849,6 +874,9 @@ static int test_all_operation_failures_enter_a_bounded_safe_error_screen(void) {
         CHECK(strlen(message) <= WATCHY_SHELL_ERROR_MESSAGE_MAX);
         CHECK(strchr(message, '/') == NULL);
         CHECK(strchr(message, '\\') == NULL);
+        if (failures[index] == WATCHY_SHELL_ERROR_INPUT) {
+            CHECK(strcmp(message, "INPUT SERVICE FAILED") == 0);
+        }
         watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
         CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
     }
@@ -927,6 +955,7 @@ int main(void) {
     failures += test_display_motion_level_defaults_sanitizes_and_cycles();
     failures += test_shell_transition_mapping_returns_complete_safe_requests();
     failures += test_presentation_outcomes_gate_sleep_and_post_action_refresh();
+    failures += test_sleep_route_returns_pending_input_to_awake_shell();
     failures += test_wifi_settings_accept_only_open_or_valid_psk_credentials();
     failures += test_erased_settings_can_be_provisioned_and_reused_after_reload();
     failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();

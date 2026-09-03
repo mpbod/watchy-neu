@@ -35,6 +35,13 @@ typedef struct {
     uint32_t timestamp_ms;
 } watchy_button_press_event_t;
 
+typedef struct {
+    watchy_status_t (*stop_production)(void *context);
+    bool (*event_pending)(void *context);
+    void (*discard_events)(void *context);
+    void *context;
+} watchy_button_quiesce_ops_t;
+
 void watchy_buttons_filter_init(watchy_button_filter_t *filter,
                                  watchy_button_mask_t initial_mask,
                                  uint32_t debounce_ms);
@@ -42,6 +49,7 @@ watchy_button_mask_t watchy_buttons_filter_observe(
     watchy_button_filter_t *filter,
     watchy_button_mask_t sampled_mask,
     uint32_t now_ms);
+bool watchy_buttons_sleep_veto(bool event_pending, bool overflowed);
 
 watchy_button_mask_t watchy_buttons_decode_wake_gpio(uint64_t gpio_mask);
 bool watchy_buttons_is_safe_mode_chord(watchy_button_mask_t sampled_mask);
@@ -52,6 +60,11 @@ bool watchy_buttons_take_press(watchy_button_press_event_t *out_event,
                                uint32_t timeout_ms);
 bool watchy_buttons_press_pending(void);
 bool watchy_buttons_overflowed(void);
+watchy_status_t watchy_buttons_apply_quiesce(
+    const watchy_button_quiesce_ops_t *operations,
+    bool preserve_events,
+    bool *out_pending);
+watchy_status_t watchy_buttons_quiesce_for_sleep(bool *out_pending);
 watchy_status_t watchy_buttons_quiesce(void);
 watchy_status_t watchy_buttons_resume(void);
 void watchy_buttons_deinit(void);

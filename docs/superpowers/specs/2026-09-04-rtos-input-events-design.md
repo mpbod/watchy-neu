@@ -48,11 +48,19 @@ bool watchy_buttons_take_press(watchy_button_press_event_t *out_event,
                                uint32_t timeout_ms);
 bool watchy_buttons_press_pending(void);
 bool watchy_buttons_overflowed(void);
+watchy_status_t watchy_buttons_quiesce_for_sleep(bool *out_pending);
 watchy_status_t watchy_buttons_quiesce(void);
 watchy_status_t watchy_buttons_resume(void);
 ```
 
 The implementation uses static FreeRTOS task and queue storage. The semantic queue holds 16 events. Queue overflow is latched and reported; it is never silently treated as normal operation.
+
+`watchy_buttons_quiesce_for_sleep()` is the preserving sleep handoff. It stops
+event production and reports whether either the queue or the overflow latch
+vetoes sleep, without clearing either. The generic `watchy_buttons_quiesce()`
+and `watchy_buttons_deinit()` remain destructive lifecycle operations and
+intentionally drain the queue. `watchy_buttons_resume()` reuses a preserved
+queue and resets only the debounce baseline to current pin levels.
 
 The producer checks unsettled candidates once per native FreeRTOS tick (10 ms at the configured 100 Hz). The accepted-state boundary remains the exact 30 ms debounce interval.
 
@@ -76,17 +84,20 @@ Transition cancellation checks the event queue rather than current pin levels. M
 
 ### Sleep
 
-Before GPIOs are converted to RTC wake sources, the buttons HAL disables GPIO interrupts, stops the producer task, drains/deletes its static queue state, and prevents an in-flight ISR from publishing. Pin levels remain readable for wake-source inactivity checks. If sleep preparation fails before wake ownership transfers, input service must be resumed before the firmware remains awake.
+The input producer stays active through display power-off, non-button peripheral teardown, and the final wake-source inactivity wait. Immediately before button GPIOs are converted to RTC wake sources, the buttons HAL performs one atomic preserving handoff: sampling, debounce advancement, queue publication, and the production stop transition are serialized by the same mutex; after the producer has parked, the queue and overflow latch are inspected without being cleared. This removes the check-then-quiesce race.
 
-Motion-disabled sleep must not require BMA423 initialization. Motion is configured only when motion wake is enabled.
+Pending input or overflow vetoes sleep. The HAL resumes using the preserved queue, the power owner reconstructs the buses, RTC, battery, display, haptics, and any previously active motion service, and control returns to the shell to consume captured events. Display recovery is a full deinitialize/initialize cycle because a hibernated display cannot be revived by an early-returning initialization call. If the handoff succeeds without a veto, RTC GPIO ownership is transferred and deep sleep follows without additional blocking work. Other preparation failures resume input and restore awake peripheral ownership before reporting a fail-closed error.
+
+Persisted settings are loaded before the normal sleep path decides whether to initialize motion. A timer/RTC cycle with motion wake disabled neither initializes nor requires the BMA423. Motion remains lazily available for an explicit diagnostic/package capability and is initialized for sleep only when both timer sleep and motion wake are enabled.
 
 ## Error Handling
 
 - GPIO ISR registration or task/queue startup failure makes button initialization fail.
+- Button initialization failure presents a specific input/system error and remains awake with a bounded periodic delay; the shell is never entered as though input were interactive.
 - Queue overflow is latched. The owner reports an input/system error after draining already captured events rather than silently losing navigation.
 - Display failures preserve the existing retained-frame invalidation and forced-full recovery behavior.
 - The input task never calls package, display, motion, radio, storage, or shell APIs.
-- Power preparation never tears down buses or display while a background input task can still access GPIO state.
+- The producer touches only button GPIOs. Power may tear down unrelated peripherals while capture remains active, but it stops the producer before converting button pins to RTC ownership.
 
 ## Resource Budgets
 
@@ -97,7 +108,7 @@ Motion-disabled sleep must not require BMA423 initialization. Motion is configur
 
 ## Verification
 
-Host tests cover debounce acceptance/rejection, long holds, release/re-press, simultaneous independent buttons, timestamp wraparound, wake-held suppression, overflow policy, sleep admission, display cancellation handoff, and shell presentation event ownership.
+Host tests cover debounce acceptance/rejection, long holds, release/re-press, simultaneous independent buttons, timestamp wraparound, wake-held suppression, overflow policy, preserving versus destructive quiescence, sleep admission/routing and recovery status, motion-disabled boot policy, display cancellation handoff, and shell presentation event ownership.
 
 The milestone gate runs all 14 host suites and the ESP32 firmware build once. Hardware UAT then verifies:
 

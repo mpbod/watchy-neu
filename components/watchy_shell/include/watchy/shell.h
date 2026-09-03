@@ -67,6 +67,12 @@ typedef enum {
     WATCHY_SHELL_PRESENT_CANCELLED,
 } watchy_shell_presentation_outcome_t;
 
+typedef enum {
+    WATCHY_SHELL_SLEEP_ENTER = 0,
+    WATCHY_SHELL_SLEEP_PROCESS_INPUT,
+    WATCHY_SHELL_SLEEP_FAIL_CLOSED,
+} watchy_shell_sleep_route_t;
+
 typedef struct {
     bool sleep_deferred;
     watchy_button_mask_t pending_buttons;
@@ -105,6 +111,7 @@ typedef enum {
     WATCHY_SHELL_ERROR_PORTAL,
     WATCHY_SHELL_ERROR_DISPLAY,
     WATCHY_SHELL_ERROR_PACKAGE,
+    WATCHY_SHELL_ERROR_INPUT,
 } watchy_shell_error_t;
 
 typedef struct {
@@ -158,6 +165,10 @@ bool watchy_shell_presentation_allows_sleep(
     const watchy_shell_presentation_state_t *state);
 bool watchy_shell_presentation_needs_post_action(
     watchy_shell_presentation_outcome_t outcome);
+watchy_shell_sleep_route_t watchy_shell_sleep_route(
+    watchy_shell_t *shell,
+    bool input_pending,
+    watchy_status_t preparation_status);
 void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count);
 void watchy_shell_set_package_catalog(watchy_shell_t *shell,
                                      const watchy_package_catalog_t *catalog,

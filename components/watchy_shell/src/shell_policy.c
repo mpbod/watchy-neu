@@ -109,6 +109,22 @@ void watchy_shell_begin(watchy_shell_t *shell,
                                wake_cause == WATCHY_WAKE_MOTION));
 }
 
+watchy_shell_sleep_route_t watchy_shell_sleep_route(
+    watchy_shell_t *shell,
+    bool input_pending,
+    watchy_status_t preparation_status) {
+    if (shell == NULL) {
+        return WATCHY_SHELL_SLEEP_FAIL_CLOSED;
+    }
+    if (input_pending || preparation_status == WATCHY_STATUS_CANCELLED) {
+        shell->sleep_requested = false;
+        return WATCHY_SHELL_SLEEP_PROCESS_INPUT;
+    }
+    return preparation_status == WATCHY_STATUS_OK
+               ? WATCHY_SHELL_SLEEP_ENTER
+               : WATCHY_SHELL_SLEEP_FAIL_CLOSED;
+}
+
 void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive) {
     if (shell == NULL) {
         return;
@@ -320,6 +336,7 @@ const char *watchy_shell_error_message(const watchy_shell_t *shell) {
     case WATCHY_SHELL_ERROR_PORTAL: return "PORTAL START FAILED";
     case WATCHY_SHELL_ERROR_DISPLAY: return "DISPLAY FAILED";
     case WATCHY_SHELL_ERROR_PACKAGE: return "PACKAGE ACTION FAILED";
+    case WATCHY_SHELL_ERROR_INPUT: return "INPUT SERVICE FAILED";
     case WATCHY_SHELL_ERROR_NONE: break;
     }
     return "OPERATION FAILED";
