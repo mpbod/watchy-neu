@@ -74,9 +74,31 @@ typedef struct {
     watchy_button_mask_t cancelled_buttons;
 } watchy_package_app_run_result_t;
 
+typedef struct {
+    watchy_package_status_t (*start)(void *context, const char *package_ref);
+    watchy_package_status_t (*event)(void *context, const watchy_event_t *event);
+    bool (*active)(void *context);
+    watchy_package_status_t (*render)(void *context);
+    watchy_package_status_t (*stop)(void *context);
+    bool (*take_press)(void *context,
+                       watchy_button_press_event_t *out_event,
+                       uint32_t timeout_ms);
+    bool (*overflowed)(void *context);
+    bool (*take_cancelled_buttons)(void *context,
+                                   watchy_button_mask_t *out_buttons);
+    uint64_t (*milliseconds)(void *context);
+    void *context;
+} watchy_package_app_loop_ops_t;
+
 typedef watchy_package_app_run_result_t (*watchy_package_app_run_fn_t)(
     void *context,
     const char *package_ref);
+
+watchy_package_app_run_result_t watchy_package_app_run_loop(
+    const char *package_ref,
+    const watchy_package_app_loop_ops_t *operations,
+    uint32_t poll_timeout_ms,
+    uint32_t idle_timeout_ms);
 
 watchy_status_t watchy_watchface_reconcile_settings(
     watchy_settings_t *settings,

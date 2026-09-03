@@ -139,6 +139,9 @@ add_test(NAME watchy_shell_tests COMMAND watchy_shell_tests)
 add_executable(watchy_watchface_action_tests
   test_watchface_action.c
   ../../components/watchy_shell/src/watchface_action_policy.c
+  ../../components/watchy_packages/src/package_policy.c
+  ../../components/watchy_packages/src/package_format.c
+  ../../components/watchy_core/src/transition_policy.c
 )
 target_include_directories(watchy_watchface_action_tests PRIVATE
   ../../components/watchy_shell/include

@@ -604,27 +604,162 @@ static watchy_package_app_run_result_t run_app(void *context,
     };
 }
 
-static watchy_package_app_run_result_t run_app_that_exits_during_start(
-    void *context,
-    const char *package_ref) {
-    app_fixture_t *fixture = context;
-    ++fixture->calls;
-    return (watchy_package_app_run_result_t){
-        .succeeded = strcmp(package_ref, "app.demo@1.0.0") == 0,
-        .cancelled_buttons = WATCHY_BUTTON_MASK_MENU,
+typedef struct {
+    bool active;
+    bool exit_during_start;
+    watchy_button_mask_t startup_cancelled;
+    watchy_button_mask_t cancelled_buttons;
+    watchy_button_mask_t cancel_on_render;
+    unsigned cancel_on_render_call;
+    watchy_button_mask_t pressed_buttons;
+    uint64_t times[4];
+    unsigned time_calls;
+    unsigned start_calls;
+    unsigned event_calls;
+    unsigned render_calls;
+    unsigned stop_calls;
+    watchy_button_t delivered_button;
+} app_loop_fixture_t;
+
+static watchy_package_status_t app_loop_start(void *context,
+                                               const char *package_ref) {
+    app_loop_fixture_t *fixture = context;
+    ++fixture->start_calls;
+    if (strcmp(package_ref, "app.demo@1.0.0") != 0) {
+        return WATCHY_PACKAGE_ERR_ARGUMENT;
+    }
+    fixture->active = !fixture->exit_during_start;
+    fixture->cancelled_buttons |= fixture->startup_cancelled;
+    return WATCHY_PACKAGE_OK;
+}
+
+static watchy_package_status_t app_loop_event(void *context,
+                                               const watchy_event_t *event) {
+    app_loop_fixture_t *fixture = context;
+    ++fixture->event_calls;
+    fixture->delivered_button = event->data.button.button;
+    return WATCHY_PACKAGE_OK;
+}
+
+static bool app_loop_active(void *context) {
+    return ((app_loop_fixture_t *)context)->active;
+}
+
+static watchy_package_status_t app_loop_render(void *context) {
+    app_loop_fixture_t *fixture = context;
+    ++fixture->render_calls;
+    if (fixture->render_calls == fixture->cancel_on_render_call) {
+        fixture->cancelled_buttons |= fixture->cancel_on_render;
+    }
+    return WATCHY_PACKAGE_OK;
+}
+
+static watchy_package_status_t app_loop_stop(void *context) {
+    app_loop_fixture_t *fixture = context;
+    ++fixture->stop_calls;
+    fixture->active = false;
+    return WATCHY_PACKAGE_OK;
+}
+
+static bool app_loop_take_press(void *context,
+                                watchy_button_press_event_t *out_event,
+                                uint32_t timeout_ms) {
+    app_loop_fixture_t *fixture = context;
+    (void)timeout_ms;
+    if (fixture->pressed_buttons == 0u) return false;
+    *out_event = (watchy_button_press_event_t){.mask = fixture->pressed_buttons};
+    fixture->pressed_buttons = 0u;
+    return true;
+}
+
+static bool app_loop_overflowed(void *context) {
+    (void)context;
+    return false;
+}
+
+static bool app_loop_take_cancelled(void *context,
+                                    watchy_button_mask_t *out_buttons) {
+    app_loop_fixture_t *fixture = context;
+    if (fixture->cancelled_buttons == 0u) return false;
+    *out_buttons = fixture->cancelled_buttons;
+    fixture->cancelled_buttons = 0u;
+    return true;
+}
+
+static uint64_t app_loop_milliseconds(void *context) {
+    app_loop_fixture_t *fixture = context;
+    const unsigned index = fixture->time_calls < 4u ? fixture->time_calls : 3u;
+    ++fixture->time_calls;
+    return fixture->times[index];
+}
+
+static watchy_package_app_loop_ops_t app_loop_operations(
+    app_loop_fixture_t *fixture) {
+    return (watchy_package_app_loop_ops_t){
+        .start = app_loop_start,
+        .event = app_loop_event,
+        .active = app_loop_active,
+        .render = app_loop_render,
+        .stop = app_loop_stop,
+        .take_press = app_loop_take_press,
+        .overflowed = app_loop_overflowed,
+        .take_cancelled_buttons = app_loop_take_cancelled,
+        .milliseconds = app_loop_milliseconds,
+        .context = fixture,
     };
 }
 
-static int test_app_startup_exit_returns_cancelled_input_to_shell_owner(void) {
-    app_fixture_t fixture = {0};
-    watchy_package_app_run_result_t result = {0};
+static int test_app_loop_startup_exit_returns_cancelled_input(void) {
+    app_loop_fixture_t fixture = {
+        .exit_during_start = true,
+        .startup_cancelled = WATCHY_BUTTON_MASK_MENU,
+    };
+    const watchy_package_app_loop_ops_t ops = app_loop_operations(&fixture);
 
-    CHECK(watchy_package_app_action_apply(false, false, "app.demo@1.0.0",
-                                          run_app_that_exits_during_start,
-                                          &fixture, &result) == WATCHY_STATUS_OK);
-    CHECK(fixture.calls == 1u);
+    const watchy_package_app_run_result_t result = watchy_package_app_run_loop(
+        "app.demo@1.0.0", &ops, 50u, 30000u);
+
     CHECK(result.succeeded);
     CHECK(result.cancelled_buttons == WATCHY_BUTTON_MASK_MENU);
+    CHECK(fixture.start_calls == 1u && fixture.render_calls == 0u);
+    CHECK(fixture.event_calls == 0u && fixture.stop_calls == 0u);
+    return 0;
+}
+
+static int test_app_loop_back_returns_only_render_cancelled_input(void) {
+    app_loop_fixture_t fixture = {
+        .cancel_on_render = WATCHY_BUTTON_MASK_UP,
+        .cancel_on_render_call = 2u,
+        .pressed_buttons = WATCHY_BUTTON_MASK_BACK,
+        .times = {0u, 0u, 0u, 30000u},
+    };
+    const watchy_package_app_loop_ops_t ops = app_loop_operations(&fixture);
+
+    const watchy_package_app_run_result_t result = watchy_package_app_run_loop(
+        "app.demo@1.0.0", &ops, 50u, 30000u);
+
+    CHECK(result.succeeded);
+    CHECK(result.cancelled_buttons == WATCHY_BUTTON_MASK_UP);
+    CHECK(fixture.delivered_button == WATCHY_BUTTON_BACK);
+    CHECK(fixture.event_calls == 1u && fixture.render_calls == 2u);
+    CHECK(fixture.stop_calls == 1u);
+    return 0;
+}
+
+static int test_app_loop_idle_exit_returns_just_taken_input(void) {
+    app_loop_fixture_t fixture = {
+        .pressed_buttons = WATCHY_BUTTON_MASK_DOWN,
+        .times = {100u, 30100u},
+    };
+    const watchy_package_app_loop_ops_t ops = app_loop_operations(&fixture);
+
+    const watchy_package_app_run_result_t result = watchy_package_app_run_loop(
+        "app.demo@1.0.0", &ops, 50u, 30000u);
+
+    CHECK(result.succeeded);
+    CHECK(result.cancelled_buttons == WATCHY_BUTTON_MASK_DOWN);
+    CHECK(fixture.event_calls == 0u);
+    CHECK(fixture.render_calls == 1u && fixture.stop_calls == 1u);
     return 0;
 }
 
@@ -953,7 +1088,9 @@ int main(void) {
     CHECK(test_blocked_wake_still_allows_hairline_selection() == 0);
     CHECK(test_blocked_wake_rejects_active_watchface_return_without_run() == 0);
     CHECK(test_blocked_wake_rejects_app_without_invoking_runner() == 0);
-    CHECK(test_app_startup_exit_returns_cancelled_input_to_shell_owner() == 0);
+    CHECK(test_app_loop_startup_exit_returns_cancelled_input() == 0);
+    CHECK(test_app_loop_back_returns_only_render_cancelled_input() == 0);
+    CHECK(test_app_loop_idle_exit_returns_just_taken_input() == 0);
     CHECK(test_portal_stop_failure_still_reloads_snapshots_and_reconciles() == 0);
     CHECK(test_portal_reload_failure_still_snapshots_and_reconciles_active() == 0);
     CHECK(test_portal_exit_error_precedence_keeps_reconciliation_attempt() == 0);

@@ -2,6 +2,102 @@
 
 #include <string.h>
 
+static watchy_button_t package_app_button_from_mask(watchy_button_mask_t mask) {
+    if ((mask & WATCHY_BUTTON_MASK_MENU) != 0u) return WATCHY_BUTTON_CONFIRM;
+    if ((mask & WATCHY_BUTTON_MASK_BACK) != 0u) return WATCHY_BUTTON_BACK;
+    if ((mask & WATCHY_BUTTON_MASK_UP) != 0u) return WATCHY_BUTTON_UP;
+    return WATCHY_BUTTON_DOWN;
+}
+
+static void package_app_take_cancelled_buttons(
+    const watchy_package_app_loop_ops_t *operations,
+    watchy_button_mask_t *pending_buttons) {
+    watchy_button_mask_t cancelled_buttons = 0u;
+
+    if (operations->take_cancelled_buttons(operations->context,
+                                            &cancelled_buttons)) {
+        *pending_buttons |= cancelled_buttons;
+    }
+}
+
+watchy_package_app_run_result_t watchy_package_app_run_loop(
+    const char *package_ref,
+    const watchy_package_app_loop_ops_t *operations,
+    uint32_t poll_timeout_ms,
+    uint32_t idle_timeout_ms) {
+    watchy_package_app_run_result_t result = {0};
+    watchy_button_mask_t pending_buttons = 0u;
+    watchy_package_status_t status;
+    uint64_t last_activity;
+    watchy_package_app_runner_t runner;
+
+    if (package_ref == NULL || package_ref[0] == '\0' || operations == NULL ||
+        operations->start == NULL || operations->event == NULL ||
+        operations->active == NULL || operations->render == NULL ||
+        operations->stop == NULL || operations->take_press == NULL ||
+        operations->overflowed == NULL ||
+        operations->take_cancelled_buttons == NULL ||
+        operations->milliseconds == NULL) {
+        return result;
+    }
+    runner = (watchy_package_app_runner_t){
+        .event = operations->event,
+        .active = operations->active,
+        .render = operations->render,
+        .stop = operations->stop,
+        .context = operations->context,
+    };
+    status = operations->start(operations->context, package_ref);
+    package_app_take_cancelled_buttons(operations, &pending_buttons);
+    if (status != WATCHY_PACKAGE_OK) {
+        result.cancelled_buttons = pending_buttons;
+        return result;
+    }
+    if (!operations->active(operations->context)) {
+        result.succeeded = true;
+        result.cancelled_buttons = pending_buttons;
+        return result;
+    }
+    status = operations->render(operations->context);
+    package_app_take_cancelled_buttons(operations, &pending_buttons);
+    last_activity = operations->milliseconds(operations->context);
+    while (status == WATCHY_PACKAGE_OK &&
+           operations->active(operations->context)) {
+        watchy_button_mask_t pressed = pending_buttons;
+        pending_buttons = 0u;
+        if (pressed == 0u) {
+            watchy_button_press_event_t event;
+            if (operations->take_press(operations->context, &event,
+                                       poll_timeout_ms)) {
+                pressed = event.mask;
+            }
+        }
+        if (operations->milliseconds(operations->context) - last_activity >=
+            idle_timeout_ms) {
+            pending_buttons |= pressed;
+            status = operations->stop(operations->context);
+            break;
+        }
+        if (pressed == 0u && operations->overflowed(operations->context)) {
+            status = WATCHY_PACKAGE_ERR_STATE;
+            break;
+        }
+        if (pressed != 0u) {
+            last_activity = operations->milliseconds(operations->context);
+            status = watchy_package_dispatch_app_button(
+                &runner, package_app_button_from_mask(pressed));
+            package_app_take_cancelled_buttons(operations, &pending_buttons);
+        }
+    }
+    if (operations->active(operations->context)) {
+        (void)operations->stop(operations->context);
+    }
+    package_app_take_cancelled_buttons(operations, &pending_buttons);
+    result.succeeded = status == WATCHY_PACKAGE_OK;
+    result.cancelled_buttons = pending_buttons;
+    return result;
+}
+
 bool watchy_watchface_boot_should_defer(watchy_wake_cause_t wake_cause,
                                         bool safe_mode) {
     return wake_cause == WATCHY_WAKE_BUTTON && !safe_mode;

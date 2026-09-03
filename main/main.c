@@ -133,13 +133,6 @@ static watchy_shell_input_t input_from_mask(watchy_button_mask_t mask) {
     return WATCHY_SHELL_INPUT_DOWN;
 }
 
-static watchy_button_t package_button_from_mask(watchy_button_mask_t mask) {
-    if ((mask & WATCHY_BUTTON_MASK_MENU) != 0u) return WATCHY_BUTTON_CONFIRM;
-    if ((mask & WATCHY_BUTTON_MASK_BACK) != 0u) return WATCHY_BUTTON_BACK;
-    if ((mask & WATCHY_BUTTON_MASK_UP) != 0u) return WATCHY_BUTTON_UP;
-    return WATCHY_BUTTON_DOWN;
-}
-
 static watchy_package_status_t package_app_event(void *context,
                                                   const watchy_event_t *event) {
     (void)context;
@@ -161,72 +154,56 @@ static watchy_package_status_t package_app_stop(void *context) {
     return watchy_packages_runner_stop();
 }
 
-static void take_display_cancelled_buttons(watchy_button_mask_t *buttons) {
-    watchy_button_mask_t cancelled_buttons = 0u;
+static watchy_package_status_t package_app_start(void *context,
+                                                  const char *package_ref) {
+    (void)context;
+    return watchy_packages_runner_start(package_ref, false);
+}
 
-    if (buttons != NULL &&
-        watchy_display_take_cancelled_buttons(&cancelled_buttons)) {
-        *buttons |= cancelled_buttons;
+static bool package_app_take_press(void *context,
+                                   watchy_button_press_event_t *out_event,
+                                   uint32_t timeout_ms) {
+    (void)context;
+    return watchy_buttons_take_press(out_event, timeout_ms);
+}
+
+static bool package_app_input_overflowed(void *context) {
+    (void)context;
+    const bool overflowed = watchy_buttons_overflowed();
+    if (overflowed) {
+        ESP_LOGE(TAG, "button input queue overflow while package app was active");
     }
+    return overflowed;
+}
+
+static bool package_app_take_cancelled_buttons(
+    void *context,
+    watchy_button_mask_t *out_buttons) {
+    (void)context;
+    return watchy_display_take_cancelled_buttons(out_buttons);
+}
+
+static uint64_t package_app_milliseconds(void *context) {
+    (void)context;
+    return milliseconds();
 }
 
 static watchy_package_app_run_result_t run_package_app(const char *package_ref) {
-    static const watchy_package_app_runner_t runner = {
+    static const watchy_package_app_loop_ops_t operations = {
+        .start = package_app_start,
         .event = package_app_event,
         .active = package_app_active,
         .render = package_app_render,
         .stop = package_app_stop,
+        .take_press = package_app_take_press,
+        .overflowed = package_app_input_overflowed,
+        .take_cancelled_buttons = package_app_take_cancelled_buttons,
+        .milliseconds = package_app_milliseconds,
         .context = NULL,
     };
-    watchy_button_mask_t pending_buttons = 0u;
-    uint64_t last_activity;
-    watchy_package_status_t status = watchy_packages_runner_start(package_ref, false);
-    watchy_package_app_run_result_t result = {0};
-
-    take_display_cancelled_buttons(&pending_buttons);
-    if (status != WATCHY_PACKAGE_OK) {
-        result.cancelled_buttons = pending_buttons;
-        return result;
-    }
-    if (!watchy_packages_runner_active()) {
-        result.succeeded = true;
-        result.cancelled_buttons = pending_buttons;
-        return result;
-    }
-    status = watchy_packages_runner_render();
-    take_display_cancelled_buttons(&pending_buttons);
-    last_activity = milliseconds();
-    while (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
-        watchy_button_mask_t pressed = pending_buttons;
-        pending_buttons = 0u;
-        if (pressed == 0u) {
-            watchy_button_press_event_t event;
-            if (watchy_buttons_take_press(&event, WATCHY_BUTTON_POLL_MS)) {
-                pressed = event.mask;
-            }
-        }
-        if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
-            pending_buttons |= pressed;
-            status = watchy_packages_runner_stop();
-            break;
-        }
-        if (pressed == 0u && watchy_buttons_overflowed()) {
-            ESP_LOGE(TAG, "button input queue overflow while package app was active");
-            status = WATCHY_PACKAGE_ERR_STATE;
-            break;
-        }
-        if (pressed != 0u) {
-            last_activity = milliseconds();
-            status = watchy_package_dispatch_app_button(
-                &runner, package_button_from_mask(pressed));
-            take_display_cancelled_buttons(&pending_buttons);
-        }
-    }
-    if (watchy_packages_runner_active()) (void)watchy_packages_runner_stop();
-    take_display_cancelled_buttons(&pending_buttons);
-    result.succeeded = status == WATCHY_PACKAGE_OK;
-    result.cancelled_buttons = pending_buttons;
-    return result;
+    return watchy_package_app_run_loop(package_ref, &operations,
+                                       WATCHY_BUTTON_POLL_MS,
+                                       WATCHY_SHELL_IDLE_MS);
 }
 
 static watchy_package_status_t action_select_builtin(void *context) {
