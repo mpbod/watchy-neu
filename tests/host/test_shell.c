@@ -67,7 +67,7 @@ static int test_shell_transition_mapping_returns_complete_safe_requests(void) {
         {
             .change = {.from = WATCHY_SHELL_WATCHFACE, .to = WATCHY_SHELL_LAUNCHER,
                        .input = WATCHY_SHELL_INPUT_MENU},
-            .effect = WATCHY_TRANSITION_WIPE,
+            .effect = WATCHY_TRANSITION_CUT,
             .direction = WATCHY_TRANSITION_DIRECTION_NONE,
         },
         {

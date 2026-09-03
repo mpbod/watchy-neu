@@ -410,7 +410,9 @@ bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t 
         out_request->effect = WATCHY_TRANSITION_SPLIT;
     } else if (change->from == WATCHY_SHELL_WATCHFACE &&
                change->to == WATCHY_SHELL_LAUNCHER) {
-        out_request->effect = WATCHY_TRANSITION_WIPE;
+        /* A button wake must acknowledge Menu with the first physical write.
+         * Multi-write effects make the accepted press look unresponsive. */
+        out_request->effect = WATCHY_TRANSITION_CUT;
     } else if (change->from != change->to && change->input == WATCHY_SHELL_INPUT_MENU) {
         out_request->effect = WATCHY_TRANSITION_PUSH;
         out_request->direction = WATCHY_TRANSITION_DIRECTION_RIGHT;
