@@ -8,6 +8,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #define WATCHY_BUTTON_EVENT_QUEUE_LENGTH 16u
@@ -30,7 +31,9 @@ static bool s_producer_created;
 static bool s_overflowed;
 static TaskHandle_t s_producer_task;
 static QueueHandle_t s_event_queue;
+static SemaphoreHandle_t s_publication_mutex;
 static StaticQueue_t s_event_queue_storage;
+static StaticSemaphore_t s_publication_mutex_storage;
 static uint8_t s_event_queue_buffer[WATCHY_BUTTON_EVENT_QUEUE_LENGTH *
                                     sizeof(watchy_button_press_event_t)];
 static StaticTask_t s_producer_task_storage;
@@ -65,7 +68,9 @@ static bool service_is_running(void) {
     return running;
 }
 
-static void producer_wait_for_resume(void) {
+static bool producer_wait_for_resume(void) {
+    bool was_parked = false;
+
     for (;;) {
         bool running;
 
@@ -74,8 +79,9 @@ static void producer_wait_for_resume(void) {
         s_producer_parked = !running;
         portEXIT_CRITICAL(&s_service_lock);
         if (running) {
-            return;
+            return was_parked;
         }
+        was_parked = true;
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
 }
@@ -170,17 +176,21 @@ static void enqueue_stable_presses(void) {
     const watchy_button_mask_t pressed_mask = watchy_buttons_filter_observe(
         &s_filter, watchy_buttons_sample(), timestamp_ms);
 
-    if (pressed_mask != 0u && service_is_running()) {
+    if (pressed_mask != 0u &&
+        xSemaphoreTake(s_publication_mutex, portMAX_DELAY) == pdPASS) {
         const watchy_button_press_event_t event = {
             .mask = pressed_mask,
             .timestamp_ms = timestamp_ms,
         };
 
-        if (xQueueSend(s_event_queue, &event, 0) != pdPASS) {
-            portENTER_CRITICAL(&s_service_lock);
-            s_overflowed = true;
-            portEXIT_CRITICAL(&s_service_lock);
+        if (service_is_running()) {
+            if (xQueueSend(s_event_queue, &event, 0) != pdPASS) {
+                portENTER_CRITICAL(&s_service_lock);
+                s_overflowed = true;
+                portEXIT_CRITICAL(&s_service_lock);
+            }
         }
+        (void)xSemaphoreGive(s_publication_mutex);
     }
 }
 
@@ -190,8 +200,14 @@ static void button_producer_task(void *argument) {
     for (;;) {
         TickType_t timeout;
         bool notified;
+        const bool resumed = producer_wait_for_resume();
 
-        producer_wait_for_resume();
+        if (resumed) {
+            enqueue_stable_presses();
+            if (!service_is_running()) {
+                continue;
+            }
+        }
         timeout = s_filter.pending_mask != 0u ? WATCHY_BUTTON_FILTER_POLL_TICKS : portMAX_DELAY;
         notified = ulTaskNotifyTake(pdTRUE, timeout) != 0u;
 
@@ -207,11 +223,17 @@ static void button_producer_task(void *argument) {
 static void stop_event_service(void) {
     TaskHandle_t producer_task;
 
+    if (s_publication_mutex != NULL) {
+        (void)xSemaphoreTake(s_publication_mutex, portMAX_DELAY);
+    }
     portENTER_CRITICAL(&s_service_lock);
     s_accepting_isr = false;
     s_service_running = false;
     producer_task = s_producer_task;
     portEXIT_CRITICAL(&s_service_lock);
+    if (s_publication_mutex != NULL) {
+        (void)xSemaphoreGive(s_publication_mutex);
+    }
     disable_button_interrupts();
     remove_button_handlers();
 
@@ -230,6 +252,13 @@ static watchy_status_t start_event_service(void) {
 
     if (s_event_queue != NULL) {
         return WATCHY_STATUS_OK;
+    }
+
+    if (s_publication_mutex == NULL) {
+        s_publication_mutex = xSemaphoreCreateMutexStatic(&s_publication_mutex_storage);
+        if (s_publication_mutex == NULL) {
+            return WATCHY_STATUS_INVALID_STATE;
+        }
     }
 
     s_event_queue = xQueueCreateStatic(WATCHY_BUTTON_EVENT_QUEUE_LENGTH,
@@ -273,11 +302,14 @@ static watchy_status_t start_event_service(void) {
         s_handler_registered[index] = true;
     }
 
+    /* Task-context state transitions take this mutex before the ISR portMUX. */
+    (void)xSemaphoreTake(s_publication_mutex, portMAX_DELAY);
     portENTER_CRITICAL(&s_service_lock);
     s_service_running = true;
     s_accepting_isr = true;
     s_producer_parked = false;
     portEXIT_CRITICAL(&s_service_lock);
+    (void)xSemaphoreGive(s_publication_mutex);
     xTaskNotifyGive(s_producer_task);
     return WATCHY_STATUS_OK;
 }
