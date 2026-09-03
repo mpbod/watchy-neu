@@ -283,6 +283,10 @@ static watchy_status_t host_motion_sample(void *opaque, watchy_motion_sample_t *
     if (!target_range(out_sample, sizeof(*out_sample), true)) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
+    if (!watchy_motion_ready()) {
+        status = watchy_motion_init();
+        if (status != WATCHY_STATUS_OK) return status;
+    }
     status = watchy_motion_read(&data);
     if (status == WATCHY_STATUS_OK) {
         *out_sample = (watchy_motion_sample_t){

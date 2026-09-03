@@ -374,6 +374,39 @@ static int test_normal_boot_imports_seed_before_first_catalog_snapshot(void) {
     return 0;
 }
 
+static int test_button_wake_defers_package_boot_until_catalog_is_needed(void) {
+    CHECK(watchy_watchface_boot_should_defer(WATCHY_WAKE_BUTTON, false));
+    CHECK(!watchy_watchface_boot_should_defer(WATCHY_WAKE_BUTTON, true));
+    CHECK(!watchy_watchface_boot_should_defer(WATCHY_WAKE_COLD, false));
+    CHECK(!watchy_watchface_boot_should_defer(WATCHY_WAKE_RTC, false));
+    CHECK(!watchy_watchface_boot_should_defer(WATCHY_WAKE_MOTION, false));
+    CHECK(!watchy_watchface_boot_should_defer(WATCHY_WAKE_TIMER, false));
+    CHECK(!watchy_watchface_boot_should_defer(WATCHY_WAKE_OTHER, false));
+    return 0;
+}
+
+static int test_deferred_catalog_loads_only_for_package_navigation_or_face_return(void) {
+    watchy_shell_t shell = {.screen = WATCHY_SHELL_LAUNCHER, .selection = 0u};
+
+    CHECK(watchy_watchface_catalog_needed_before_input(
+        &shell, WATCHY_SHELL_INPUT_MENU));
+    shell.selection = 1u;
+    CHECK(watchy_watchface_catalog_needed_before_input(
+        &shell, WATCHY_SHELL_INPUT_MENU));
+    shell.selection = 2u;
+    CHECK(!watchy_watchface_catalog_needed_before_input(
+        &shell, WATCHY_SHELL_INPUT_MENU));
+    CHECK(watchy_watchface_catalog_needed_before_input(
+        &shell, WATCHY_SHELL_INPUT_BACK));
+    CHECK(watchy_watchface_catalog_needed_before_input(
+        &shell, WATCHY_SHELL_INPUT_IDLE));
+    CHECK(!watchy_watchface_catalog_needed_before_input(
+        &shell, WATCHY_SHELL_INPUT_DOWN));
+    CHECK(!watchy_watchface_catalog_needed_before_input(NULL,
+                                                         WATCHY_SHELL_INPUT_MENU));
+    return 0;
+}
+
 static int test_safe_boot_skips_seed_import_but_keeps_recovery_catalog(void) {
     fixture_t fixture = {
         .import_status = WATCHY_PACKAGE_ERR_STATE,
@@ -877,6 +910,8 @@ int main(void) {
     CHECK(test_idle_return_renders_and_promotes_portal_pending_package() == 0);
     CHECK(test_idle_return_rolls_failed_pending_package_back_to_active_package() == 0);
     CHECK(test_normal_boot_imports_seed_before_first_catalog_snapshot() == 0);
+    CHECK(test_button_wake_defers_package_boot_until_catalog_is_needed() == 0);
+    CHECK(test_deferred_catalog_loads_only_for_package_navigation_or_face_return() == 0);
     CHECK(test_safe_boot_skips_seed_import_but_keeps_recovery_catalog() == 0);
     CHECK(test_seed_failure_is_visible_and_does_not_hide_readable_catalog() == 0);
     CHECK(test_unreadable_boot_catalog_is_a_bounded_package_warning() == 0);

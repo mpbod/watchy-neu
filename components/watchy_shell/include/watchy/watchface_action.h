@@ -83,6 +83,13 @@ bool watchy_watchface_boot_allows_package_execution(
     bool safe_mode,
     const watchy_watchface_boot_result_t *result);
 
+bool watchy_watchface_boot_should_defer(watchy_wake_cause_t wake_cause,
+                                        bool safe_mode);
+
+bool watchy_watchface_catalog_needed_before_input(
+    const watchy_shell_t *shell,
+    watchy_shell_input_t input);
+
 watchy_status_t watchy_watchface_reconcile_catalog_mutation(
     watchy_package_mutation_result_t mutation,
     watchy_settings_t *settings,

@@ -2,6 +2,26 @@
 
 #include <string.h>
 
+bool watchy_watchface_boot_should_defer(watchy_wake_cause_t wake_cause,
+                                        bool safe_mode) {
+    return wake_cause == WATCHY_WAKE_BUTTON && !safe_mode;
+}
+
+bool watchy_watchface_catalog_needed_before_input(
+    const watchy_shell_t *shell,
+    watchy_shell_input_t input) {
+    if (shell == NULL) return false;
+    if (shell->screen == WATCHY_SHELL_LAUNCHER) {
+        if (input == WATCHY_SHELL_INPUT_BACK || input == WATCHY_SHELL_INPUT_IDLE) {
+            return true;
+        }
+        return input == WATCHY_SHELL_INPUT_MENU && shell->selection < 2u;
+    }
+    return shell->screen == WATCHY_SHELL_WATCHFACE_SELECTOR ||
+           shell->screen == WATCHY_SHELL_PACKAGE_APPS ||
+           shell->screen == WATCHY_SHELL_SAFE_MODE;
+}
+
 watchy_status_t watchy_watchface_reconcile_settings(
     watchy_settings_t *settings,
     const watchy_package_catalog_t *catalog,
