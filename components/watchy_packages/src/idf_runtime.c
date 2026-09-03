@@ -1412,6 +1412,7 @@ bool watchy_packages_runner_active(void) {
 
 typedef struct {
     const char *reference;
+    bool force_full_refresh;
 } watchface_cycle_context_t;
 
 static watchy_package_status_t watchface_cycle_start(void *context) {
@@ -1425,7 +1426,13 @@ static bool watchface_cycle_active(void *context) {
 }
 
 static watchy_package_status_t watchface_cycle_render(void *context) {
-    (void)context;
+    const watchface_cycle_context_t *cycle = context;
+    if (cycle->force_full_refresh) {
+        /* Package startup may request a refresh of its own. Invalidate again
+         * immediately before on_render so the selected face target itself is
+         * always committed with a full physical refresh. */
+        watchy_display_invalidate_previous();
+    }
     return watchy_packages_runner_render();
 }
 
@@ -1434,7 +1441,7 @@ static watchy_package_status_t watchface_cycle_stop(void *context) {
     return watchy_packages_runner_stop();
 }
 
-bool watchy_packages_run_watchface(bool safe_mode) {
+bool watchy_packages_run_watchface(bool safe_mode, bool force_full_refresh) {
     const watchy_package_index_t *index;
     char reference[WATCHY_PACKAGE_REF_MAX + 1u];
     if (safe_mode || watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
@@ -1450,7 +1457,10 @@ bool watchy_packages_run_watchface(bool safe_mode) {
     }
     memcpy(reference, selected, strlen(selected) + 1u);
     (void)xSemaphoreGive(s_package_mutex);
-    watchface_cycle_context_t cycle = {.reference = reference};
+    watchface_cycle_context_t cycle = {
+        .reference = reference,
+        .force_full_refresh = force_full_refresh,
+    };
     const watchy_package_watchface_runner_t runner = {
         .start = watchface_cycle_start,
         .active = watchface_cycle_active,

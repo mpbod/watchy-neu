@@ -83,7 +83,7 @@ watchy_package_status_t watchy_package_runtime_select_builtin(
 
 watchy_package_status_t watchy_packages_runtime_init(void);
 watchy_package_status_t watchy_packages_import_factory_seed(bool safe_mode);
-bool watchy_packages_run_watchface(bool safe_mode);
+bool watchy_packages_run_watchface(bool safe_mode, bool force_full_refresh);
 watchy_package_status_t watchy_packages_runner_start(const char *package_ref, bool safe_mode);
 watchy_package_status_t watchy_packages_runner_event(const watchy_event_t *event);
 watchy_package_status_t watchy_packages_runner_render(void);

@@ -19,7 +19,9 @@ typedef struct {
 typedef struct {
     watchy_package_status_t (*select_builtin)(void *context);
     watchy_package_status_t (*select_watchface)(void *context, const char *package_ref);
-    watchy_watchface_run_result_t (*run_watchface)(void *context, bool safe_mode);
+    watchy_watchface_run_result_t (*run_watchface)(void *context,
+                                                   bool safe_mode,
+                                                   bool force_full_refresh);
     void (*force_full_refresh)(void *context);
     watchy_package_status_t (*snapshot)(void *context,
                                         watchy_package_catalog_t *out_catalog);

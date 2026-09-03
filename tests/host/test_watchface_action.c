@@ -18,6 +18,7 @@ typedef struct {
     unsigned save_calls;
     unsigned force_full_calls;
     bool run_started_after_full_refresh;
+    bool run_requested_full_refresh;
     watchy_package_status_t import_status;
     watchy_package_status_t recovery_status;
     watchy_package_status_t snapshot_status;
@@ -70,10 +71,13 @@ static watchy_package_status_t select_watchface(void *context, const char *packa
     return fixture->select_status;
 }
 
-static watchy_watchface_run_result_t run_watchface(void *context, bool safe_mode) {
+static watchy_watchface_run_result_t run_watchface(void *context,
+                                                    bool safe_mode,
+                                                    bool force_full_refresh) {
     fixture_t *fixture = context;
     ++fixture->run_calls;
     fixture->run_started_after_full_refresh = fixture->force_full_calls != 0u;
+    fixture->run_requested_full_refresh = force_full_refresh;
     if (safe_mode) return (watchy_watchface_run_result_t){0};
     if (fixture->use_retry_run_result && fixture->run_calls > 1u) {
         return fixture->retry_run_result;
@@ -159,6 +163,7 @@ static int test_successful_watchface_selection_promotes_and_persists(void) {
     CHECK(result.rendered && result.cancelled_buttons == 0u);
     CHECK(fixture.force_full_calls == 1u);
     CHECK(fixture.run_started_after_full_refresh);
+    CHECK(fixture.run_requested_full_refresh);
     CHECK(fixture.select_watchface_calls == 1u && fixture.run_calls == 1u);
     CHECK(fixture.snapshot_calls == 1u && fixture.save_calls == 1u);
     CHECK(strcmp(fixture.selected_ref, "face.new@1.0.0") == 0);
@@ -188,6 +193,7 @@ static int test_failed_render_preserves_previous_watchface(void) {
                                         &ops, &result) == WATCHY_STATUS_INVALID_STATE);
     CHECK(!result.rendered && result.cancelled_buttons == 0u);
     CHECK(fixture.force_full_calls == 1u);
+    CHECK(fixture.run_requested_full_refresh);
     CHECK(fixture.snapshot_calls == 1u && fixture.save_calls == 0u);
     CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
     CHECK(catalog.packages[0].active);
@@ -218,7 +224,7 @@ static int test_builtin_selection_clears_persisted_package(void) {
     return 0;
 }
 
-static int test_cancelled_activation_replays_the_button_without_package_failure(void) {
+static int test_rendered_selection_consumes_cancelled_button_and_stays_on_face(void) {
     fixture_t fixture = {
         .select_status = WATCHY_PACKAGE_OK,
         .run_result = {
@@ -230,7 +236,7 @@ static int test_cancelled_activation_replays_the_button_without_package_failure(
     watchy_settings_t settings = {0};
     watchy_watchface_run_result_t result = {0};
     catalog_with_active(&catalog, "face.old@1.0.0");
-    catalog_with_active(&fixture.snapshot, "face.old@1.0.0");
+    catalog_with_active(&fixture.snapshot, "face.new@1.0.0");
     snprintf(settings.active_watchface, sizeof(settings.active_watchface),
              "%s", "face.old@1.0.0");
     const watchy_shell_action_request_t request = {
@@ -241,10 +247,11 @@ static int test_cancelled_activation_replays_the_button_without_package_failure(
     const watchy_watchface_action_ops_t ops = operations(&fixture);
 
     CHECK(watchy_watchface_action_apply(&request, false, false, &settings, &catalog,
-                                        &ops, &result) == WATCHY_STATUS_CANCELLED);
-    CHECK(result.cancelled_buttons == WATCHY_BUTTON_MASK_MENU);
-    CHECK(strcmp(settings.active_watchface, "face.old@1.0.0") == 0);
-    CHECK(fixture.save_calls == 0u);
+                                        &ops, &result) == WATCHY_STATUS_OK);
+    CHECK(result.rendered && result.cancelled_buttons == 0u);
+    CHECK(fixture.run_requested_full_refresh);
+    CHECK(strcmp(settings.active_watchface, "face.new@1.0.0") == 0);
+    CHECK(fixture.save_calls == 1u);
     return 0;
 }
 
@@ -262,6 +269,7 @@ static int test_active_package_return_forces_full_refresh_before_render(void) {
     CHECK(result.rendered);
     CHECK(fixture.force_full_calls == 1u);
     CHECK(fixture.run_calls == 1u);
+    CHECK(fixture.run_requested_full_refresh);
 
     catalog_with_active(&catalog, "");
     CHECK(watchy_watchface_run_active(false, false, true, &catalog, &ops, &result) ==
@@ -863,7 +871,7 @@ int main(void) {
     CHECK(test_successful_watchface_selection_promotes_and_persists() == 0);
     CHECK(test_failed_render_preserves_previous_watchface() == 0);
     CHECK(test_builtin_selection_clears_persisted_package() == 0);
-    CHECK(test_cancelled_activation_replays_the_button_without_package_failure() == 0);
+    CHECK(test_rendered_selection_consumes_cancelled_button_and_stays_on_face() == 0);
     CHECK(test_active_package_return_forces_full_refresh_before_render() == 0);
     CHECK(test_idle_return_runs_active_package_and_reconciles_catalog() == 0);
     CHECK(test_idle_return_renders_and_promotes_portal_pending_package() == 0);

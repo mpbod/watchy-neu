@@ -206,10 +206,11 @@ static watchy_package_status_t action_select_watchface(void *context,
 }
 
 static watchy_watchface_run_result_t action_run_watchface(void *context,
-                                                           bool safe_mode) {
+                                                           bool safe_mode,
+                                                           bool force_full_refresh) {
     (void)context;
     watchy_watchface_run_result_t result = {
-        .rendered = watchy_packages_run_watchface(safe_mode),
+        .rendered = watchy_packages_run_watchface(safe_mode, force_full_refresh),
     };
     (void)watchy_display_take_cancelled_buttons(&result.cancelled_buttons);
     return result;
@@ -888,7 +889,7 @@ void app_main(void) {
                               !(wake_cause == WATCHY_WAKE_MOTION && !settings.motion_wake);
     if (rtc_valid && !safe_mode && !package_execution_blocked &&
         package_wake && package_selected) {
-        package_rendered = watchy_packages_run_watchface(false);
+        package_rendered = watchy_packages_run_watchface(false, false);
         if (watchy_display_take_cancelled_buttons(&boot_cancelled_buttons)) {
             package_rendered = false;
         }

@@ -189,7 +189,7 @@ watchy_status_t watchy_watchface_action_apply(
                                                        request->package_ref);
         if (package_status == WATCHY_PACKAGE_OK) {
             operations->force_full_refresh(operations->context);
-            *out_result = operations->run_watchface(operations->context, safe_mode);
+            *out_result = operations->run_watchface(operations->context, safe_mode, true);
         }
     } else {
         return WATCHY_STATUS_INVALID_ARGUMENT;
@@ -206,7 +206,12 @@ watchy_status_t watchy_watchface_action_apply(
         out_result->settings_save_failed = true;
         return settings_status;
     }
-    if (out_result->cancelled_buttons != 0u) {
+    if (request->action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE &&
+        out_result->rendered) {
+        /* The selector's activation press belongs to the completed selection.
+         * Never replay it into the newly presented watchface. */
+        out_result->cancelled_buttons = 0u;
+    } else if (out_result->cancelled_buttons != 0u) {
         return WATCHY_STATUS_CANCELLED;
     }
     if (request->action == WATCHY_SHELL_ACTION_SELECT_WATCHFACE &&
@@ -242,7 +247,8 @@ watchy_status_t watchy_watchface_run_active(
     if (force_full_refresh) {
         operations->force_full_refresh(operations->context);
     }
-    *out_result = operations->run_watchface(operations->context, safe_mode);
+    *out_result = operations->run_watchface(operations->context, safe_mode,
+                                            force_full_refresh);
     if (out_result->cancelled_buttons != 0u) {
         return WATCHY_STATUS_CANCELLED;
     }
