@@ -42,9 +42,9 @@ Existing `watchy_buttons_init()`, `watchy_buttons_sample()`, `watchy_buttons_rea
 typedef struct {
     watchy_button_mask_t mask;
     uint32_t timestamp_ms;
-} watchy_button_event_t;
+} watchy_button_press_event_t;
 
-bool watchy_buttons_take_press(watchy_button_event_t *out_event,
+bool watchy_buttons_take_press(watchy_button_press_event_t *out_event,
                                uint32_t timeout_ms);
 bool watchy_buttons_press_pending(void);
 bool watchy_buttons_overflowed(void);
@@ -53,6 +53,8 @@ watchy_status_t watchy_buttons_resume(void);
 ```
 
 The implementation uses static FreeRTOS task and queue storage. The semantic queue holds 16 events. Queue overflow is latched and reported; it is never silently treated as normal operation.
+
+The producer checks unsettled candidates once per native FreeRTOS tick (10 ms at the configured 100 Hz). The accepted-state boundary remains the exact 30 ms debounce interval.
 
 ## Runtime Flow
 

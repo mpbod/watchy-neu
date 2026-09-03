@@ -131,9 +131,9 @@ git commit -m "feat: add deterministic button debounce policy"
 typedef struct {
     watchy_button_mask_t mask;
     uint32_t timestamp_ms;
-} watchy_button_event_t;
+} watchy_button_press_event_t;
 
-bool watchy_buttons_take_press(watchy_button_event_t *out_event,
+bool watchy_buttons_take_press(watchy_button_press_event_t *out_event,
                                uint32_t timeout_ms);
 bool watchy_buttons_press_pending(void);
 bool watchy_buttons_overflowed(void);
@@ -164,7 +164,7 @@ In `buttons.c`:
 - Allocate the producer task control block and a 2 KiB stack statically; never place framebuffer-sized data on this stack.
 - Install one IRAM-safe handler per GPIO. Each handler performs only `vTaskNotifyGiveFromISR` and the required ISR yield.
 - Initialize the filter from `watchy_buttons_sample()` before enabling handlers.
-- In the producer task, sample immediately after a notification and every 5 ms while any candidate bit remains pending. Feed samples and `esp_timer_get_time()/1000` into the Task 1 filter.
+- In the producer task, sample immediately after a notification and once per native FreeRTOS tick while any candidate bit remains pending. Feed samples and `esp_timer_get_time()/1000` into the Task 1 filter. The configured 100 Hz tick makes this a 10 ms cadence while preserving the exact 30 ms acceptance boundary.
 - Enqueue each nonzero stable rising-edge mask with its timestamp. If the queue is full, latch overflow without blocking.
 - `watchy_buttons_take_press` validates its output pointer and converts `timeout_ms` to FreeRTOS ticks, with zero remaining nonblocking.
 - `watchy_buttons_quiesce` disables/removes handlers, stops and joins the producer, drains the queue, and prevents an in-flight ISR from publishing.
