@@ -48,6 +48,8 @@ bool watchy_buttons_take_press(watchy_button_event_t *out_event,
                                uint32_t timeout_ms);
 bool watchy_buttons_press_pending(void);
 bool watchy_buttons_overflowed(void);
+watchy_status_t watchy_buttons_quiesce(void);
+watchy_status_t watchy_buttons_resume(void);
 ```
 
 The implementation uses static FreeRTOS task and queue storage. The semantic queue holds 16 events. Queue overflow is latched and reported; it is never silently treated as normal operation.
