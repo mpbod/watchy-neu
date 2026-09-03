@@ -12,12 +12,31 @@ extern "C" {
 
 typedef uint32_t watchy_button_mask_t;
 
+#define WATCHY_BUTTON_COUNT 4u
+#define WATCHY_BUTTON_DEBOUNCE_MS 30u
+
 enum {
     WATCHY_BUTTON_MASK_MENU = 1u << 0,
     WATCHY_BUTTON_MASK_BACK = 1u << 1,
     WATCHY_BUTTON_MASK_DOWN = 1u << 2,
     WATCHY_BUTTON_MASK_UP = 1u << 3,
 };
+
+typedef struct {
+    watchy_button_mask_t stable_mask;
+    watchy_button_mask_t candidate_mask;
+    watchy_button_mask_t pending_mask;
+    uint32_t candidate_since_ms[WATCHY_BUTTON_COUNT];
+    uint32_t debounce_ms;
+} watchy_button_filter_t;
+
+void watchy_buttons_filter_init(watchy_button_filter_t *filter,
+                                 watchy_button_mask_t initial_mask,
+                                 uint32_t debounce_ms);
+watchy_button_mask_t watchy_buttons_filter_observe(
+    watchy_button_filter_t *filter,
+    watchy_button_mask_t sampled_mask,
+    uint32_t now_ms);
 
 watchy_button_mask_t watchy_buttons_decode_wake_gpio(uint64_t gpio_mask);
 bool watchy_buttons_is_safe_mode_chord(watchy_button_mask_t sampled_mask);

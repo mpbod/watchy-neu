@@ -65,6 +65,90 @@ static int test_safe_mode_requires_back_and_down_held_together(void) {
     return 0;
 }
 
+static int test_button_filter_debounces_each_semantic_edge_once(void) {
+    watchy_button_filter_t filter;
+
+    /* Initial held Menu is baseline and emits nothing. */
+    watchy_buttons_filter_init(&filter, WATCHY_BUTTON_MASK_MENU, 30u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 100u) == 0u);
+
+    /* A new level does not emit until it remains stable for 30 ms. */
+    watchy_buttons_filter_init(&filter, 0u, 30u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 100u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 129u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 130u) ==
+          WATCHY_BUTTON_MASK_DOWN);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 1000u) == 0u);
+
+    /* A release is silent, and a stable re-press emits once. */
+    CHECK(watchy_buttons_filter_observe(&filter, 0u, 1100u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, 0u, 1129u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, 0u, 1130u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 1200u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 1230u) ==
+          WATCHY_BUTTON_MASK_DOWN);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_DOWN, 1300u) == 0u);
+
+    /* A bounce resets the candidate interval. */
+    watchy_buttons_filter_init(&filter, 0u, 30u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 100u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 120u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, 0u, 125u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 140u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 169u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 170u) ==
+          WATCHY_BUTTON_MASK_MENU);
+
+    /* Independent buttons settle at different timestamps. */
+    watchy_buttons_filter_init(&filter, 0u, 30u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 100u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_DOWN,
+                                        110u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_DOWN,
+                                        129u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_DOWN,
+                                        130u) == WATCHY_BUTTON_MASK_MENU);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_DOWN,
+                                        139u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_DOWN,
+                                        140u) == WATCHY_BUTTON_MASK_DOWN);
+
+    /* Simultaneous presses settle and emit together. */
+    watchy_buttons_filter_init(&filter, 0u, 30u);
+    CHECK(watchy_buttons_filter_observe(&filter,
+                                       WATCHY_BUTTON_MASK_BACK | WATCHY_BUTTON_MASK_UP,
+                                       500u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter,
+                                       WATCHY_BUTTON_MASK_BACK | WATCHY_BUTTON_MASK_UP,
+                                       529u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter,
+                                       WATCHY_BUTTON_MASK_BACK | WATCHY_BUTTON_MASK_UP,
+                                       530u) ==
+          (WATCHY_BUTTON_MASK_BACK | WATCHY_BUTTON_MASK_UP));
+    CHECK(watchy_buttons_filter_observe(&filter,
+                                       WATCHY_BUTTON_MASK_BACK | WATCHY_BUTTON_MASK_UP,
+                                       1000u) == 0u);
+
+    /* Unsigned timestamp subtraction handles wraparound. */
+    watchy_buttons_filter_init(&filter, 0u, 30u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_UP,
+                                        UINT32_MAX - 9u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_UP, 19u) == 0u);
+    CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_UP, 20u) ==
+          WATCHY_BUTTON_MASK_UP);
+
+    /* Null filters and zero intervals are no-op, no-event calls. */
+    CHECK(watchy_buttons_filter_observe(NULL, WATCHY_BUTTON_MASK_MENU, 0u) == 0u);
+    memset(&filter, 0x5a, sizeof(filter));
+    filter.debounce_ms = 0u;
+    {
+        const watchy_button_filter_t before = filter;
+        CHECK(watchy_buttons_filter_observe(&filter, WATCHY_BUTTON_MASK_MENU, 100u) == 0u);
+        CHECK(memcmp(&filter, &before, sizeof(filter)) == 0);
+    }
+    return 0;
+}
+
 static int test_battery_percentage_and_install_boundaries_are_conservative(void) {
     CHECK(watchy_battery_percent_from_mv(3300) == 0u);
     CHECK(watchy_battery_percent_from_mv(3400) == 0u);
@@ -640,6 +724,7 @@ int main(void) {
     CHECK(test_framebuffer_clips_pixels_and_rectangles() == 0);
     CHECK(test_button_wake_gpio_decodes_semantic_mask() == 0);
     CHECK(test_safe_mode_requires_back_and_down_held_together() == 0);
+    CHECK(test_button_filter_debounces_each_semantic_edge_once() == 0);
     CHECK(test_battery_percentage_and_install_boundaries_are_conservative() == 0);
     CHECK(test_wake_cause_mapping_distinguishes_hardware_sources() == 0);
     CHECK(test_ssd1681_busy_is_active_high_and_requires_settling() == 0);
@@ -658,6 +743,6 @@ int main(void) {
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 21 HAL tests");
+    puts("PASS 22 HAL tests");
     return 0;
 }
