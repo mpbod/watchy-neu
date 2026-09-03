@@ -12,7 +12,7 @@
 
 #define WATCHY_BUTTON_EVENT_QUEUE_LENGTH 16u
 #define WATCHY_BUTTON_TASK_STACK_BYTES 2048u
-#define WATCHY_BUTTON_FILTER_POLL_MS 5u
+#define WATCHY_BUTTON_FILTER_POLL_TICKS 1u
 
 static const gpio_num_t s_button_gpios[WATCHY_BUTTON_COUNT] = {
     WATCHY_PIN_BUTTON_MENU,
@@ -22,10 +22,12 @@ static const gpio_num_t s_button_gpios[WATCHY_BUTTON_COUNT] = {
 };
 
 static bool s_ready;
-static volatile bool s_service_running;
-static volatile bool s_accepting_isr;
-static volatile bool s_producer_stopped = true;
-static volatile bool s_overflowed;
+static portMUX_TYPE s_service_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_service_running;
+static bool s_accepting_isr;
+static bool s_producer_parked = true;
+static bool s_producer_created;
+static bool s_overflowed;
 static TaskHandle_t s_producer_task;
 static QueueHandle_t s_event_queue;
 static StaticQueue_t s_event_queue_storage;
@@ -42,13 +44,54 @@ _Static_assert((WATCHY_BUTTON_TASK_STACK_BYTES % sizeof(StackType_t)) == 0u,
 static watchy_status_t start_event_service(void);
 
 static TickType_t milliseconds_to_ticks(uint32_t milliseconds) {
-    TickType_t ticks;
+    const uint64_t numerator = (uint64_t)milliseconds * configTICK_RATE_HZ;
+    const uint64_t ticks = (numerator + 999u) / 1000u;
 
     if (milliseconds == 0u) {
         return 0;
     }
-    ticks = pdMS_TO_TICKS(milliseconds);
-    return ticks == 0 ? 1 : ticks;
+    if (ticks > (uint64_t)portMAX_DELAY) {
+        return portMAX_DELAY;
+    }
+    return (TickType_t)(ticks == 0u ? 1u : ticks);
+}
+
+static bool service_is_running(void) {
+    bool running;
+
+    portENTER_CRITICAL(&s_service_lock);
+    running = s_service_running;
+    portEXIT_CRITICAL(&s_service_lock);
+    return running;
+}
+
+static void producer_wait_for_resume(void) {
+    for (;;) {
+        bool running;
+
+        portENTER_CRITICAL(&s_service_lock);
+        running = s_service_running;
+        s_producer_parked = !running;
+        portEXIT_CRITICAL(&s_service_lock);
+        if (running) {
+            return;
+        }
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+
+static void wait_for_producer_park(void) {
+    for (;;) {
+        bool parked;
+
+        portENTER_CRITICAL(&s_service_lock);
+        parked = s_producer_parked;
+        portEXIT_CRITICAL(&s_service_lock);
+        if (parked) {
+            return;
+        }
+        vTaskDelay(1);
+    }
 }
 
 static void disable_button_interrupts(void) {
@@ -71,9 +114,11 @@ static void IRAM_ATTR menu_button_isr(void *argument) {
     BaseType_t higher_priority_task_woken = pdFALSE;
 
     (void)argument;
+    portENTER_CRITICAL_ISR(&s_service_lock);
     if (s_accepting_isr && s_producer_task != NULL) {
         vTaskNotifyGiveFromISR(s_producer_task, &higher_priority_task_woken);
     }
+    portEXIT_CRITICAL_ISR(&s_service_lock);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
 
@@ -81,9 +126,11 @@ static void IRAM_ATTR back_button_isr(void *argument) {
     BaseType_t higher_priority_task_woken = pdFALSE;
 
     (void)argument;
+    portENTER_CRITICAL_ISR(&s_service_lock);
     if (s_accepting_isr && s_producer_task != NULL) {
         vTaskNotifyGiveFromISR(s_producer_task, &higher_priority_task_woken);
     }
+    portEXIT_CRITICAL_ISR(&s_service_lock);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
 
@@ -91,9 +138,11 @@ static void IRAM_ATTR down_button_isr(void *argument) {
     BaseType_t higher_priority_task_woken = pdFALSE;
 
     (void)argument;
+    portENTER_CRITICAL_ISR(&s_service_lock);
     if (s_accepting_isr && s_producer_task != NULL) {
         vTaskNotifyGiveFromISR(s_producer_task, &higher_priority_task_woken);
     }
+    portEXIT_CRITICAL_ISR(&s_service_lock);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
 
@@ -101,9 +150,11 @@ static void IRAM_ATTR up_button_isr(void *argument) {
     BaseType_t higher_priority_task_woken = pdFALSE;
 
     (void)argument;
+    portENTER_CRITICAL_ISR(&s_service_lock);
     if (s_accepting_isr && s_producer_task != NULL) {
         vTaskNotifyGiveFromISR(s_producer_task, &higher_priority_task_woken);
     }
+    portEXIT_CRITICAL_ISR(&s_service_lock);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
 
@@ -119,14 +170,16 @@ static void enqueue_stable_presses(void) {
     const watchy_button_mask_t pressed_mask = watchy_buttons_filter_observe(
         &s_filter, watchy_buttons_sample(), timestamp_ms);
 
-    if (pressed_mask != 0u && s_service_running) {
+    if (pressed_mask != 0u && service_is_running()) {
         const watchy_button_press_event_t event = {
             .mask = pressed_mask,
             .timestamp_ms = timestamp_ms,
         };
 
         if (xQueueSend(s_event_queue, &event, 0) != pdPASS) {
+            portENTER_CRITICAL(&s_service_lock);
             s_overflowed = true;
+            portEXIT_CRITICAL(&s_service_lock);
         }
     }
 }
@@ -134,36 +187,37 @@ static void enqueue_stable_presses(void) {
 static void button_producer_task(void *argument) {
     (void)argument;
 
-    while (s_service_running) {
-        const TickType_t timeout = s_filter.pending_mask != 0u
-                                       ? milliseconds_to_ticks(WATCHY_BUTTON_FILTER_POLL_MS)
-                                       : portMAX_DELAY;
-        const bool notified = ulTaskNotifyTake(pdTRUE, timeout) != 0u;
+    for (;;) {
+        TickType_t timeout;
+        bool notified;
 
-        if (!s_service_running) {
-            break;
+        producer_wait_for_resume();
+        timeout = s_filter.pending_mask != 0u ? WATCHY_BUTTON_FILTER_POLL_TICKS : portMAX_DELAY;
+        notified = ulTaskNotifyTake(pdTRUE, timeout) != 0u;
+
+        if (!service_is_running()) {
+            continue;
         }
         if (notified || s_filter.pending_mask != 0u) {
             enqueue_stable_presses();
         }
     }
-
-    s_producer_stopped = true;
-    vTaskDelete(NULL);
 }
 
 static void stop_event_service(void) {
+    TaskHandle_t producer_task;
+
+    portENTER_CRITICAL(&s_service_lock);
     s_accepting_isr = false;
+    s_service_running = false;
+    producer_task = s_producer_task;
+    portEXIT_CRITICAL(&s_service_lock);
     disable_button_interrupts();
     remove_button_handlers();
-    s_service_running = false;
 
-    if (s_producer_task != NULL) {
-        xTaskNotifyGive(s_producer_task);
-        while (!s_producer_stopped) {
-            vTaskDelay(1);
-        }
-        s_producer_task = NULL;
+    if (producer_task != NULL) {
+        xTaskNotifyGive(producer_task);
+        wait_for_producer_park();
     }
     if (s_event_queue != NULL) {
         (void)xQueueReset(s_event_queue);
@@ -195,20 +249,19 @@ static watchy_status_t start_event_service(void) {
         return WATCHY_STATUS_INVALID_STATE;
     }
 
-    s_producer_stopped = false;
-    s_service_running = true;
-    s_producer_task = xTaskCreateStatic(button_producer_task,
-                                        "button-input",
-                                        sizeof(s_producer_stack) / sizeof(s_producer_stack[0]),
-                                        NULL,
-                                        tskIDLE_PRIORITY + 1u,
-                                        s_producer_stack,
-                                        &s_producer_task_storage);
-    if (s_producer_task == NULL) {
-        s_service_running = false;
-        s_producer_stopped = true;
-        s_event_queue = NULL;
-        return WATCHY_STATUS_INVALID_STATE;
+    if (!s_producer_created) {
+        s_producer_task = xTaskCreateStatic(button_producer_task,
+                                            "button-input",
+                                            sizeof(s_producer_stack) / sizeof(s_producer_stack[0]),
+                                            NULL,
+                                            tskIDLE_PRIORITY + 1u,
+                                            s_producer_stack,
+                                            &s_producer_task_storage);
+        if (s_producer_task == NULL) {
+            s_event_queue = NULL;
+            return WATCHY_STATUS_INVALID_STATE;
+        }
+        s_producer_created = true;
     }
 
     for (size_t index = 0u; index < WATCHY_BUTTON_COUNT; ++index) {
@@ -220,7 +273,11 @@ static watchy_status_t start_event_service(void) {
         s_handler_registered[index] = true;
     }
 
+    portENTER_CRITICAL(&s_service_lock);
+    s_service_running = true;
     s_accepting_isr = true;
+    s_producer_parked = false;
+    portEXIT_CRITICAL(&s_service_lock);
     xTaskNotifyGive(s_producer_task);
     return WATCHY_STATUS_OK;
 }
@@ -294,7 +351,12 @@ bool watchy_buttons_press_pending(void) {
 }
 
 bool watchy_buttons_overflowed(void) {
-    return s_overflowed;
+    bool overflowed;
+
+    portENTER_CRITICAL(&s_service_lock);
+    overflowed = s_overflowed;
+    portEXIT_CRITICAL(&s_service_lock);
+    return overflowed;
 }
 
 watchy_status_t watchy_buttons_quiesce(void) {
