@@ -35,7 +35,6 @@ static watchy_button_mask_t s_cancelled_buttons;
 static bool s_force_cut;
 
 typedef struct {
-    watchy_button_mask_t baseline_buttons;
     watchy_button_mask_t cancelled_buttons;
     watchy_watchdog_scope_t *watchdog;
     bool watchdog_feed_failed;
@@ -127,13 +126,17 @@ static watchy_status_t transition_write(void *context,
 static bool transition_cancel(void *context) {
     watchy_display_hardware_context_t *hardware =
         (watchy_display_hardware_context_t *)context;
-    const watchy_button_mask_t current = watchy_buttons_sample();
+    watchy_button_press_event_t event;
 
     if (hardware == NULL) {
         return false;
     }
-    hardware->cancelled_buttons |=
-        watchy_display_new_button_mask(hardware->baseline_buttons, current);
+    if (hardware->watchdog_feed_failed) {
+        return true;
+    }
+    if (watchy_buttons_take_press(&event, 0u)) {
+        hardware->cancelled_buttons = event.mask;
+    }
     return hardware->watchdog_feed_failed || hardware->cancelled_buttons != 0u;
 }
 
@@ -311,7 +314,6 @@ watchy_status_t watchy_display_present(watchy_refresh_mode_t requested,
     memcpy(s_target_framebuffer, s_framebuffer, sizeof(s_target_framebuffer));
     s_force_cut = false;
     hardware = (watchy_display_hardware_context_t){
-        .baseline_buttons = watchy_buttons_sample(),
         .watchdog = &watchdog,
     };
     io = (watchy_display_transition_io_t){

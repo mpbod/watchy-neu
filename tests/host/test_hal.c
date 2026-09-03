@@ -618,21 +618,34 @@ static int test_pcf8563_alarm_encodes_documented_next_match_fields(void) {
     return 0;
 }
 
-static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
-    watchy_sleep_requirements_t requirements = {
+static watchy_sleep_requirements_t valid_timer_sleep_requirements(void) {
+    return (watchy_sleep_requirements_t){
         .timer_configured = true,
         .radios_stopped = true,
         .motor_off = true,
         .display_hibernated = true,
         .rtc_source_cleared = true,
+        .motion_wake_enabled = true,
         .motion_source_configured = true,
+        .buttons_quiesced = true,
         .ext0_configured = true,
         .ext1_configured = true,
         .sources_inactive = true,
     };
+}
+
+static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
+    watchy_sleep_requirements_t requirements = valid_timer_sleep_requirements();
     watchy_wake_source_filter_t filter = {0};
 
     CHECK(watchy_power_sleep_allowed(&requirements));
+    requirements.motion_wake_enabled = false;
+    requirements.motion_source_configured = false;
+    CHECK(watchy_power_sleep_allowed(&requirements));
+    requirements = valid_timer_sleep_requirements();
+    requirements.buttons_quiesced = false;
+    CHECK(!watchy_power_sleep_allowed(&requirements));
+    requirements = valid_timer_sleep_requirements();
     requirements.timer_configured = false;
     CHECK(!watchy_power_sleep_allowed(&requirements));
     requirements.timer_configured = true;
@@ -664,6 +677,7 @@ static int test_sleep_admission_and_wake_source_debounce_are_fail_closed(void) {
         .radios_stopped = true,
         .motor_off = true,
         .display_hibernated = true,
+        .buttons_quiesced = true,
         .ext1_configured = true,
         .sources_inactive = true,
         .button_only = true,

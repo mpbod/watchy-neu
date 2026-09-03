@@ -165,7 +165,6 @@ static bool run_package_app(const char *package_ref) {
         .stop = package_app_stop,
         .context = NULL,
     };
-    watchy_button_mask_t previous;
     watchy_button_mask_t pending_buttons = 0u;
     uint64_t last_activity;
     watchy_package_status_t status = watchy_packages_runner_start(package_ref, false);
@@ -173,18 +172,23 @@ static bool run_package_app(const char *package_ref) {
     if (!watchy_packages_runner_active()) return true;
     status = watchy_packages_runner_render();
     (void)watchy_display_take_cancelled_buttons(&pending_buttons);
-    previous = watchy_buttons_sample();
     last_activity = milliseconds();
     while (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
-        const watchy_button_mask_t current = watchy_buttons_sample();
         watchy_button_mask_t pressed = pending_buttons;
         pending_buttons = 0u;
         if (pressed == 0u) {
-            pressed = current & ~previous;
+            watchy_button_press_event_t event;
+            if (watchy_buttons_take_press(&event, WATCHY_BUTTON_POLL_MS)) {
+                pressed = event.mask;
+            }
         }
-        previous = current;
         if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
             status = watchy_packages_runner_stop();
+            break;
+        }
+        if (pressed == 0u && watchy_buttons_overflowed()) {
+            ESP_LOGE(TAG, "button input queue overflow while package app was active");
+            status = WATCHY_PACKAGE_ERR_STATE;
             break;
         }
         if (pressed != 0u) {
@@ -196,7 +200,6 @@ static bool run_package_app(const char *package_ref) {
                 pending_buttons |= cancelled_buttons;
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
     }
     if (watchy_packages_runner_active()) (void)watchy_packages_runner_stop();
     return status == WATCHY_PACKAGE_OK;
@@ -513,18 +516,24 @@ static void run_shell(watchy_shell_t *shell,
                       watchy_diagnostic_report_t *diagnostics,
                       package_boot_state_t *package_boot,
                       const char *safe_reason) {
-    watchy_button_mask_t previous = watchy_buttons_sample();
+    bool input_overflow_reported = false;
     uint64_t last_activity = milliseconds();
     char detail[192] = {0};
     if (shell->safe_mode && safe_reason != NULL) snprintf(detail, sizeof(detail), "%s", safe_reason);
     while (!shell->sleep_requested) {
-        const watchy_button_mask_t current = watchy_buttons_sample();
         watchy_button_mask_t pressed =
             watchy_shell_presentation_take_cancelled_buttons(presentation);
         if (pressed == 0u) {
-            pressed = current & ~previous;
+            watchy_button_press_event_t event;
+            if (watchy_buttons_take_press(&event, WATCHY_BUTTON_POLL_MS)) {
+                pressed = event.mask;
+            }
         }
-        previous = current;
+        if (pressed == 0u && !input_overflow_reported && watchy_buttons_overflowed()) {
+            ESP_LOGE(TAG, "button input queue overflow; navigation event was lost");
+            input_overflow_reported = true;
+            shell->package_warning = true;
+        }
         if (watchy_portal_active()) {
             if ((pressed & WATCHY_BUTTON_MASK_BACK) != 0u || watchy_portal_timed_out()) {
                 const watchy_shell_screen_t before_screen = shell->screen;
@@ -595,7 +604,6 @@ static void run_shell(watchy_shell_t *shell,
                                                   result.cancelled_buttons);
                 last_activity = milliseconds();
             }
-            vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
             continue;
         }
         if (pressed != 0u) {
@@ -609,7 +617,6 @@ static void run_shell(watchy_shell_t *shell,
                 watchy_shell_presentation_observe(presentation, shell, result.outcome,
                                                   result.cancelled_buttons);
                 last_activity = milliseconds();
-                vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
                 continue;
             }
             watchy_shell_screen_t transition_from = shell->screen;
@@ -799,7 +806,6 @@ static void run_shell(watchy_shell_t *shell,
                 }
                 if (!post_action_presentation_needed) {
                     last_activity = milliseconds();
-                    vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
                     continue;
                 }
                 watchy_transition_request_v1_t request;
@@ -870,7 +876,6 @@ static void run_shell(watchy_shell_t *shell,
                                               result.cancelled_buttons);
             last_activity = milliseconds();
         }
-        vTaskDelay(pdMS_TO_TICKS(WATCHY_BUTTON_POLL_MS));
     }
 }
 
@@ -1040,7 +1045,9 @@ void app_main(void) {
         for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     }
     if (watchy_rtc_ready()) timer_configured = watchy_rtc_set_minute_timer(1u) == WATCHY_STATUS_OK;
-    if (timer_configured && !watchy_motion_ready()) (void)watchy_motion_init();
+    if (timer_configured && settings.motion_wake && !watchy_motion_ready()) {
+        (void)watchy_motion_init();
+    }
     const watchy_status_t sleep_status = timer_configured
         ? watchy_power_prepare_deep_sleep_with_motion(true, settings.motion_wake)
         : watchy_power_prepare_button_only_sleep();

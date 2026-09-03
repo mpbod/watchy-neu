@@ -3,6 +3,7 @@
 #include "watchy/battery.h"
 #include "watchy/board.h"
 #include "watchy/buses.h"
+#include "watchy/buttons.h"
 #include "watchy/display.h"
 #include "watchy/haptics.h"
 #include "watchy/motion.h"
@@ -80,6 +81,40 @@ static bool prepare_motor_for_sleep(void) {
            watchy_haptics_hold_off_for_sleep() == WATCHY_STATUS_OK;
 }
 
+static bool prepare_motion_wake_source(bool motion_wake_enabled) {
+    if (!motion_wake_enabled) {
+        return false;
+    }
+    if (!watchy_motion_ready() && watchy_motion_init() != WATCHY_STATUS_OK) {
+        return false;
+    }
+    return watchy_motion_configure_wake(true) == WATCHY_STATUS_OK;
+}
+
+static void restore_button_gpio_ownership(void) {
+    static const gpio_num_t pins[] = {
+        WATCHY_PIN_BUTTON_MENU,
+        WATCHY_PIN_BUTTON_BACK,
+        WATCHY_PIN_BUTTON_DOWN,
+        WATCHY_PIN_BUTTON_UP,
+    };
+    for (size_t index = 0; index < sizeof(pins) / sizeof(pins[0]); ++index) {
+        (void)rtc_gpio_deinit(pins[index]);
+    }
+}
+
+static watchy_status_t fail_sleep_preparation(bool resume_buttons,
+                                               bool restore_button_gpios) {
+    if (restore_button_gpios) {
+        restore_button_gpio_ownership();
+    }
+    if (resume_buttons && watchy_buttons_resume() != WATCHY_STATUS_OK) {
+        ESP_LOGE(TAG, "button input resume failed after sleep preparation error");
+    }
+    s_last_prepare_status = WATCHY_STATUS_INVALID_STATE;
+    return s_last_prepare_status;
+}
+
 static bool prepare_button_wake_pins(void) {
     static const gpio_num_t pins[] = {
         WATCHY_PIN_BUTTON_MENU,
@@ -153,9 +188,8 @@ watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configure
                               watchy_display_deep_sleep() == WATCHY_STATUS_OK,
         .rtc_source_cleared = watchy_rtc_ready() &&
                               watchy_rtc_clear_interrupt_flags() == WATCHY_STATUS_OK,
-        .motion_source_configured = watchy_motion_ready() &&
-                                    watchy_motion_configure_wake(motion_wake_enabled) ==
-                                        WATCHY_STATUS_OK,
+        .motion_wake_enabled = motion_wake_enabled,
+        .motion_source_configured = prepare_motion_wake_source(motion_wake_enabled),
     };
     s_prepare_attempted = true;
 
@@ -163,9 +197,10 @@ watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configure
     /* Wake APIs are applied after pin release; mark them provisionally for prerequisite gating. */
     requirements.ext0_configured = true;
     requirements.ext1_configured = true;
+    requirements.buttons_quiesced =
+        watchy_buttons_quiesce() == WATCHY_STATUS_OK;
     if (!watchy_power_sleep_allowed(&requirements)) {
-        s_last_prepare_status = WATCHY_STATUS_INVALID_STATE;
-        return s_last_prepare_status;
+        return fail_sleep_preparation(true, false);
     }
 
     watchy_battery_deinit();
@@ -187,8 +222,10 @@ watchy_status_t watchy_power_prepare_deep_sleep_with_motion(bool timer_configure
         prepare_button_wake_pins() &&
         esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_HIGH) == ESP_OK;
     requirements.sources_inactive = wait_for_wake_sources_inactive(motion_wake_enabled, true);
-    s_last_prepare_status = watchy_power_sleep_allowed(&requirements) ? WATCHY_STATUS_OK
-                                                                      : WATCHY_STATUS_INVALID_STATE;
+    if (!watchy_power_sleep_allowed(&requirements)) {
+        return fail_sleep_preparation(true, true);
+    }
+    s_last_prepare_status = WATCHY_STATUS_OK;
     return s_last_prepare_status;
 }
 
@@ -212,9 +249,10 @@ watchy_status_t watchy_power_prepare_button_only_sleep(void) {
     };
     s_prepare_attempted = true;
     requirements.sources_inactive = wait_for_wake_sources_inactive(false, false);
+    requirements.buttons_quiesced =
+        watchy_buttons_quiesce() == WATCHY_STATUS_OK;
     if (!watchy_power_sleep_allowed(&requirements)) {
-        s_last_prepare_status = WATCHY_STATUS_INVALID_STATE;
-        return s_last_prepare_status;
+        return fail_sleep_preparation(true, false);
     }
     watchy_battery_deinit();
     watchy_motion_deinit();
@@ -227,8 +265,10 @@ watchy_status_t watchy_power_prepare_button_only_sleep(void) {
         prepare_button_wake_pins() &&
         esp_sleep_enable_ext1_wakeup(button_mask, ESP_EXT1_WAKEUP_ANY_HIGH) == ESP_OK;
     requirements.sources_inactive = wait_for_wake_sources_inactive(false, false);
-    s_last_prepare_status = watchy_power_sleep_allowed(&requirements)
-                                ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
+    if (!watchy_power_sleep_allowed(&requirements)) {
+        return fail_sleep_preparation(true, true);
+    }
+    s_last_prepare_status = WATCHY_STATUS_OK;
     return s_last_prepare_status;
 }
 

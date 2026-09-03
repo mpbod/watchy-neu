@@ -34,7 +34,9 @@ typedef struct {
     bool motor_off;
     bool display_hibernated;
     bool rtc_source_cleared;
+    bool motion_wake_enabled;
     bool motion_source_configured;
+    bool buttons_quiesced;
     bool ext0_configured;
     bool ext1_configured;
     bool sources_inactive;

@@ -31,8 +31,8 @@ watchy_wake_cause_t watchy_power_map_wake(watchy_raw_wake_cause_t raw_cause,
 
 bool watchy_power_sleep_allowed(const watchy_sleep_requirements_t *requirements) {
     if (requirements == NULL || !requirements->radios_stopped || !requirements->motor_off ||
-        !requirements->display_hibernated || !requirements->ext1_configured ||
-        !requirements->sources_inactive) {
+        !requirements->display_hibernated || !requirements->buttons_quiesced ||
+        !requirements->ext1_configured || !requirements->sources_inactive) {
         return false;
     }
     if (requirements->button_only) {
@@ -40,7 +40,8 @@ bool watchy_power_sleep_allowed(const watchy_sleep_requirements_t *requirements)
                !requirements->motion_source_configured && !requirements->ext0_configured;
     }
     return requirements->timer_configured && requirements->rtc_source_cleared &&
-           requirements->motion_source_configured && requirements->ext0_configured;
+           (!requirements->motion_wake_enabled || requirements->motion_source_configured) &&
+           requirements->ext0_configured;
 }
 
 bool watchy_power_safe_mode_chord_allowed(watchy_wake_cause_t wake_cause) {
