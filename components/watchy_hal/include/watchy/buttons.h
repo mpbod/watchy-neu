@@ -30,6 +30,11 @@ typedef struct {
     uint32_t debounce_ms;
 } watchy_button_filter_t;
 
+typedef struct {
+    watchy_button_mask_t mask;
+    uint32_t timestamp_ms;
+} watchy_button_press_event_t;
+
 void watchy_buttons_filter_init(watchy_button_filter_t *filter,
                                  watchy_button_mask_t initial_mask,
                                  uint32_t debounce_ms);
@@ -43,6 +48,12 @@ bool watchy_buttons_is_safe_mode_chord(watchy_button_mask_t sampled_mask);
 watchy_status_t watchy_buttons_init(void);
 bool watchy_buttons_ready(void);
 watchy_button_mask_t watchy_buttons_sample(void);
+bool watchy_buttons_take_press(watchy_button_press_event_t *out_event,
+                               uint32_t timeout_ms);
+bool watchy_buttons_press_pending(void);
+bool watchy_buttons_overflowed(void);
+watchy_status_t watchy_buttons_quiesce(void);
+watchy_status_t watchy_buttons_resume(void);
 void watchy_buttons_deinit(void);
 
 #ifdef __cplusplus
