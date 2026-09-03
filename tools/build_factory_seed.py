@@ -44,7 +44,7 @@ OWNER_BYTES = b"watchy-factory-seed-v1\n"
 AUDITED_WPK_SHA256 = {
     "grid-01.wpk": "0a224c7b7aeb574b84918c206bf117a98d2c742399d8dcfcb8e59a9b5fee5475",
     "grid-02.wpk": "a8bba8a3fc1055ee2dc5eff545d02b6e37330d2c70714bbfe173c0b56b363a2c",
-    "grid-03.wpk": "8525387dfadf8bc4907a9e00b2cc07c86b274a11d234f8ac99d0da3c1ad84b57",
+    "grid-03.wpk": "bf9f098924c5658d04888576b915342ea14fbc08aca202af5356b15f0ecac03d",
     "orbit.wpk": "2dc17e53213d28fc9c36a8d2e44ebed396af25c79d944fa64ac0e5cdaa9b17ae",
     "slab.wpk": "bb6e9aec7b5952fb3b1128ee703366e171d269870fb3d1b88af1008faf4d107d",
     "term-01.wpk": "96b2ac789bed3ecffca32bbe2e6077d47c25d499d0b75150d31571b3b7af9ca5",

@@ -48,6 +48,17 @@ static int ink(const uint8_t *fb, int left, int top, int right, int bottom) {
     return count;
 }
 
+static int ink_height(const uint8_t *fb, int left, int top, int right, int bottom) {
+    int first = -1;
+    int last = -1;
+    for (int y = top; y <= bottom; ++y) {
+        if (ink(fb, left, y, right, y) == 0) continue;
+        if (first < 0) first = y;
+        last = y;
+    }
+    return first < 0 ? 0 : last - first + 1;
+}
+
 static int white_ink(const uint8_t *fb, int left, int top, int right, int bottom) {
     const int area = (right - left + 1) * (bottom - top + 1);
     return area - ink(fb, left, top, right, bottom);
@@ -202,8 +213,26 @@ static int test_grid(const watchy_package_descriptor_v1_t *descriptor,
         assert(ink(framebuffer, 0, 0, 25, 199) > 50);
         assert(ink(framebuffer, 31, 27, 185, 90) > 20);
     } else {
-        assert(ink(framebuffer, 0, 0, 199, 117) > 80);
-        assert(ink(framebuffer, 0, 119, 199, 199) > 40);
+        /* Grid 03 is viewed at physical 1:1 scale. Its browser-handoff 8 px
+         * labels and 15 px values were too faint on the 1-bit panel, so each
+         * text tier must retain a readable raster height without crossing a
+         * cell divider or the display edge. */
+        assert(ink(framebuffer, 0, 0, 199, 117) > 3400);
+        assert(ink_height(framebuffer, 0, 0, 199, 117) >= 51);
+        assert(ink_height(framebuffer, 1, 120, 65, 145) >= 8);
+        assert(ink_height(framebuffer, 1, 146, 65, 178) >= 21);
+        assert(ink_height(framebuffer, 1, 179, 65, 198) >= 8);
+        assert(ink_height(framebuffer, 67, 120, 132, 145) >= 8);
+        assert(ink(framebuffer, 67, 146, 132, 178) >= 55);
+        assert(ink_height(framebuffer, 67, 179, 132, 198) >= 8);
+        assert(ink_height(framebuffer, 134, 120, 198, 145) >= 8);
+        assert(ink_height(framebuffer, 134, 146, 198, 178) >= 14);
+        assert(ink(framebuffer, 60, 120, 65, 198) == 0);
+        assert(ink(framebuffer, 127, 120, 132, 198) == 0);
+        assert(ink(framebuffer, 194, 120, 198, 198) == 0);
+        assert(ink(framebuffer, 1, 199, 65, 199) == 0);
+        assert(ink(framebuffer, 67, 199, 132, 199) == 0);
+        assert(ink(framebuffer, 134, 199, 198, 199) == 0);
     }
     if (std::getenv("WATCHY_UPDATE_GOLDENS") != nullptr) {
         write_pbm(golden, framebuffer);
@@ -468,15 +497,15 @@ int main() {
     assert(grid_clock.tracking == 0);
     assert(grid_rail_clock.font == &watchy_font_heros_62_regular);
     assert(grid_rail_clock.tracking == 0);
-    assert(grid_modular_clock.font == &watchy_font_heros_74_regular);
+    assert(grid_modular_clock.font == &watchy_font_heros_72_bold);
     assert(grid_modular_clock.tracking == 0);
     assert(watchy_ui_measure_text(&grid_clock, "09:41").width == 157);
     assert(text_ink_fits(grid_header, "MON", 14, 23, 14, 14, 70, 31));
     assert(right_text_ink_fits(grid_header, "31 AUG", 186, 23, 120, 14, 185, 31));
     assert(grid_fit_width(grid_clock, "09:41", 170u) == 157u);
     assert(grid_fit_width(grid_rail_clock, "09:41", 150u) == 150u);
-    assert(grid_text_raw_width(grid_modular_clock, "09:41") == 185);
-    assert(grid_fit_width(grid_modular_clock, "09:41", 190u) == 185u);
+    assert(grid_text_raw_width(grid_modular_clock, "09:41") == 184);
+    assert(grid_fit_width(grid_modular_clock, "09:41", 190u) == 184u);
     assert(text_ink_fits(grid_body, "NO EVENT", 40, 58,
                          31, 30, 185, 90));
     assert(text_ink_fits(grid_body, "--:--", 40, 76,

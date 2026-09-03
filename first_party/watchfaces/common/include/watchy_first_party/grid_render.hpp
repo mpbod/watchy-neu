@@ -46,7 +46,7 @@ inline watchy_text_style_t grid_footer_style(bool black = true) noexcept {
 }
 
 inline watchy_text_style_t grid_small_style(bool black = true) noexcept {
-    return {&watchy_font_plex_8_semibold, 0, black, false};
+    return {&watchy_font_plex_11_semibold, 0, black, false};
 }
 
 inline watchy_text_style_t grid_rail_style(bool black = true) noexcept {
@@ -62,7 +62,11 @@ inline watchy_text_style_t grid_value_style(bool black = true) noexcept {
 }
 
 inline watchy_text_style_t grid_day_style(bool black = true) noexcept {
-    return {&watchy_font_plex_22_bold, 0, black, false};
+    return {&watchy_font_plex_30_bold, 0, black, false};
+}
+
+inline watchy_text_style_t grid_modular_value_style(bool black = true) noexcept {
+    return {&watchy_font_heros_20_bold, 0, black, false};
 }
 
 inline watchy_text_style_t grid_large_clock_style(bool black = true) noexcept {
@@ -74,7 +78,7 @@ inline watchy_text_style_t grid_rail_clock_style(bool black = true) noexcept {
 }
 
 inline watchy_text_style_t grid_modular_clock_style(bool black = true) noexcept {
-    return {&watchy_font_heros_74_regular, 0, black, false};
+    return {&watchy_font_heros_72_bold, 0, black, false};
 }
 
 /* These bounded raster helpers keep the generated strikes intact while
