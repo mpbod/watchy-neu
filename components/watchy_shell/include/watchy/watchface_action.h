@@ -69,8 +69,14 @@ typedef struct {
     watchy_shell_error_t error;
 } watchy_watchface_portal_exit_result_t;
 
-typedef bool (*watchy_package_app_run_fn_t)(void *context,
-                                            const char *package_ref);
+typedef struct {
+    bool succeeded;
+    watchy_button_mask_t cancelled_buttons;
+} watchy_package_app_run_result_t;
+
+typedef watchy_package_app_run_result_t (*watchy_package_app_run_fn_t)(
+    void *context,
+    const char *package_ref);
 
 watchy_status_t watchy_watchface_reconcile_settings(
     watchy_settings_t *settings,
@@ -112,7 +118,8 @@ watchy_status_t watchy_package_app_action_apply(
     bool package_execution_blocked,
     const char *package_ref,
     watchy_package_app_run_fn_t run_app,
-    void *context);
+    void *context,
+    watchy_package_app_run_result_t *out_result);
 
 watchy_status_t watchy_watchface_boot_prepare(
     bool safe_mode,

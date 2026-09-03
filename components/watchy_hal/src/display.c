@@ -293,6 +293,7 @@ watchy_status_t watchy_display_present(watchy_refresh_mode_t requested,
     watchy_display_hardware_context_t hardware;
     watchy_watchdog_scope_t watchdog = {0};
     watchy_display_transition_io_t io;
+    watchy_display_execution_outcome_t outcome;
     watchy_status_t status;
 
     if (!s_ready) {
@@ -331,20 +332,16 @@ watchy_status_t watchy_display_present(watchy_refresh_mode_t requested,
                                          s_framebuffer, sizeof(s_framebuffer), &io, &result);
     s_presenting = false;
 
-    status = watchy_display_execution_status(status, &result,
-                                             hardware.watchdog_feed_failed);
-    if (status == WATCHY_STATUS_CANCELLED) {
-        if (hardware.cancelled_buttons == 0u) {
-            status = WATCHY_STATUS_INVALID_STATE;
-        } else {
-            s_cancelled_buttons |= hardware.cancelled_buttons;
-            s_force_cut = true;
-        }
+    outcome = watchy_display_finalize_execution(
+        status, &result, hardware.watchdog_feed_failed,
+        watchy_watchdog_scope_end(&watchdog), hardware.cancelled_buttons);
+    if (outcome.cancelled_buttons != 0u) {
+        s_cancelled_buttons |= outcome.cancelled_buttons;
     }
-    if (watchy_watchdog_scope_end(&watchdog) != WATCHY_STATUS_OK) {
-        status = WATCHY_STATUS_INVALID_STATE;
+    if (outcome.force_cut) {
+        s_force_cut = true;
     }
-    return status;
+    return outcome.status;
 }
 
 bool watchy_display_take_cancelled_buttons(watchy_button_mask_t *out_buttons) {

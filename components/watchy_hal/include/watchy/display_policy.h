@@ -35,6 +35,12 @@ typedef struct {
     void *context;
 } watchy_display_transition_io_t;
 
+typedef struct {
+    watchy_status_t status;
+    watchy_button_mask_t cancelled_buttons;
+    bool force_cut;
+} watchy_display_execution_outcome_t;
+
 bool watchy_display_busy_observe(watchy_display_busy_filter_t *filter, bool busy_high);
 bool watchy_display_retained_valid(const watchy_display_retained_state_t *state);
 void watchy_display_invalidate_retained(watchy_display_retained_state_t *state);
@@ -52,6 +58,12 @@ bool watchy_display_plan_requires_clear(const watchy_display_retained_state_t *s
 watchy_status_t watchy_display_execution_status(watchy_status_t execution_status,
                                                 const watchy_transition_result_t *result,
                                                 bool watchdog_feed_failed);
+watchy_display_execution_outcome_t watchy_display_finalize_execution(
+    watchy_status_t execution_status,
+    const watchy_transition_result_t *result,
+    bool watchdog_feed_failed,
+    watchy_status_t watchdog_end_status,
+    watchy_button_mask_t cancelled_buttons);
 watchy_button_mask_t watchy_display_new_button_mask(watchy_button_mask_t baseline,
                                                     watchy_button_mask_t current);
 watchy_status_t watchy_display_execute_plan(const watchy_transition_plan_t *plan,

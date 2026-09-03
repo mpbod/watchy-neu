@@ -121,6 +121,33 @@ watchy_status_t watchy_display_execution_status(watchy_status_t execution_status
                ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
 }
 
+watchy_display_execution_outcome_t watchy_display_finalize_execution(
+    watchy_status_t execution_status,
+    const watchy_transition_result_t *result,
+    bool watchdog_feed_failed,
+    watchy_status_t watchdog_end_status,
+    watchy_button_mask_t cancelled_buttons) {
+    const watchy_button_mask_t allowed =
+        WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_BACK |
+        WATCHY_BUTTON_MASK_DOWN | WATCHY_BUTTON_MASK_UP;
+    watchy_display_execution_outcome_t outcome = {
+        .status = watchy_display_execution_status(
+            execution_status, result, watchdog_feed_failed),
+    };
+
+    if (result != NULL && result->cancelled && result->source_valid) {
+        outcome.cancelled_buttons = cancelled_buttons & allowed;
+        outcome.force_cut = outcome.cancelled_buttons != 0u;
+        if (outcome.status == WATCHY_STATUS_CANCELLED && !outcome.force_cut) {
+            outcome.status = WATCHY_STATUS_INVALID_STATE;
+        }
+    }
+    if (watchdog_end_status != WATCHY_STATUS_OK) {
+        outcome.status = WATCHY_STATUS_INVALID_STATE;
+    }
+    return outcome;
+}
+
 watchy_button_mask_t watchy_display_new_button_mask(watchy_button_mask_t baseline,
                                                     watchy_button_mask_t current) {
     const watchy_button_mask_t allowed = WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_BACK |

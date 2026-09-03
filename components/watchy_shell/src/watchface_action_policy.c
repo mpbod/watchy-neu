@@ -161,15 +161,20 @@ watchy_status_t watchy_package_app_action_apply(
     bool package_execution_blocked,
     const char *package_ref,
     watchy_package_app_run_fn_t run_app,
-    void *context) {
+    void *context,
+    watchy_package_app_run_result_t *out_result) {
+    if (out_result == NULL) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    *out_result = (watchy_package_app_run_result_t){0};
     if (package_ref == NULL || package_ref[0] == '\0' || run_app == NULL) {
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     if (safe_mode || package_execution_blocked) {
         return WATCHY_STATUS_UNSUPPORTED;
     }
-    return run_app(context, package_ref) ? WATCHY_STATUS_OK
-                                         : WATCHY_STATUS_INVALID_STATE;
+    *out_result = run_app(context, package_ref);
+    return out_result->succeeded ? WATCHY_STATUS_OK : WATCHY_STATUS_INVALID_STATE;
 }
 
 watchy_status_t watchy_watchface_action_apply(

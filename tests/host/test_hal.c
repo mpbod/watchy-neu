@@ -479,6 +479,23 @@ static int test_display_cancellation_maps_to_distinct_status_and_button_edges(vo
     return 0;
 }
 
+static int test_display_watchdog_cleanup_failure_preserves_cancelled_button(void) {
+    const watchy_transition_result_t result = {
+        .writes_completed = 1u,
+        .cancelled = true,
+        .source_valid = true,
+    };
+    const watchy_display_execution_outcome_t outcome =
+        watchy_display_finalize_execution(
+            WATCHY_STATUS_OK, &result, false, WATCHY_STATUS_INVALID_STATE,
+            WATCHY_BUTTON_MASK_DOWN);
+
+    CHECK(outcome.status == WATCHY_STATUS_INVALID_STATE);
+    CHECK(outcome.cancelled_buttons == WATCHY_BUTTON_MASK_DOWN);
+    CHECK(outcome.force_cut);
+    return 0;
+}
+
 static int test_display_transition_adapter_cancellation_retains_last_successful_frame(void) {
     static uint8_t original_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
     static uint8_t fallback_source[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
@@ -749,6 +766,7 @@ int main(void) {
     CHECK(test_display_transition_adapter_clears_before_plan_wide_threshold() == 0);
     CHECK(test_display_transition_adapter_cancellation_retains_last_successful_frame() == 0);
     CHECK(test_display_cancellation_maps_to_distinct_status_and_button_edges() == 0);
+    CHECK(test_display_watchdog_cleanup_failure_preserves_cancelled_button() == 0);
     CHECK(test_display_transition_adapter_write_failure_invalidates_retained_source() == 0);
     CHECK(test_pcf8563_calendar_validates_bcd_dates_century_and_unix_offsets() == 0);
     CHECK(test_pcf8563_alarm_encodes_documented_next_match_fields() == 0);
@@ -757,6 +775,6 @@ int main(void) {
     CHECK(test_rtc_initial_clock_only_becomes_ready_after_valid_decode() == 0);
     CHECK(test_radio_reconnect_is_blocked_while_stopping() == 0);
     CHECK(test_storage_only_classifies_fully_erased_media_as_blank() == 0);
-    puts("PASS 22 HAL tests");
+    puts("PASS 23 HAL tests");
     return 0;
 }

@@ -430,7 +430,7 @@ void watchy_shell_presentation_observe(watchy_shell_presentation_state_t *state,
     const bool target_presented = outcome == WATCHY_SHELL_PRESENT_TARGET;
     if (state != NULL) {
         state->sleep_deferred = !target_presented;
-        if (outcome == WATCHY_SHELL_PRESENT_CANCELLED) {
+        if (!target_presented) {
             const watchy_button_mask_t allowed =
                 WATCHY_BUTTON_MASK_MENU | WATCHY_BUTTON_MASK_BACK |
                 WATCHY_BUTTON_MASK_DOWN | WATCHY_BUTTON_MASK_UP;

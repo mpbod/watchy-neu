@@ -169,21 +169,29 @@ static int test_presentation_outcomes_gate_sleep_and_post_action_refresh(void) {
     CHECK(watchy_shell_presentation_allows_sleep(&presentation));
 
     watchy_shell_presentation_observe(&presentation, &shell,
-                                      WATCHY_SHELL_PRESENT_RECOVERY, 0u);
+                                      WATCHY_SHELL_PRESENT_RECOVERY,
+                                      WATCHY_BUTTON_MASK_UP);
     CHECK(!shell.sleep_requested);
     CHECK(!watchy_shell_presentation_allows_sleep(&presentation));
+    CHECK(watchy_shell_presentation_has_pending_input(&presentation));
     CHECK(!watchy_shell_presentation_needs_post_action(
         WATCHY_SHELL_PRESENT_RECOVERY));
 
     watchy_shell_presentation_observe(&presentation, &shell,
                                       WATCHY_SHELL_PRESENT_TARGET, 0u);
+    CHECK(!watchy_shell_presentation_allows_sleep(&presentation));
+    CHECK(watchy_shell_presentation_take_cancelled_buttons(&presentation) ==
+          WATCHY_BUTTON_MASK_UP);
     CHECK(watchy_shell_presentation_allows_sleep(&presentation));
 
     shell.sleep_requested = true;
     watchy_shell_presentation_observe(&presentation, &shell,
-                                      WATCHY_SHELL_PRESENT_FAILED, 0u);
+                                      WATCHY_SHELL_PRESENT_FAILED,
+                                      WATCHY_BUTTON_MASK_BACK);
     CHECK(!shell.sleep_requested);
     CHECK(!watchy_shell_presentation_allows_sleep(&presentation));
+    CHECK(watchy_shell_presentation_take_cancelled_buttons(&presentation) ==
+          WATCHY_BUTTON_MASK_BACK);
     CHECK(!watchy_shell_presentation_needs_post_action(
         WATCHY_SHELL_PRESENT_FAILED));
 

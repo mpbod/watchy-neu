@@ -595,21 +595,51 @@ typedef struct {
     unsigned calls;
 } app_fixture_t;
 
-static bool run_app(void *context, const char *package_ref) {
+static watchy_package_app_run_result_t run_app(void *context,
+                                                const char *package_ref) {
     app_fixture_t *fixture = context;
     ++fixture->calls;
-    return strcmp(package_ref, "app.demo@1.0.0") == 0;
+    return (watchy_package_app_run_result_t){
+        .succeeded = strcmp(package_ref, "app.demo@1.0.0") == 0,
+    };
+}
+
+static watchy_package_app_run_result_t run_app_that_exits_during_start(
+    void *context,
+    const char *package_ref) {
+    app_fixture_t *fixture = context;
+    ++fixture->calls;
+    return (watchy_package_app_run_result_t){
+        .succeeded = strcmp(package_ref, "app.demo@1.0.0") == 0,
+        .cancelled_buttons = WATCHY_BUTTON_MASK_MENU,
+    };
+}
+
+static int test_app_startup_exit_returns_cancelled_input_to_shell_owner(void) {
+    app_fixture_t fixture = {0};
+    watchy_package_app_run_result_t result = {0};
+
+    CHECK(watchy_package_app_action_apply(false, false, "app.demo@1.0.0",
+                                          run_app_that_exits_during_start,
+                                          &fixture, &result) == WATCHY_STATUS_OK);
+    CHECK(fixture.calls == 1u);
+    CHECK(result.succeeded);
+    CHECK(result.cancelled_buttons == WATCHY_BUTTON_MASK_MENU);
+    return 0;
 }
 
 static int test_blocked_wake_rejects_app_without_invoking_runner(void) {
     app_fixture_t fixture = {0};
+    watchy_package_app_run_result_t result = {0};
     CHECK(watchy_package_app_action_apply(false, true, "app.demo@1.0.0",
-                                          run_app, &fixture) ==
+                                          run_app, &fixture, &result) ==
           WATCHY_STATUS_UNSUPPORTED);
     CHECK(fixture.calls == 0u);
     CHECK(watchy_package_app_action_apply(false, false, "app.demo@1.0.0",
-                                          run_app, &fixture) == WATCHY_STATUS_OK);
+                                          run_app, &fixture, &result) ==
+          WATCHY_STATUS_OK);
     CHECK(fixture.calls == 1u);
+    CHECK(result.succeeded && result.cancelled_buttons == 0u);
     return 0;
 }
 
@@ -923,6 +953,7 @@ int main(void) {
     CHECK(test_blocked_wake_still_allows_hairline_selection() == 0);
     CHECK(test_blocked_wake_rejects_active_watchface_return_without_run() == 0);
     CHECK(test_blocked_wake_rejects_app_without_invoking_runner() == 0);
+    CHECK(test_app_startup_exit_returns_cancelled_input_to_shell_owner() == 0);
     CHECK(test_portal_stop_failure_still_reloads_snapshots_and_reconciles() == 0);
     CHECK(test_portal_reload_failure_still_snapshots_and_reconciles_active() == 0);
     CHECK(test_portal_exit_error_precedence_keeps_reconciliation_attempt() == 0);

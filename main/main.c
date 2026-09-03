@@ -100,6 +100,8 @@ static shell_presentation_result_t refresh_shell(
         return shell_presentation(WATCHY_SHELL_PRESENT_FAILED, 0u);
     }
     if (status == WATCHY_STATUS_INVALID_STATE) {
+        watchy_button_mask_t returned_buttons = 0u;
+        (void)watchy_display_take_cancelled_buttons(&returned_buttons);
         ESP_LOGE(TAG, "shell display presentation failed; attempting full error target");
         watchy_display_invalidate_previous();
         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
@@ -108,11 +110,13 @@ static shell_presentation_result_t refresh_shell(
             watchy_shell_render(&canvas, shell, settings, time, battery, catalog,
                                 diagnostics, NULL);
             if (watchy_display_present(WATCHY_REFRESH_FULL, NULL) == WATCHY_STATUS_OK) {
-                return shell_presentation(WATCHY_SHELL_PRESENT_RECOVERY, 0u);
+                return shell_presentation(WATCHY_SHELL_PRESENT_RECOVERY,
+                                          returned_buttons);
             }
         }
         ESP_LOGE(TAG, "shell display error target failed");
-        return shell_presentation(WATCHY_SHELL_PRESENT_FAILED, 0u);
+        return shell_presentation(WATCHY_SHELL_PRESENT_FAILED,
+                                  returned_buttons);
     }
     if (status != WATCHY_STATUS_OK) {
         ESP_LOGE(TAG, "shell display refresh failed");
@@ -157,7 +161,16 @@ static watchy_package_status_t package_app_stop(void *context) {
     return watchy_packages_runner_stop();
 }
 
-static bool run_package_app(const char *package_ref) {
+static void take_display_cancelled_buttons(watchy_button_mask_t *buttons) {
+    watchy_button_mask_t cancelled_buttons = 0u;
+
+    if (buttons != NULL &&
+        watchy_display_take_cancelled_buttons(&cancelled_buttons)) {
+        *buttons |= cancelled_buttons;
+    }
+}
+
+static watchy_package_app_run_result_t run_package_app(const char *package_ref) {
     static const watchy_package_app_runner_t runner = {
         .event = package_app_event,
         .active = package_app_active,
@@ -168,10 +181,20 @@ static bool run_package_app(const char *package_ref) {
     watchy_button_mask_t pending_buttons = 0u;
     uint64_t last_activity;
     watchy_package_status_t status = watchy_packages_runner_start(package_ref, false);
-    if (status != WATCHY_PACKAGE_OK) return false;
-    if (!watchy_packages_runner_active()) return true;
+    watchy_package_app_run_result_t result = {0};
+
+    take_display_cancelled_buttons(&pending_buttons);
+    if (status != WATCHY_PACKAGE_OK) {
+        result.cancelled_buttons = pending_buttons;
+        return result;
+    }
+    if (!watchy_packages_runner_active()) {
+        result.succeeded = true;
+        result.cancelled_buttons = pending_buttons;
+        return result;
+    }
     status = watchy_packages_runner_render();
-    (void)watchy_display_take_cancelled_buttons(&pending_buttons);
+    take_display_cancelled_buttons(&pending_buttons);
     last_activity = milliseconds();
     while (status == WATCHY_PACKAGE_OK && watchy_packages_runner_active()) {
         watchy_button_mask_t pressed = pending_buttons;
@@ -183,6 +206,7 @@ static bool run_package_app(const char *package_ref) {
             }
         }
         if (milliseconds() - last_activity >= WATCHY_SHELL_IDLE_MS) {
+            pending_buttons |= pressed;
             status = watchy_packages_runner_stop();
             break;
         }
@@ -195,14 +219,14 @@ static bool run_package_app(const char *package_ref) {
             last_activity = milliseconds();
             status = watchy_package_dispatch_app_button(
                 &runner, package_button_from_mask(pressed));
-            watchy_button_mask_t cancelled_buttons = 0u;
-            if (watchy_display_take_cancelled_buttons(&cancelled_buttons)) {
-                pending_buttons |= cancelled_buttons;
-            }
+            take_display_cancelled_buttons(&pending_buttons);
         }
     }
     if (watchy_packages_runner_active()) (void)watchy_packages_runner_stop();
-    return status == WATCHY_PACKAGE_OK;
+    take_display_cancelled_buttons(&pending_buttons);
+    result.succeeded = status == WATCHY_PACKAGE_OK;
+    result.cancelled_buttons = pending_buttons;
+    return result;
 }
 
 static watchy_package_status_t action_select_builtin(void *context) {
@@ -266,7 +290,9 @@ static watchy_status_t portal_exit_load_settings(
     return watchy_settings_load(out_settings);
 }
 
-static bool action_run_app(void *context, const char *package_ref) {
+static watchy_package_app_run_result_t action_run_app(
+    void *context,
+    const char *package_ref) {
     (void)context;
     return run_package_app(package_ref);
 }
@@ -734,12 +760,24 @@ static void run_shell(watchy_shell_t *shell,
             }
             case WATCHY_SHELL_ACTION_RUN_PACKAGE: {
                 size_t catalog_index;
+                watchy_package_app_run_result_t app_result = {0};
+                watchy_status_t app_status = WATCHY_STATUS_INVALID_STATE;
                 if (watchy_shell_selected_package(shell, &catalog_index) &&
-                    catalog_index < catalog->count &&
-                    watchy_package_app_action_apply(
+                    catalog_index < catalog->count) {
+                    app_status = watchy_package_app_action_apply(
                         shell->safe_mode, package_boot->execution_blocked,
                         catalog->packages[catalog_index].package_ref,
-                        action_run_app, NULL) == WATCHY_STATUS_OK) {
+                        action_run_app, NULL, &app_result);
+                }
+                if (app_result.cancelled_buttons != 0u) {
+                    watchy_shell_presentation_observe(
+                        presentation, shell,
+                        app_status == WATCHY_STATUS_OK
+                            ? WATCHY_SHELL_PRESENT_CANCELLED
+                            : WATCHY_SHELL_PRESENT_FAILED,
+                        app_result.cancelled_buttons);
+                }
+                if (app_status == WATCHY_STATUS_OK) {
                     snprintf(detail, sizeof(detail), "PACKAGE EXITED");
                 } else {
                     shell->package_warning = true;
