@@ -52,6 +52,26 @@ class ReproducibilityContracts(unittest.TestCase):
                         portal.index("static esp_err_t mutate_package")]
         self.assertIn("watchy_portal_timed_out()", upload)
 
+    def test_portal_ap_uses_the_shared_eight_character_password_mapper(self) -> None:
+        header = self.read("components/watchy_shell/include/watchy/portal.h")
+        policy = self.read("components/watchy_shell/src/portal_policy.c")
+        portal = self.read("components/watchy_shell/src/portal_idf.c")
+        self.assertIn("#define WATCHY_PORTAL_AP_PASSWORD_SIZE 8u", header)
+        self.assertIn("watchy_portal_password_from_digest", policy)
+
+        derive_start = portal.index("static bool derive_ap_password")
+        network_start = portal.index("static watchy_status_t start_network", derive_start)
+        derive = portal[derive_start:network_start]
+        self.assertIn("watchy_portal_password_from_digest", derive)
+        self.assertNotIn("out_size < 17u", derive)
+        self.assertNotIn("index < 16u", derive)
+        self.assertNotIn("out_password[16]", derive)
+
+        network_end = portal.index("watchy_status_t watchy_portal_start", network_start)
+        network = portal[network_start:network_end]
+        self.assertIn("derive_ap_password(config.password, sizeof(config.password))", network)
+        self.assertIn("watchy_wifi_start_ap(&config)", network)
+
     def test_settings_labels_distinguish_motion_wake_from_display_effects(self) -> None:
         rendering = self.read("components/watchy_shell/src/shell_render.c")
         # The approved gallery plan names the rows "Motion Wake" and

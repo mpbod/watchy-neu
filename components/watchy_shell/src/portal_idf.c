@@ -464,10 +464,11 @@ watchy_status_t watchy_portal_prepare_ap_password(void) {
 }
 
 static bool derive_ap_password(char *out_password, size_t out_size) {
-    static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
     uint8_t material[sizeof(s_ap_entropy_seed) + sizeof(s_ap_session_counter)];
     uint8_t digest[32];
-    if (!s_ap_entropy_ready || out_password == NULL || out_size < 17u ||
+    bool mapped;
+    if (!s_ap_entropy_ready || out_password == NULL ||
+        out_size < WATCHY_PORTAL_AP_PASSWORD_SIZE + 1u ||
         s_ap_session_counter == UINT32_MAX) {
         return false;
     }
@@ -481,13 +482,10 @@ static bool derive_ap_password(char *out_password, size_t out_size) {
         memset(material, 0, sizeof(material));
         return false;
     }
-    for (size_t index = 0u; index < 16u; ++index) {
-        out_password[index] = alphabet[digest[index] % (sizeof(alphabet) - 1u)];
-    }
-    out_password[16] = '\0';
+    mapped = watchy_portal_password_from_digest(digest, out_password, out_size);
     memset(material, 0, sizeof(material));
     memset(digest, 0, sizeof(digest));
-    return true;
+    return mapped;
 }
 
 static watchy_status_t start_network(watchy_portal_network_mode_t mode,

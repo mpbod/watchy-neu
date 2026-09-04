@@ -196,7 +196,7 @@ static int test_ap_password_generation_brackets_a_guaranteed_entropy_source(void
     };
     char password[65];
     CHECK(watchy_portal_generate_ap_password(&entropy, password, sizeof(password)));
-    CHECK(strlen(password) == 16u);
+    CHECK(strlen(password) == 8u);
     CHECK(probe.enable_calls == 1u && probe.fill_calls == 1u && probe.disable_calls == 1u);
 
     probe = (entropy_probe_t){.enable_ok = false, .fill_ok = true};
@@ -206,6 +206,25 @@ static int test_ap_password_generation_brackets_a_guaranteed_entropy_source(void
     CHECK(!watchy_portal_generate_ap_password(&entropy, password, sizeof(password)));
     CHECK(probe.enable_calls == 1u && probe.fill_calls == 1u && probe.disable_calls == 1u);
     CHECK(password[0] == '\0');
+    return 0;
+}
+
+static int test_ap_password_is_eight_unambiguous_characters(void) {
+    entropy_probe_t probe = {.enable_ok = true, .fill_ok = true};
+    const watchy_portal_entropy_api_t entropy = {
+        .enable = entropy_enable, .fill = entropy_fill, .disable = entropy_disable,
+        .context = &probe,
+    };
+    char password[WATCHY_PORTAL_AP_PASSWORD_SIZE + 1u];
+    uint8_t digest[32] = {0};
+
+    CHECK(WATCHY_PORTAL_AP_PASSWORD_SIZE == 8u);
+    CHECK(watchy_portal_generate_ap_password(&entropy, password, sizeof(password)));
+    CHECK(strlen(password) == 8u);
+    CHECK(strpbrk(password, "01OIl") == NULL);
+    CHECK(!watchy_portal_generate_ap_password(&entropy, password, sizeof(password) - 1u));
+    CHECK(watchy_portal_password_from_digest(digest, password, sizeof(password)));
+    CHECK(strlen(password) == WATCHY_PORTAL_AP_PASSWORD_SIZE);
     return 0;
 }
 
@@ -262,6 +281,16 @@ static int test_only_authenticated_activity_refreshes_idle_before_absolute_expir
     return 0;
 }
 
+static int test_idle_lifetime_is_five_minutes_with_thirty_minute_cap(void) {
+    uint64_t last = 1000u;
+    CHECK(!watchy_portal_idle_expired(last, last + 299999u));
+    CHECK(watchy_portal_idle_expired(last, last + 300000u));
+    CHECK(WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS == 1800000u);
+    CHECK(watchy_portal_session_accept(1000u, last, last + 299999u, true, &last));
+    CHECK(!watchy_portal_session_accept(1000u, last, 1000u + 1800000u, true, &last));
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     failures += test_mutating_routes_require_the_exact_session_token();
@@ -270,9 +299,11 @@ int main(void) {
     failures += test_upload_policy_enforces_content_size_battery_storage_and_exclusion();
     failures += test_package_failures_map_to_stable_public_errors();
     failures += test_ap_password_generation_brackets_a_guaranteed_entropy_source();
+    failures += test_ap_password_is_eight_unambiguous_characters();
     failures += test_upload_transport_and_storage_failures_have_distinct_public_errors();
     failures += test_idle_deadline_is_activity_relative_and_overflow_safe();
     failures += test_only_authenticated_activity_refreshes_idle_before_absolute_expiry();
+    failures += test_idle_lifetime_is_five_minutes_with_thirty_minute_cap();
     if (failures == 0) {
         puts("portal tests passed");
     }

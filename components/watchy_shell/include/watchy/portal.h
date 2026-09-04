@@ -13,7 +13,8 @@ extern "C" {
 #endif
 
 #define WATCHY_PORTAL_TOKEN_HEX_SIZE 32u
-#define WATCHY_PORTAL_IDLE_TIMEOUT_MS (10u * 60u * 1000u)
+#define WATCHY_PORTAL_AP_PASSWORD_SIZE 8u
+#define WATCHY_PORTAL_IDLE_TIMEOUT_MS (5u * 60u * 1000u)
 #define WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS (30u * 60u * 1000u)
 #define WATCHY_PORTAL_INSTALL_RESERVE_BYTES (64u * 1024u)
 
@@ -111,6 +112,9 @@ watchy_portal_error_response_t watchy_portal_map_upload_io_error(
     watchy_portal_upload_io_failure_t failure,
     watchy_package_status_t package_status);
 bool watchy_portal_generate_ap_password(const watchy_portal_entropy_api_t *entropy,
+                                        char *out_password,
+                                        size_t out_size);
+bool watchy_portal_password_from_digest(const uint8_t digest[32],
                                         char *out_password,
                                         size_t out_size);
 bool watchy_portal_fill_guaranteed_entropy(const watchy_portal_entropy_api_t *entropy,
