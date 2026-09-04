@@ -329,6 +329,54 @@ static int test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_st
     return 0;
 }
 
+static int test_home_timezone_offsets_round_trip_without_changing_legacy_storage(void) {
+    watchy_settings_t settings;
+    char label[16];
+    size_t index = 0u;
+    int16_t offset = 1;
+    watchy_settings_defaults(&settings);
+    CHECK(watchy_settings_timezone_count() == 38u);
+    CHECK(watchy_settings_timezone_offset(&settings, &offset));
+    CHECK(offset == 0);
+    CHECK(watchy_settings_format_timezone(&settings, label, sizeof(label)));
+    CHECK(strcmp(label, "UTC") == 0);
+    CHECK(watchy_settings_set_timezone_offset(&settings, 420));
+    CHECK(strcmp(settings.timezone, "UTC-7") == 0);
+    CHECK(watchy_settings_format_timezone(&settings, label, sizeof(label)));
+    CHECK(strcmp(label, "UTC+07:00") == 0);
+    CHECK(watchy_settings_timezone_index(&settings, &index));
+    CHECK(watchy_settings_set_timezone_offset(&settings, -210));
+    CHECK(strcmp(settings.timezone, "UTC3:30") == 0);
+    CHECK(watchy_settings_format_timezone(&settings, label, sizeof(label)));
+    CHECK(strcmp(label, "UTC-03:30") == 0);
+    CHECK(!watchy_settings_set_timezone_offset(&settings, 75));
+    strcpy(settings.timezone, "EST5EDT,M3.2.0,M11.1.0");
+    CHECK(!watchy_settings_timezone_index(&settings, &index));
+    CHECK(watchy_settings_format_timezone(&settings, label, sizeof(label)));
+    CHECK(strcmp(label, "CUSTOM") == 0);
+    strcpy(settings.timezone, "UTC13");
+    CHECK(!watchy_settings_timezone_offset(&settings, &offset));
+    CHECK(watchy_settings_format_timezone(&settings, label, sizeof(label)));
+    CHECK(strcmp(label, "CUSTOM") == 0);
+    return 0;
+}
+
+static int test_portal_local_time_accepts_only_valid_2000_to_2099_values(void) {
+    watchy_time_t time = {.year = 2028, .month = 2, .day = 29,
+                          .hour = 23, .minute = 59, .second = 0};
+    CHECK(watchy_settings_local_time_valid(&time));
+    time.year = 1999;
+    CHECK(!watchy_settings_local_time_valid(&time));
+    time.year = 2100;
+    CHECK(!watchy_settings_local_time_valid(&time));
+    time.year = 2027;
+    CHECK(!watchy_settings_local_time_valid(&time));
+    time.year = 2028;
+    time.hour = 24;
+    CHECK(!watchy_settings_local_time_valid(&time));
+    return 0;
+}
+
 static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void) {
     watchy_shell_t shell;
 
@@ -966,6 +1014,8 @@ int main(void) {
     failures += test_wifi_settings_accept_only_open_or_valid_psk_credentials();
     failures += test_erased_settings_can_be_provisioned_and_reused_after_reload();
     failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();
+    failures += test_home_timezone_offsets_round_trip_without_changing_legacy_storage();
+    failures += test_portal_local_time_accepts_only_valid_2000_to_2099_values();
     failures += test_button_wake_enters_launcher_and_navigation_is_deterministic();
     failures += test_settings_have_exact_order_routes_and_wrap();
     failures += test_safe_mode_cold_boot_bypasses_normal_routes();

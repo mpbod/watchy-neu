@@ -122,6 +122,7 @@ add_executable(watchy_shell_tests
   ../../components/watchy_shell/src/shell_policy.c
   ../../components/watchy_core/src/transition_policy.c
   ../../components/watchy_hal/src/framebuffer.c
+  ../../components/watchy_hal/src/rtc_calendar.c
   ../../components/watchy_packages/src/package_format.c
 )
 watchy_package_add_ui_sources(watchy_shell_tests)
@@ -161,6 +162,7 @@ add_executable(watchy_shell_render_tests
   ../../components/watchy_shell/src/shell_policy.c
   ../../components/watchy_core/src/transition_policy.c
   ../../components/watchy_hal/src/framebuffer.c
+  ../../components/watchy_hal/src/rtc_calendar.c
   ../../components/watchy_packages/src/package_format.c
 )
 watchy_package_add_ui_sources(watchy_shell_render_tests)

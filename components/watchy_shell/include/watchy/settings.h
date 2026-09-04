@@ -2,6 +2,7 @@
 #define WATCHY_SETTINGS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "watchy/packages.h"
@@ -39,6 +40,18 @@ bool watchy_settings_set_wifi(watchy_settings_t *settings,
                               const char *ssid,
                               const char *password);
 bool watchy_settings_cycle_transition_level(watchy_settings_t *settings);
+size_t watchy_settings_timezone_count(void);
+bool watchy_settings_timezone_offset_at(size_t index, int16_t *out_minutes);
+bool watchy_settings_timezone_index(const watchy_settings_t *settings,
+                                    size_t *out_index);
+bool watchy_settings_timezone_offset(const watchy_settings_t *settings,
+                                     int16_t *out_minutes);
+bool watchy_settings_set_timezone_offset(watchy_settings_t *settings,
+                                         int16_t minutes);
+bool watchy_settings_format_timezone(const watchy_settings_t *settings,
+                                     char *out,
+                                     size_t size);
+bool watchy_settings_local_time_valid(const watchy_time_t *time);
 watchy_status_t watchy_settings_load(watchy_settings_t *out_settings);
 watchy_status_t watchy_settings_save(const watchy_settings_t *settings);
 

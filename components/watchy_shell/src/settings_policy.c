@@ -1,6 +1,16 @@
 #include "watchy/settings.h"
 
+#include "watchy/rtc_calendar.h"
+
+#include <stdio.h>
 #include <string.h>
+
+static const int16_t timezone_offsets[] = {
+    -720, -660, -600, -570, -540, -480, -420, -360, -300, -240,
+    -210, -180, -120, -60, 0, 60, 120, 180, 210, 240, 270, 300,
+    330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660,
+    720, 765, 780, 840,
+};
 
 static bool terminated(const char *text, size_t capacity) {
     return text != NULL && strnlen(text, capacity) < capacity;
@@ -181,6 +191,62 @@ static bool transition_level_valid(watchy_transition_level_t value) {
            value == WATCHY_TRANSITION_LEVEL_OFF;
 }
 
+static bool parse_fixed_timezone_offset(const char *timezone, int16_t *out_minutes) {
+    const char *cursor;
+    unsigned hours;
+    unsigned minutes = 0u;
+    bool has_minus_sign = false;
+
+    if (!terminated(timezone, WATCHY_SETTINGS_TIMEZONE_MAX + 1u) ||
+        strncmp(timezone, "UTC", 3u) != 0) {
+        return false;
+    }
+    cursor = timezone + 3u;
+    if (*cursor == '-') {
+        has_minus_sign = true;
+        ++cursor;
+    }
+    if (*cursor < '0' || *cursor > '9') {
+        return false;
+    }
+    hours = (unsigned)(*cursor++ - '0');
+    if (hours != 0u && *cursor >= '0' && *cursor <= '9') {
+        hours = hours * 10u + (unsigned)(*cursor++ - '0');
+    } else if (hours == 0u && *cursor >= '0' && *cursor <= '9') {
+        return false;
+    }
+    if (*cursor == ':') {
+        ++cursor;
+        if (!(cursor[0] >= '0' && cursor[0] <= '5' &&
+              cursor[1] >= '0' && cursor[1] <= '9')) {
+            return false;
+        }
+        minutes = (unsigned)(cursor[0] - '0') * 10u + (unsigned)(cursor[1] - '0');
+        if (minutes == 0u) {
+            return false;
+        }
+        cursor += 2u;
+    }
+    if (*cursor != '\0' || hours > 14u || (hours == 14u && minutes != 0u) ||
+        (has_minus_sign && hours == 0u && minutes == 0u)) {
+        return false;
+    }
+    if (out_minutes != NULL) {
+        const int16_t offset = (int16_t)(hours * 60u + minutes);
+        *out_minutes = has_minus_sign ? offset : (int16_t)-offset;
+    }
+    return true;
+}
+
+static bool timezone_offset_supported(int16_t minutes) {
+    for (size_t index = 0u; index < sizeof(timezone_offsets) / sizeof(timezone_offsets[0]); ++index) {
+        if (timezone_offsets[index] == minutes) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static watchy_transition_level_t next_transition_level(watchy_transition_level_t value) {
     return value == WATCHY_TRANSITION_LEVEL_FULL ? WATCHY_TRANSITION_LEVEL_REDUCED
          : value == WATCHY_TRANSITION_LEVEL_REDUCED ? WATCHY_TRANSITION_LEVEL_OFF
@@ -253,6 +319,110 @@ bool watchy_settings_cycle_transition_level(watchy_settings_t *settings) {
     }
     settings->transition_level = next_transition_level(settings->transition_level);
     return true;
+}
+
+size_t watchy_settings_timezone_count(void) {
+    return sizeof(timezone_offsets) / sizeof(timezone_offsets[0]);
+}
+
+bool watchy_settings_timezone_offset_at(size_t index, int16_t *out_minutes) {
+    if (out_minutes == NULL || index >= watchy_settings_timezone_count()) {
+        return false;
+    }
+    *out_minutes = timezone_offsets[index];
+    return true;
+}
+
+bool watchy_settings_timezone_offset(const watchy_settings_t *settings,
+                                     int16_t *out_minutes) {
+    int16_t minutes;
+    if (settings == NULL || out_minutes == NULL) {
+        return false;
+    }
+    if (!parse_fixed_timezone_offset(settings->timezone, &minutes) ||
+        !timezone_offset_supported(minutes)) {
+        return false;
+    }
+    *out_minutes = minutes;
+    return true;
+}
+
+bool watchy_settings_timezone_index(const watchy_settings_t *settings,
+                                    size_t *out_index) {
+    int16_t minutes;
+    if (out_index == NULL || !watchy_settings_timezone_offset(settings, &minutes)) {
+        return false;
+    }
+    for (size_t index = 0u; index < watchy_settings_timezone_count(); ++index) {
+        if (timezone_offsets[index] == minutes) {
+            *out_index = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool watchy_settings_set_timezone_offset(watchy_settings_t *settings,
+                                         int16_t minutes) {
+    watchy_settings_t candidate;
+    unsigned absolute_minutes;
+    unsigned hours;
+    unsigned remainder;
+    int written;
+
+    if (settings == NULL) {
+        return false;
+    }
+    if (!timezone_offset_supported(minutes)) {
+        return false;
+    }
+    absolute_minutes = (unsigned)(minutes < 0 ? -minutes : minutes);
+    hours = absolute_minutes / 60u;
+    remainder = absolute_minutes % 60u;
+    candidate = *settings;
+    memset(candidate.timezone, 0, sizeof(candidate.timezone));
+    if (minutes == 0) {
+        written = snprintf(candidate.timezone, sizeof(candidate.timezone), "UTC0");
+    } else if (remainder == 0u) {
+        written = snprintf(candidate.timezone, sizeof(candidate.timezone), "UTC%s%u",
+                           minutes > 0 ? "-" : "", hours);
+    } else {
+        written = snprintf(candidate.timezone, sizeof(candidate.timezone), "UTC%s%u:%02u",
+                           minutes > 0 ? "-" : "", hours, remainder);
+    }
+    if (written < 0 || (size_t)written >= sizeof(candidate.timezone) ||
+        !watchy_settings_valid(&candidate)) {
+        return false;
+    }
+    *settings = candidate;
+    return true;
+}
+
+bool watchy_settings_format_timezone(const watchy_settings_t *settings,
+                                     char *out,
+                                     size_t size) {
+    int16_t minutes;
+    int written;
+    unsigned absolute_minutes;
+
+    if (settings == NULL || out == NULL || size == 0u) {
+        return false;
+    }
+    if (!watchy_settings_timezone_offset(settings, &minutes)) {
+        written = snprintf(out, size, "CUSTOM");
+    } else if (minutes == 0) {
+        written = snprintf(out, size, "UTC");
+    } else {
+        absolute_minutes = (unsigned)(minutes < 0 ? -minutes : minutes);
+        written = snprintf(out, size, "UTC%c%02u:%02u", minutes > 0 ? '+' : '-',
+                           absolute_minutes / 60u, absolute_minutes % 60u);
+    }
+    return written >= 0 && (size_t)written < size;
+}
+
+bool watchy_settings_local_time_valid(const watchy_time_t *time) {
+    return time != NULL && time->year >= 2000 && time->year <= 2099 &&
+           time->second <= 59u && watchy_calendar_valid(time);
 }
 
 bool watchy_settings_set_wifi(watchy_settings_t *settings,
