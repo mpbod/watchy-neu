@@ -15,6 +15,7 @@
 #include "watchy/shell.h"
 #include "watchy/shell_render.h"
 #include "watchy/storage.h"
+#include "watchy/timezone_action.h"
 #include "watchy/watchface_action.h"
 
 #include <inttypes.h>
@@ -300,6 +301,25 @@ static watchy_status_t action_save_settings(void *context,
     return watchy_settings_save(settings);
 }
 
+static watchy_status_t timezone_action_set_rtc_offset(void *context,
+                                                       int16_t minutes) {
+    (void)context;
+    return watchy_rtc_set_utc_offset(minutes);
+}
+
+static watchy_status_t timezone_action_read_local(void *context,
+                                                  watchy_time_t *out_time) {
+    (void)context;
+    return watchy_rtc_read_local(out_time);
+}
+
+static const watchy_timezone_action_ops_t timezone_action_ops = {
+    .set_rtc_offset = timezone_action_set_rtc_offset,
+    .save_settings = action_save_settings,
+    .read_local = timezone_action_read_local,
+    .context = NULL,
+};
+
 static watchy_status_t portal_exit_stop(void *context) {
     (void)context;
     return watchy_portal_stop();
@@ -552,11 +572,18 @@ static void adjust_manual_time(watchy_time_t *time, uint8_t field, int delta) {
     }
 }
 
-static void manual_time_detail(const watchy_time_t *time, uint8_t field,
+static void manual_time_detail(const watchy_time_t *time,
+                               const watchy_settings_t *settings,
+                               uint8_t field,
                                bool editing, char *detail, size_t size) {
     static const char *const names[] = {"YEAR", "MONTH", "DAY", "HOUR", "MINUTE"};
-    snprintf(detail, size, "%04d-%02u-%02u %02u:%02u\n%s %s", time->year, time->month,
-             time->day, time->hour, time->minute, names[field], editing ? "EDIT" : "SELECT");
+    char zone[16];
+    if (!watchy_settings_format_timezone(settings, zone, sizeof(zone))) {
+        snprintf(zone, sizeof(zone), "%s", "CUSTOM");
+    }
+    snprintf(detail, size, "%04d-%02u-%02u %02u:%02u\n%s %s\nHOME %s",
+             time->year, time->month, time->day, time->hour, time->minute,
+             names[field], editing ? "EDIT" : "SELECT", zone);
 }
 
 static void run_shell(watchy_shell_t *shell,
@@ -605,6 +632,21 @@ static void run_shell(watchy_shell_t *shell,
                     watchy_shell_set_package_catalog(shell, NULL, false);
                 }
                 if (portal_result.settings_reloaded) {
+                    size_t timezone_index = watchy_settings_timezone_count();
+                    int16_t timezone_offset;
+                    if (watchy_settings_timezone_index(settings, &timezone_index)) {
+                        watchy_shell_set_home_timezone_index(shell, timezone_index);
+                    } else {
+                        watchy_shell_set_home_timezone_index(
+                            shell, watchy_settings_timezone_count());
+                    }
+                    if (watchy_settings_timezone_offset(settings, &timezone_offset) &&
+                        timezone_offset != time->utc_offset_minutes &&
+                        (watchy_rtc_set_utc_offset(timezone_offset) != WATCHY_STATUS_OK ||
+                         watchy_rtc_read_local(time) != WATCHY_STATUS_OK) &&
+                        portal_error == WATCHY_SHELL_ERROR_NONE) {
+                        portal_error = WATCHY_SHELL_ERROR_SETTINGS_SAVE;
+                    }
                     const watchy_status_t partial_status =
                         watchy_display_set_partial_limit(settings->partial_refresh_limit);
                     const watchy_status_t transition_status =
@@ -684,8 +726,8 @@ static void run_shell(watchy_shell_t *shell,
             switch (action) {
             case WATCHY_SHELL_ACTION_SAVE_SETTINGS:
                 if (shell->selection == 0u) settings->time_24h = !settings->time_24h;
-                else if (shell->selection == 1u) settings->motion_wake = !settings->motion_wake;
-                else if (shell->selection == 2u) {
+                else if (shell->selection == 2u) settings->motion_wake = !settings->motion_wake;
+                else if (shell->selection == 3u) {
                     if (!watchy_settings_cycle_transition_level(settings) ||
                         watchy_display_set_transition_policy(settings->transition_level,
                                                              true, shell->safe_mode,
@@ -694,7 +736,7 @@ static void run_shell(watchy_shell_t *shell,
                         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_DISPLAY);
                         break;
                     }
-                } else if (shell->selection == 7u) {
+                } else if (shell->selection == 8u) {
                     settings->partial_refresh_limit =
                         settings->partial_refresh_limit >= WATCHY_SETTINGS_PARTIAL_LIMIT_MAX
                             ? 5u : (uint16_t)(settings->partial_refresh_limit + 5u);
@@ -708,16 +750,38 @@ static void run_shell(watchy_shell_t *shell,
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
                 } else saved = true;
                 break;
+            case WATCHY_SHELL_ACTION_SAVE_TIMEZONE: {
+                watchy_settings_t candidate = *settings;
+                if (!watchy_settings_set_timezone_offset(
+                        &candidate, (int16_t)action_request.numeric_value) ||
+                    watchy_timezone_action_apply(
+                        settings, &candidate, time, &timezone_action_ops) !=
+                        WATCHY_STATUS_OK) {
+                    watchy_shell_fail(shell, WATCHY_SHELL_ERROR_SETTINGS_SAVE);
+                } else {
+                    size_t timezone_index;
+                    if (watchy_settings_timezone_index(settings, &timezone_index)) {
+                        watchy_shell_set_home_timezone_index(shell, timezone_index);
+                    }
+                    saved = true;
+                }
+                break;
+            }
             case WATCHY_SHELL_ACTION_MANUAL_INCREMENT:
             case WATCHY_SHELL_ACTION_MANUAL_DECREMENT:
                 adjust_manual_time(time, shell->selection,
                                    action == WATCHY_SHELL_ACTION_MANUAL_INCREMENT ? 1 : -1);
                 break;
-            case WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME:
+            case WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME: {
+                int16_t manual_offset;
+                if (watchy_settings_timezone_offset(settings, &manual_offset)) {
+                    time->utc_offset_minutes = manual_offset;
+                }
                 if (watchy_rtc_set_local(time) != WATCHY_STATUS_OK) {
                     watchy_shell_fail(shell, WATCHY_SHELL_ERROR_MANUAL_TIME);
                 } else saved = true;
                 break;
+            }
             case WATCHY_SHELL_ACTION_SYNC_NTP: {
                 snprintf(detail, sizeof(detail), "SYNCING");
                 watchy_transition_request_v1_t sync_request;
@@ -854,7 +918,8 @@ static void run_shell(watchy_shell_t *shell,
                 break;
             }
             if (shell->screen == WATCHY_SHELL_MANUAL_TIME) {
-                manual_time_detail(time, shell->selection, shell->editing, detail, sizeof(detail));
+                manual_time_detail(time, settings, shell->selection, shell->editing,
+                                   detail, sizeof(detail));
             } else if (shell->screen == WATCHY_SHELL_DIAGNOSTICS) {
                 if (!watchy_motion_ready()) (void)watchy_motion_init();
                 collect_and_log_diagnostics(diagnostics);
@@ -1043,6 +1108,13 @@ void app_main(void) {
                          (!package_rendered && boot_cancelled_buttons == 0u);
     }
     watchy_shell_begin(&shell, wake_cause, settings.motion_wake, safe_mode, package_failed);
+    size_t home_timezone_index = watchy_settings_timezone_count();
+    if (watchy_settings_timezone_index(&settings, &home_timezone_index)) {
+        watchy_shell_set_home_timezone_index(&shell, home_timezone_index);
+    } else {
+        watchy_shell_set_home_timezone_index(
+            &shell, watchy_settings_timezone_count());
+    }
     if (package_boot.prepared && package_boot.execution_blocked && !safe_mode) {
         watchy_shell_fail(&shell, WATCHY_SHELL_ERROR_PACKAGE);
     }

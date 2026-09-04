@@ -3,6 +3,8 @@
 
 #include "watchy/settings.h"
 #include "watchy/shell.h"
+#include "watchy/timezone_action.h"
+#include "watchy/rtc_calendar.h"
 #include "watchy/transition.h"
 #include "watchy/ui.h"
 #include "watchy/wifi_credentials.h"
@@ -377,6 +379,255 @@ static int test_portal_local_time_accepts_only_valid_2000_to_2099_values(void) {
     return 0;
 }
 
+static int test_long_submenus_scroll_one_row_and_wrap_the_viewport(void) {
+    watchy_shell_t shell = {.screen = WATCHY_SHELL_SETTINGS};
+    for (unsigned press = 0u; press < 3u; ++press) {
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    }
+    CHECK(shell.selection == 3u);
+    CHECK(watchy_shell_visible_start(&shell) == 1u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 2u);
+    CHECK(watchy_shell_visible_start(&shell) == 1u);
+    shell.selection = 0u;
+    shell.view_start = 0u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 10u);
+    CHECK(watchy_shell_visible_start(&shell) == 8u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u);
+    CHECK(watchy_shell_visible_start(&shell) == 0u);
+
+    shell = (watchy_shell_t){.screen = WATCHY_SHELL_PACKAGE_PORTAL};
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 1u && watchy_shell_visible_start(&shell) == 0u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u && watchy_shell_visible_start(&shell) == 0u);
+
+    shell = (watchy_shell_t){.screen = WATCHY_SHELL_TIMEZONE};
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 37u && watchy_shell_visible_start(&shell) == 35u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u && watchy_shell_visible_start(&shell) == 0u);
+
+    shell = (watchy_shell_t){.screen = WATCHY_SHELL_WATCHFACE_SELECTOR,
+                            .face_count = 5u};
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 4u && watchy_shell_visible_start(&shell) == 2u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u && watchy_shell_visible_start(&shell) == 0u);
+
+    shell = (watchy_shell_t){.screen = WATCHY_SHELL_PACKAGE_APPS,
+                            .app_count = 4u};
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 3u && watchy_shell_visible_start(&shell) == 1u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u && watchy_shell_visible_start(&shell) == 0u);
+
+    shell = (watchy_shell_t){.screen = WATCHY_SHELL_DIAGNOSTICS,
+                            .diagnostic_count = 4u};
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 3u && watchy_shell_visible_start(&shell) == 1u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    CHECK(shell.selection == 0u && watchy_shell_visible_start(&shell) == 0u);
+    return 0;
+}
+
+static int test_timezone_confirm_saves_offset_and_back_restores_settings_cursor(void) {
+    watchy_shell_t shell;
+    watchy_shell_action_request_t request;
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    CHECK(shell.history_depth == 1u);
+    shell.selection = 2u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    shell.selection = 1u;
+    watchy_shell_set_home_timezone_index(&shell, 26u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_TIMEZONE);
+    CHECK(shell.selection == 26u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
+    CHECK(shell.selection == 1u);
+    CHECK(watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_SAVE_TIMEZONE);
+    CHECK(request.numeric_value == 420);
+    return 0;
+}
+
+static int test_timezone_cancel_and_nested_back_restore_each_parent_frame(void) {
+    watchy_shell_t shell;
+    watchy_shell_action_request_t request;
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    shell.selection = 2u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    shell.selection = 1u;
+    shell.view_start = 1u;
+    watchy_shell_set_home_timezone_index(&shell, 26u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.history_depth == 3u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
+    CHECK(shell.selection == 1u && shell.view_start == 1u);
+    CHECK(shell.history_depth == 2u);
+    CHECK(!watchy_shell_take_action_request(&shell, &request));
+
+    shell.selection = 9u;
+    shell.view_start = 7u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_DIAGNOSTICS);
+    CHECK(shell.history_depth == 3u && shell.history_depth <= WATCHY_SHELL_HISTORY_DEPTH);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
+    CHECK(shell.selection == 9u && shell.view_start == 7u);
+    CHECK(shell.history_depth == 2u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_LAUNCHER && shell.selection == 2u);
+    CHECK(shell.history_depth == 1u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
+    CHECK(shell.history_depth == 0u);
+    return 0;
+}
+
+typedef struct {
+    watchy_status_t rtc_status;
+    watchy_status_t save_status;
+    watchy_status_t read_status;
+    int16_t rtc_offsets[2];
+    size_t rtc_calls;
+    size_t save_calls;
+    size_t read_calls;
+    int16_t active_offset;
+    int64_t epoch;
+} timezone_action_fixture_t;
+
+static watchy_status_t timezone_test_set_rtc_offset(void *context, int16_t minutes) {
+    timezone_action_fixture_t *fixture = context;
+    if (fixture->rtc_calls < 2u) {
+        fixture->rtc_offsets[fixture->rtc_calls] = minutes;
+    }
+    ++fixture->rtc_calls;
+    if (fixture->rtc_status == WATCHY_STATUS_OK) {
+        fixture->active_offset = minutes;
+    }
+    return fixture->rtc_status;
+}
+
+static watchy_status_t timezone_test_save(void *context,
+                                         const watchy_settings_t *settings) {
+    timezone_action_fixture_t *fixture = context;
+    ++fixture->save_calls;
+    CHECK(settings != NULL);
+    return fixture->save_status;
+}
+
+static watchy_status_t timezone_test_read(void *context, watchy_time_t *out_time) {
+    timezone_action_fixture_t *fixture = context;
+    ++fixture->read_calls;
+    if (fixture->read_status != WATCHY_STATUS_OK) {
+        return fixture->read_status;
+    }
+    return watchy_calendar_from_unix(fixture->epoch, fixture->active_offset,
+                                    out_time);
+}
+
+static watchy_timezone_action_ops_t timezone_test_ops(
+    timezone_action_fixture_t *fixture) {
+    return (watchy_timezone_action_ops_t){
+        .set_rtc_offset = timezone_test_set_rtc_offset,
+        .save_settings = timezone_test_save,
+        .read_local = timezone_test_read,
+        .context = fixture,
+    };
+}
+
+static int test_timezone_action_commits_offset_and_refreshes_same_instant(void) {
+    watchy_settings_t settings;
+    watchy_settings_t candidate;
+    watchy_time_t time = {.year = 2026, .month = 9u, .day = 5u,
+                         .hour = 0u, .minute = 15u, .second = 0u,
+                         .weekday = 6u, .utc_offset_minutes = 0};
+    int64_t original_epoch = 0;
+    CHECK(watchy_calendar_to_unix(&time, &original_epoch) == WATCHY_STATUS_OK);
+    watchy_settings_defaults(&settings);
+    candidate = settings;
+    CHECK(watchy_settings_set_timezone_offset(&candidate, 420));
+    timezone_action_fixture_t fixture = {
+        .rtc_status = WATCHY_STATUS_OK,
+        .save_status = WATCHY_STATUS_OK,
+        .read_status = WATCHY_STATUS_OK,
+        .active_offset = 0,
+        .epoch = original_epoch,
+    };
+    const watchy_timezone_action_ops_t ops = timezone_test_ops(&fixture);
+
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &time, &ops) ==
+          WATCHY_STATUS_OK);
+    CHECK(strcmp(settings.timezone, "UTC-7") == 0);
+    CHECK(fixture.rtc_calls == 1u && fixture.rtc_offsets[0] == 420);
+    CHECK(fixture.save_calls == 1u && fixture.read_calls == 1u);
+    CHECK(time.hour == 7u && time.minute == 15u &&
+          time.utc_offset_minutes == 420);
+    int64_t shifted_epoch = 0;
+    CHECK(watchy_calendar_to_unix(&time, &shifted_epoch) == WATCHY_STATUS_OK);
+    CHECK(shifted_epoch == original_epoch);
+    return 0;
+}
+
+static int test_timezone_action_rolls_back_or_skips_rtc_as_required(void) {
+    watchy_settings_t settings;
+    watchy_settings_t candidate;
+    watchy_time_t time = {.year = 2026, .month = 9u, .day = 5u,
+                         .hour = 0u, .minute = 15u, .second = 0u,
+                         .weekday = 6u, .utc_offset_minutes = 0};
+    watchy_settings_defaults(&settings);
+    candidate = settings;
+    CHECK(watchy_settings_set_timezone_offset(&candidate, 420));
+
+    timezone_action_fixture_t rtc_failure = {
+        .rtc_status = WATCHY_STATUS_INVALID_STATE,
+        .save_status = WATCHY_STATUS_OK,
+        .read_status = WATCHY_STATUS_OK,
+    };
+    watchy_timezone_action_ops_t ops = timezone_test_ops(&rtc_failure);
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &time, &ops) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(rtc_failure.rtc_calls == 1u && rtc_failure.save_calls == 0u &&
+          rtc_failure.read_calls == 0u);
+    CHECK(strcmp(settings.timezone, "UTC0") == 0 &&
+          time.utc_offset_minutes == 0);
+
+    timezone_action_fixture_t save_failure = {
+        .rtc_status = WATCHY_STATUS_OK,
+        .save_status = WATCHY_STATUS_INVALID_STATE,
+        .read_status = WATCHY_STATUS_OK,
+    };
+    ops = timezone_test_ops(&save_failure);
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &time, &ops) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(save_failure.rtc_calls == 2u && save_failure.rtc_offsets[0] == 420 &&
+          save_failure.rtc_offsets[1] == 0);
+    CHECK(save_failure.save_calls == 1u && save_failure.read_calls == 0u);
+    CHECK(strcmp(settings.timezone, "UTC0") == 0 &&
+          time.utc_offset_minutes == 0);
+
+    candidate = settings;
+    candidate.motion_wake = !candidate.motion_wake;
+    timezone_action_fixture_t unchanged = {
+        .rtc_status = WATCHY_STATUS_OK,
+        .save_status = WATCHY_STATUS_OK,
+        .read_status = WATCHY_STATUS_OK,
+        .active_offset = 0,
+    };
+    ops = timezone_test_ops(&unchanged);
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &time, &ops) ==
+          WATCHY_STATUS_OK);
+    CHECK(unchanged.rtc_calls == 0u && unchanged.save_calls == 1u &&
+          unchanged.read_calls == 1u);
+    CHECK(settings.motion_wake == candidate.motion_wake);
+    return 0;
+}
+
 static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void) {
     watchy_shell_t shell;
 
@@ -403,8 +654,9 @@ static int test_button_wake_enters_launcher_and_navigation_is_deterministic(void
 
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
     CHECK(shell.screen == WATCHY_SHELL_LAUNCHER);
-    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
     CHECK(shell.selection == 2u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
+    CHECK(shell.selection == 1u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
     CHECK(shell.screen == WATCHY_SHELL_WATCHFACE);
     CHECK(shell.sleep_requested);
@@ -420,49 +672,46 @@ static int test_settings_have_exact_order_routes_and_wrap(void) {
 
     shell.selection = 0u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
-    CHECK(shell.selection == 9u);
+    CHECK(shell.selection == 10u);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     CHECK(shell.selection == 0u);
 
-    for (uint8_t selection = 0u; selection < 3u; ++selection) {
+    static const uint8_t direct_mutations[] = {0u, 2u, 3u, 8u};
+    for (size_t index = 0u;
+         index < sizeof(direct_mutations) / sizeof(direct_mutations[0]); ++index) {
         shell.screen = WATCHY_SHELL_SETTINGS;
-        shell.selection = selection;
+        shell.selection = direct_mutations[index];
         watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
         CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SAVE_SETTINGS);
     }
 
     shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 3u;
+    shell.selection = 4u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
     CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
 
     shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 4u;
+    shell.selection = 5u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_NTP_SYNC);
     CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
     CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SYNC_NTP);
 
     shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 5u;
+    shell.selection = 6u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_CONNECTIVITY);
     CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
 
     shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 6u;
+    shell.selection = 7u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_PACKAGE_PORTAL);
     CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
 
     shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 7u;
-    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
-    CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SAVE_SETTINGS);
-
-    shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 8u;
+    shell.selection = 9u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_DIAGNOSTICS);
     CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
@@ -470,7 +719,7 @@ static int test_settings_have_exact_order_routes_and_wrap(void) {
     CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
 
     shell.screen = WATCHY_SHELL_SETTINGS;
-    shell.selection = 9u;
+    shell.selection = 10u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_ABOUT);
     CHECK(shell.return_screen == WATCHY_SHELL_SETTINGS);
@@ -557,6 +806,7 @@ static int test_manual_time_editor_and_portal_modes_require_explicit_selection(v
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
     CHECK(!shell.editing);
@@ -569,7 +819,7 @@ static int test_manual_time_editor_and_portal_modes_require_explicit_selection(v
     CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME);
     CHECK(shell.screen == WATCHY_SHELL_SETTINGS);
 
-    shell.selection = 6u;
+    shell.selection = 7u;
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.screen == WATCHY_SHELL_PACKAGE_PORTAL);
     CHECK(watchy_shell_take_action(&shell) == WATCHY_SHELL_ACTION_NONE);
@@ -643,8 +893,8 @@ static int test_app_launcher_pages_and_maps_zero_three_four_and_sixteen_apps(voi
         CHECK(watchy_shell_selected_package(&shell, &catalog_index));
         CHECK(catalog_index == counts[case_index] - 1u);
         CHECK(watchy_shell_package_page_start(&shell) ==
-              ((counts[case_index] - 1u) / WATCHY_SHELL_VISIBLE_ROWS) *
-                  WATCHY_SHELL_VISIBLE_ROWS);
+              (counts[case_index] <= WATCHY_SHELL_VISIBLE_ROWS
+                   ? 0u : counts[case_index] - WATCHY_SHELL_VISIBLE_ROWS));
     }
     return 0;
 }
@@ -730,8 +980,8 @@ static int test_selector_handles_sizes_pages_wrap_and_healthy_active_cursor(void
         watchy_shell_input(&shell, WATCHY_SHELL_INPUT_UP);
         CHECK(shell.selection == shell.face_count - 1u);
         CHECK(watchy_shell_watchface_page_start(&shell) ==
-              ((shell.face_count - 1u) / WATCHY_SHELL_VISIBLE_ROWS) *
-                  WATCHY_SHELL_VISIBLE_ROWS);
+              (shell.face_count <= WATCHY_SHELL_VISIBLE_ROWS
+                   ? 0u : shell.face_count - WATCHY_SHELL_VISIBLE_ROWS));
         watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
         CHECK(shell.selection == 0u);
     }
@@ -974,7 +1224,7 @@ static int test_diagnostics_distinguish_passive_status_from_active_acceptance(vo
         watchy_shell_input(&shell, WATCHY_SHELL_INPUT_DOWN);
     }
     CHECK(shell.selection == WATCHY_SHELL_PACKAGE_PAGE_ITEMS);
-    CHECK(watchy_shell_diagnostic_page_start(&shell) == WATCHY_SHELL_PACKAGE_PAGE_ITEMS);
+    CHECK(watchy_shell_diagnostic_page_start(&shell) == 1u);
     return 0;
 }
 
@@ -1016,6 +1266,11 @@ int main(void) {
     failures += test_persisted_timezone_hostname_and_wpa_strings_are_syntactically_strict();
     failures += test_home_timezone_offsets_round_trip_without_changing_legacy_storage();
     failures += test_portal_local_time_accepts_only_valid_2000_to_2099_values();
+    failures += test_long_submenus_scroll_one_row_and_wrap_the_viewport();
+    failures += test_timezone_confirm_saves_offset_and_back_restores_settings_cursor();
+    failures += test_timezone_cancel_and_nested_back_restore_each_parent_frame();
+    failures += test_timezone_action_commits_offset_and_refreshes_same_instant();
+    failures += test_timezone_action_rolls_back_or_skips_rtc_as_required();
     failures += test_button_wake_enters_launcher_and_navigation_is_deterministic();
     failures += test_settings_have_exact_order_routes_and_wrap();
     failures += test_safe_mode_cold_boot_bypasses_normal_routes();

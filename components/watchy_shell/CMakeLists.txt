@@ -6,6 +6,7 @@ idf_component_register(
         "src/settings_policy.c"
         "src/shell_policy.c"
         "src/shell_render.c"
+        "src/timezone_action_policy.c"
         "src/watchface_action_policy.c"
         "../../sdk/ui/src/ui_draw.c"
         "../../sdk/ui/generated/watchy_fonts.c"

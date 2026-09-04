@@ -1,4 +1,5 @@
 #include "watchy/shell.h"
+#include "watchy/settings.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,7 +16,9 @@ static uint8_t item_count(const watchy_shell_t *shell) {
     case WATCHY_SHELL_LAUNCHER:
         return WATCHY_SHELL_LAUNCHER_ITEMS;
     case WATCHY_SHELL_SETTINGS:
-        return 10u;
+        return 11u;
+    case WATCHY_SHELL_TIMEZONE:
+        return (uint8_t)watchy_settings_timezone_count();
     case WATCHY_SHELL_SAFE_MODE:
         return 3u;
     case WATCHY_SHELL_PACKAGE_APPS:
@@ -38,12 +41,21 @@ static void clear_pending_action(watchy_shell_t *shell) {
     shell->pending_action = WATCHY_SHELL_ACTION_NONE;
     shell->pending_action_has_package = false;
     shell->pending_action_catalog_index = 0u;
+    shell->pending_action_numeric_value = 0;
     memset(shell->pending_action_package_ref, 0, sizeof(shell->pending_action_package_ref));
 }
 
 static void queue_action(watchy_shell_t *shell, watchy_shell_action_t action) {
     clear_pending_action(shell);
     shell->pending_action = action;
+}
+
+static void queue_numeric_action(watchy_shell_t *shell,
+                                 watchy_shell_action_t action,
+                                 int32_t value) {
+    clear_pending_action(shell);
+    shell->pending_action = action;
+    shell->pending_action_numeric_value = value;
 }
 
 static bool queue_package_action(watchy_shell_t *shell,
@@ -76,12 +88,69 @@ static void sync_package_compatibility_view(watchy_shell_t *shell) {
     }
 }
 
-static void enter(watchy_shell_t *shell,
-                  watchy_shell_screen_t screen,
-                  watchy_shell_screen_t return_screen) {
+static void sync_return_screen(watchy_shell_t *shell) {
+    if (shell->history_depth != 0u) {
+        shell->return_screen = shell->history[shell->history_depth - 1u].screen;
+    }
+}
+
+static void push_frame(watchy_shell_t *shell,
+                       watchy_shell_screen_t screen,
+                       uint8_t selection,
+                       uint8_t view_start) {
+    if (shell->history_depth == WATCHY_SHELL_HISTORY_DEPTH) {
+        memmove(&shell->history[0], &shell->history[1],
+                sizeof(shell->history[0]) * (WATCHY_SHELL_HISTORY_DEPTH - 1u));
+        --shell->history_depth;
+    }
+    shell->history[shell->history_depth++] =
+        (watchy_shell_navigation_frame_t){screen, selection, view_start};
+    sync_return_screen(shell);
+}
+
+static void enter(watchy_shell_t *shell, watchy_shell_screen_t screen) {
+    push_frame(shell, shell->screen, shell->selection, shell->view_start);
     shell->screen = screen;
-    shell->return_screen = return_screen;
     shell->selection = 0u;
+    shell->view_start = 0u;
+}
+
+static bool restore_parent(watchy_shell_t *shell) {
+    watchy_shell_navigation_frame_t frame;
+    if (shell->history_depth == 0u) {
+        shell->screen = shell->return_screen;
+        shell->selection = 0u;
+        shell->view_start = 0u;
+        return false;
+    }
+    frame = shell->history[--shell->history_depth];
+    shell->screen = frame.screen;
+    shell->selection = frame.selection;
+    shell->view_start = frame.view_start;
+    sync_return_screen(shell);
+    return true;
+}
+
+static void enter_watchface(watchy_shell_t *shell) {
+    shell->screen = WATCHY_SHELL_WATCHFACE;
+    shell->selection = 0u;
+    shell->view_start = 0u;
+    shell->history_depth = 0u;
+    shell->return_screen = shell->safe_mode ? WATCHY_SHELL_SAFE_MODE
+                                            : WATCHY_SHELL_LAUNCHER;
+}
+
+static void reveal_selection(watchy_shell_t *shell, uint8_t count) {
+    if (count <= WATCHY_SHELL_VISIBLE_ROWS || shell->selection == 0u) {
+        shell->view_start = 0u;
+    } else if (shell->selection == count - 1u && shell->view_start == 0u) {
+        shell->view_start = (uint8_t)(count - WATCHY_SHELL_VISIBLE_ROWS);
+    } else if (shell->selection < shell->view_start) {
+        shell->view_start = shell->selection;
+    } else if (shell->selection >= shell->view_start + WATCHY_SHELL_VISIBLE_ROWS) {
+        shell->view_start =
+            (uint8_t)(shell->selection - WATCHY_SHELL_VISIBLE_ROWS + 1u);
+    }
 }
 
 void watchy_shell_begin(watchy_shell_t *shell,
@@ -103,6 +172,9 @@ void watchy_shell_begin(watchy_shell_t *shell,
                                                        : WATCHY_SHELL_WATCHFACE;
     shell->return_screen = shell->safe_mode ? WATCHY_SHELL_SAFE_MODE
                                             : WATCHY_SHELL_LAUNCHER;
+    if (!shell->safe_mode && wake_cause == WATCHY_WAKE_BUTTON) {
+        push_frame(shell, WATCHY_SHELL_WATCHFACE, 0u, 0u);
+    }
     shell->sleep_requested = (wake_cause == WATCHY_WAKE_MOTION && !motion_wake_enabled) ||
                              (shell->safe_mode &&
                               (wake_cause == WATCHY_WAKE_RTC || wake_cause == WATCHY_WAKE_TIMER ||
@@ -129,8 +201,12 @@ void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive) {
     if (shell == NULL) {
         return;
     }
-    enter(shell, WATCHY_SHELL_MANUAL_TIME,
-          shell->safe_mode ? WATCHY_SHELL_SAFE_MODE : WATCHY_SHELL_SETTINGS);
+    push_frame(shell, shell->safe_mode ? WATCHY_SHELL_SAFE_MODE
+                                      : WATCHY_SHELL_SETTINGS,
+               0u, 0u);
+    shell->screen = WATCHY_SHELL_MANUAL_TIME;
+    shell->selection = 0u;
+    shell->view_start = 0u;
     shell->sleep_requested = !interactive;
 }
 
@@ -143,6 +219,7 @@ void watchy_shell_set_package_count(watchy_shell_t *shell, size_t package_count)
         if (shell->selection >= item_count(shell)) {
             shell->selection = 0u;
         }
+        reveal_selection(shell, item_count(shell));
     }
 }
 
@@ -200,6 +277,7 @@ void watchy_shell_set_package_catalog(watchy_shell_t *shell,
                shell->selection >= item_count(shell)) {
         shell->selection = 0u;
     }
+    reveal_selection(shell, item_count(shell));
 }
 
 bool watchy_shell_selected_package(const watchy_shell_t *shell, size_t *out_catalog_index) {
@@ -221,7 +299,7 @@ size_t watchy_shell_package_page_start(const watchy_shell_t *shell) {
     if (shell == NULL || count == 0u) {
         return 0u;
     }
-    return (shell->selection / WATCHY_SHELL_VISIBLE_ROWS) * WATCHY_SHELL_VISIBLE_ROWS;
+    return shell->view_start;
 }
 
 bool watchy_shell_selected_watchface(const watchy_shell_t *shell,
@@ -238,7 +316,7 @@ size_t watchy_shell_watchface_page_start(const watchy_shell_t *shell) {
     if (shell == NULL || shell->face_count == 0u) {
         return 0u;
     }
-    return (shell->selection / WATCHY_SHELL_VISIBLE_ROWS) * WATCHY_SHELL_VISIBLE_ROWS;
+    return shell->view_start;
 }
 
 bool watchy_shell_format_package_label(const watchy_package_info_t *package,
@@ -269,14 +347,31 @@ void watchy_shell_set_diagnostic_count(watchy_shell_t *shell, size_t count) {
     if (shell->screen == WATCHY_SHELL_DIAGNOSTICS && shell->selection >= item_count(shell)) {
         shell->selection = 0u;
     }
+    reveal_selection(shell, item_count(shell));
 }
 
 size_t watchy_shell_diagnostic_page_start(const watchy_shell_t *shell) {
     if (shell == NULL || shell->diagnostic_count == 0u) {
         return 0u;
     }
-    return (shell->selection / WATCHY_SHELL_PACKAGE_PAGE_ITEMS) *
-           WATCHY_SHELL_PACKAGE_PAGE_ITEMS;
+    return shell->view_start;
+}
+
+size_t watchy_shell_visible_start(const watchy_shell_t *shell) {
+    return shell == NULL ? 0u : shell->view_start;
+}
+
+void watchy_shell_set_home_timezone_index(watchy_shell_t *shell, size_t index) {
+    const size_t count = watchy_settings_timezone_count();
+    if (shell == NULL) {
+        return;
+    }
+    shell->home_timezone_index =
+        (uint8_t)(index < count ? index : 14u);
+    if (shell->screen == WATCHY_SHELL_TIMEZONE) {
+        shell->selection = shell->home_timezone_index;
+        reveal_selection(shell, (uint8_t)count);
+    }
 }
 
 bool watchy_shell_format_diagnostic_label(const watchy_diagnostic_entry_t *entry,
@@ -317,10 +412,10 @@ void watchy_shell_fail(watchy_shell_t *shell, watchy_shell_error_t error) {
         return;
     }
     if (shell->screen != WATCHY_SHELL_ERROR) {
-        shell->return_screen = shell->screen;
+        enter(shell, WATCHY_SHELL_ERROR);
     }
-    shell->screen = WATCHY_SHELL_ERROR;
     shell->selection = 0u;
+    shell->view_start = 0u;
     shell->editing = false;
     clear_pending_action(shell);
     shell->error = error;
@@ -348,7 +443,7 @@ static void select_launcher(watchy_shell_t *shell) {
         WATCHY_SHELL_PACKAGE_APPS,
         WATCHY_SHELL_SETTINGS,
     };
-    enter(shell, screens[shell->selection], WATCHY_SHELL_LAUNCHER);
+    enter(shell, screens[shell->selection]);
     if (shell->screen == WATCHY_SHELL_WATCHFACE_SELECTOR) {
         shell->selection = shell->active_face_selection;
     }
@@ -357,29 +452,34 @@ static void select_launcher(watchy_shell_t *shell) {
 static void select_settings(watchy_shell_t *shell) {
     switch (shell->selection) {
     case 0u:
-    case 1u:
     case 2u:
-    case 7u:
+    case 3u:
+    case 8u:
         queue_action(shell, WATCHY_SHELL_ACTION_SAVE_SETTINGS);
         break;
-    case 3u:
-        enter(shell, WATCHY_SHELL_MANUAL_TIME, WATCHY_SHELL_SETTINGS);
+    case 1u:
+        enter(shell, WATCHY_SHELL_TIMEZONE);
+        shell->selection = shell->home_timezone_index;
+        reveal_selection(shell, (uint8_t)watchy_settings_timezone_count());
         break;
     case 4u:
-        enter(shell, WATCHY_SHELL_NTP_SYNC, WATCHY_SHELL_SETTINGS);
-        queue_action(shell, WATCHY_SHELL_ACTION_SYNC_NTP);
+        enter(shell, WATCHY_SHELL_MANUAL_TIME);
         break;
     case 5u:
-        enter(shell, WATCHY_SHELL_CONNECTIVITY, WATCHY_SHELL_SETTINGS);
+        enter(shell, WATCHY_SHELL_NTP_SYNC);
+        queue_action(shell, WATCHY_SHELL_ACTION_SYNC_NTP);
         break;
     case 6u:
-        enter(shell, WATCHY_SHELL_PACKAGE_PORTAL, WATCHY_SHELL_SETTINGS);
+        enter(shell, WATCHY_SHELL_CONNECTIVITY);
         break;
-    case 8u:
-        enter(shell, WATCHY_SHELL_DIAGNOSTICS, WATCHY_SHELL_SETTINGS);
+    case 7u:
+        enter(shell, WATCHY_SHELL_PACKAGE_PORTAL);
         break;
     case 9u:
-        enter(shell, WATCHY_SHELL_ABOUT, WATCHY_SHELL_SETTINGS);
+        enter(shell, WATCHY_SHELL_DIAGNOSTICS);
+        break;
+    case 10u:
+        enter(shell, WATCHY_SHELL_ABOUT);
         break;
     default:
         break;
@@ -497,8 +597,7 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
         return;
     }
     if (input == WATCHY_SHELL_INPUT_IDLE) {
-        shell->screen = WATCHY_SHELL_WATCHFACE;
-        shell->selection = 0u;
+        enter_watchface(shell);
         shell->sleep_requested = true;
         return;
     }
@@ -513,10 +612,12 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
     if (input == WATCHY_SHELL_INPUT_UP) {
         shell->selection = shell->selection == 0u ? (uint8_t)(count - 1u)
                                                   : (uint8_t)(shell->selection - 1u);
+        reveal_selection(shell, count);
         return;
     }
     if (input == WATCHY_SHELL_INPUT_DOWN) {
         shell->selection = (uint8_t)((shell->selection + 1u) % count);
+        reveal_selection(shell, count);
         return;
     }
     if (input == WATCHY_SHELL_INPUT_BACK) {
@@ -529,12 +630,13 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
         }
         if (shell->screen == WATCHY_SHELL_WATCHFACE) {
             shell->sleep_requested = true;
-        } else if (shell->screen == WATCHY_SHELL_LAUNCHER) {
-            enter(shell, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER);
-            shell->sleep_requested = true;
         } else {
-            enter(shell, shell->return_screen,
-                  shell->safe_mode ? WATCHY_SHELL_SAFE_MODE : WATCHY_SHELL_LAUNCHER);
+            const watchy_shell_screen_t prior = shell->screen;
+            (void)restore_parent(shell);
+            if (prior == WATCHY_SHELL_LAUNCHER &&
+                shell->screen == WATCHY_SHELL_WATCHFACE) {
+                shell->sleep_requested = true;
+            }
         }
         return;
     }
@@ -544,7 +646,7 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
     if (shell->screen == WATCHY_SHELL_WATCHFACE_SELECTOR) {
         if (shell->selection == 0u) {
             queue_action(shell, WATCHY_SHELL_ACTION_SELECT_BUILTIN);
-            enter(shell, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER);
+            enter_watchface(shell);
             shell->sleep_requested = true;
         } else if (shell->selection < shell->face_count) {
             const uint8_t face_position = (uint8_t)(shell->selection - 1u);
@@ -552,7 +654,7 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
                 watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
             } else if (queue_package_action(shell, WATCHY_SHELL_ACTION_SELECT_WATCHFACE,
                                             shell->face_indices[face_position])) {
-                enter(shell, WATCHY_SHELL_WATCHFACE, WATCHY_SHELL_LAUNCHER);
+                enter_watchface(shell);
                 shell->sleep_requested = true;
             } else {
                 watchy_shell_fail(shell, WATCHY_SHELL_ERROR_PACKAGE);
@@ -562,8 +664,8 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
     }
     switch (shell->screen) {
     case WATCHY_SHELL_WATCHFACE:
-        enter(shell, shell->safe_mode ? WATCHY_SHELL_SAFE_MODE : WATCHY_SHELL_LAUNCHER,
-              WATCHY_SHELL_WATCHFACE);
+        enter(shell, shell->safe_mode ? WATCHY_SHELL_SAFE_MODE
+                                     : WATCHY_SHELL_LAUNCHER);
         break;
     case WATCHY_SHELL_LAUNCHER:
         select_launcher(shell);
@@ -571,6 +673,14 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
     case WATCHY_SHELL_SETTINGS:
         select_settings(shell);
         break;
+    case WATCHY_SHELL_TIMEZONE: {
+        int16_t offset;
+        if (watchy_settings_timezone_offset_at(shell->selection, &offset)) {
+            queue_numeric_action(shell, WATCHY_SHELL_ACTION_SAVE_TIMEZONE, offset);
+            (void)restore_parent(shell);
+        }
+        break;
+    }
     case WATCHY_SHELL_MANUAL_TIME:
         shell->editing = !shell->editing;
         break;
@@ -581,10 +691,10 @@ void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input) {
         break;
     case WATCHY_SHELL_SAFE_MODE:
         if (shell->selection == 0u) {
-            enter(shell, WATCHY_SHELL_DIAGNOSTICS, WATCHY_SHELL_SAFE_MODE);
+            enter(shell, WATCHY_SHELL_DIAGNOSTICS);
         } else if (shell->selection == 1u) {
             if (shell->package_index_readable) {
-                enter(shell, WATCHY_SHELL_PACKAGE_APPS, WATCHY_SHELL_SAFE_MODE);
+                enter(shell, WATCHY_SHELL_PACKAGE_APPS);
             } else {
                 queue_action(shell, WATCHY_SHELL_ACTION_PURGE_PACKAGES);
             }
@@ -629,6 +739,7 @@ bool watchy_shell_take_action_request(watchy_shell_t *shell,
     out_request->action = shell->pending_action;
     out_request->has_package = shell->pending_action_has_package;
     out_request->catalog_index = shell->pending_action_catalog_index;
+    out_request->numeric_value = shell->pending_action_numeric_value;
     memcpy(out_request->package_ref, shell->pending_action_package_ref,
            sizeof(out_request->package_ref));
     clear_pending_action(shell);

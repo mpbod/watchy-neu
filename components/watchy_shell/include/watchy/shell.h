@@ -21,12 +21,14 @@ extern "C" {
 #define WATCHY_SHELL_PACKAGE_LABEL_SIZE 32u
 #define WATCHY_SHELL_DIAGNOSTIC_LABEL_SIZE 24u
 #define WATCHY_SHELL_ERROR_MESSAGE_MAX 24u
+#define WATCHY_SHELL_HISTORY_DEPTH 4u
 
 typedef enum {
     WATCHY_SHELL_WATCHFACE = 0,
     WATCHY_SHELL_LAUNCHER,
     WATCHY_SHELL_PACKAGE_APPS,
     WATCHY_SHELL_SETTINGS,
+    WATCHY_SHELL_TIMEZONE,
     WATCHY_SHELL_MANUAL_TIME,
     WATCHY_SHELL_NTP_SYNC,
     WATCHY_SHELL_CONNECTIVITY,
@@ -93,12 +95,14 @@ typedef enum {
     WATCHY_SHELL_ACTION_NORMAL_REBOOT,
     WATCHY_SHELL_ACTION_SELECT_BUILTIN,
     WATCHY_SHELL_ACTION_SELECT_WATCHFACE,
+    WATCHY_SHELL_ACTION_SAVE_TIMEZONE,
 } watchy_shell_action_t;
 
 typedef struct {
     watchy_shell_action_t action;
     bool has_package;
     size_t catalog_index;
+    int32_t numeric_value;
     char package_ref[WATCHY_PACKAGE_REF_MAX + 1u];
 } watchy_shell_action_request_t;
 
@@ -116,8 +120,18 @@ typedef enum {
 
 typedef struct {
     watchy_shell_screen_t screen;
+    uint8_t selection;
+    uint8_t view_start;
+} watchy_shell_navigation_frame_t;
+
+typedef struct {
+    watchy_shell_screen_t screen;
     watchy_shell_screen_t return_screen;
     uint8_t selection;
+    uint8_t view_start;
+    uint8_t home_timezone_index;
+    uint8_t history_depth;
+    watchy_shell_navigation_frame_t history[WATCHY_SHELL_HISTORY_DEPTH];
     uint8_t app_count;
     uint8_t app_indices[WATCHY_PACKAGE_INSTALLED_MAX];
     uint8_t face_count;
@@ -139,6 +153,7 @@ typedef struct {
     watchy_shell_action_t pending_action;
     bool pending_action_has_package;
     uint8_t pending_action_catalog_index;
+    int32_t pending_action_numeric_value;
     char pending_action_package_ref[WATCHY_PACKAGE_REF_MAX + 1u];
 } watchy_shell_t;
 
@@ -185,6 +200,8 @@ bool watchy_shell_format_package_label(const watchy_package_info_t *package,
                                        size_t out_size);
 void watchy_shell_set_diagnostic_count(watchy_shell_t *shell, size_t count);
 size_t watchy_shell_diagnostic_page_start(const watchy_shell_t *shell);
+size_t watchy_shell_visible_start(const watchy_shell_t *shell);
+void watchy_shell_set_home_timezone_index(watchy_shell_t *shell, size_t index);
 bool watchy_shell_format_diagnostic_label(const watchy_diagnostic_entry_t *entry,
                                           char *out_label,
                                           size_t out_size);

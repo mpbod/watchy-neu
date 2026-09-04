@@ -120,6 +120,7 @@ add_executable(watchy_shell_tests
   test_shell.c
   ../../components/watchy_shell/src/settings_policy.c
   ../../components/watchy_shell/src/shell_policy.c
+  ../../components/watchy_shell/src/timezone_action_policy.c
   ../../components/watchy_core/src/transition_policy.c
   ../../components/watchy_hal/src/framebuffer.c
   ../../components/watchy_hal/src/rtc_calendar.c

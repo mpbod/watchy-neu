@@ -220,8 +220,8 @@ static const char *selector_metadata(const watchy_package_info_t *package) {
 }
 
 static const char *const settings_labels[] = {
-    "Clock", "Motion Wake", "Display Motion", "Set Time", "NTP Sync",
-    "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
+    "Clock", "Home Zone", "Motion Wake", "Display Motion", "Set Time",
+    "NTP Sync", "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
 };
 
 const char *watchy_shell_render_settings_label(size_t index) {
@@ -234,8 +234,7 @@ static void render_selector(watchy_canvas_t *canvas,
                             const watchy_time_t *time,
                             const watchy_package_catalog_t *catalog) {
     const unsigned total = shell->face_count == 0u ? 1u : shell->face_count;
-    const unsigned page_start = (shell->selection / WATCHY_SHELL_VISIBLE_ROWS) *
-                                WATCHY_SHELL_VISIBLE_ROWS;
+    const unsigned page_start = shell->view_start;
     draw_header(canvas, "WATCHFACE", time);
     for (unsigned slot = 0u; slot < WATCHY_SHELL_VISIBLE_ROWS; ++slot) {
         const unsigned position = page_start + slot;
@@ -265,33 +264,57 @@ static void render_settings_screen(watchy_canvas_t *canvas,
                                    const watchy_shell_t *shell,
                                    const watchy_settings_t *settings,
                                    const watchy_time_t *time) {
-    char metadata[10][20];
+    char metadata[11][20];
     const char *motion = settings->motion_wake ? "ON" : "OFF";
     const char *transition = settings->transition_level == WATCHY_TRANSITION_LEVEL_FULL
                                  ? "FULL"
                                  : settings->transition_level == WATCHY_TRANSITION_LEVEL_REDUCED
                                      ? "REDUCED" : "OFF";
     snprintf(metadata[0], sizeof(metadata[0]), "%s", settings->time_24h ? "24H" : "12H");
-    snprintf(metadata[1], sizeof(metadata[1]), "%s", motion);
-    snprintf(metadata[2], sizeof(metadata[2]), "%s", transition);
-    snprintf(metadata[3], sizeof(metadata[3]), "%s", shell->editing ? "EDITING" : "EDIT");
-    snprintf(metadata[4], sizeof(metadata[4]), "%s", "SYNC");
-    snprintf(metadata[5], sizeof(metadata[5]), "%s", settings->wifi_ssid[0] ? "SAVED" : "NOT SET");
-    snprintf(metadata[6], sizeof(metadata[6]), "%s", "AP READY");
-    snprintf(metadata[7], sizeof(metadata[7]), "LIMIT %u", (unsigned)settings->partial_refresh_limit);
-    snprintf(metadata[8], sizeof(metadata[8]), "%s", "REPORT");
-    snprintf(metadata[9], sizeof(metadata[9]), "%s", "INFO");
+    if (!watchy_settings_format_timezone(settings, metadata[1], sizeof(metadata[1]))) {
+        snprintf(metadata[1], sizeof(metadata[1]), "%s", "CUSTOM");
+    }
+    snprintf(metadata[2], sizeof(metadata[2]), "%s", motion);
+    snprintf(metadata[3], sizeof(metadata[3]), "%s", transition);
+    snprintf(metadata[4], sizeof(metadata[4]), "%s", shell->editing ? "EDITING" : "EDIT");
+    snprintf(metadata[5], sizeof(metadata[5]), "%s", "SYNC");
+    snprintf(metadata[6], sizeof(metadata[6]), "%s", settings->wifi_ssid[0] ? "SAVED" : "NOT SET");
+    snprintf(metadata[7], sizeof(metadata[7]), "%s", "AP READY");
+    snprintf(metadata[8], sizeof(metadata[8]), "LIMIT %u", (unsigned)settings->partial_refresh_limit);
+    snprintf(metadata[9], sizeof(metadata[9]), "%s", "REPORT");
+    snprintf(metadata[10], sizeof(metadata[10]), "%s", "INFO");
     draw_header(canvas, "SETTINGS", time);
-    const unsigned page_start = (shell->selection / WATCHY_SHELL_VISIBLE_ROWS) *
-                                WATCHY_SHELL_VISIBLE_ROWS;
+    const unsigned page_start = shell->view_start;
     for (unsigned slot = 0u; slot < WATCHY_SHELL_VISIBLE_ROWS; ++slot) {
         const unsigned index = page_start + slot;
-        if (index < 10u) {
+        if (index < 11u) {
             draw_primary_row(canvas, slot, shell->selection == index,
                              settings_labels[index], metadata[index], 2u);
         }
     }
-    draw_rail(canvas, shell->selection, 10u);
+    draw_rail(canvas, shell->selection, 11u);
+}
+
+static void render_timezone_screen(watchy_canvas_t *canvas,
+                                   const watchy_shell_t *shell,
+                                   const watchy_time_t *time) {
+    const unsigned total = (unsigned)watchy_settings_timezone_count();
+    draw_header(canvas, "HOME ZONE", time);
+    for (unsigned slot = 0u; slot < WATCHY_SHELL_VISIBLE_ROWS; ++slot) {
+        const unsigned index = shell->view_start + slot;
+        int16_t offset;
+        watchy_settings_t candidate;
+        char label[16];
+        watchy_settings_defaults(&candidate);
+        if (index < total &&
+            watchy_settings_timezone_offset_at(index, &offset) &&
+            watchy_settings_set_timezone_offset(&candidate, offset) &&
+            watchy_settings_format_timezone(&candidate, label, sizeof(label))) {
+            draw_primary_row(canvas, slot, shell->selection == index,
+                             label, "FIXED OFFSET", 2u);
+        }
+    }
+    draw_rail(canvas, shell->selection, total);
 }
 
 static void render_hairline(watchy_canvas_t *canvas,
@@ -377,8 +400,7 @@ static void render_apps(watchy_canvas_t *canvas,
     if (count == 0u || catalog == NULL || catalog->count == 0u) {
         draw_compact_row(canvas, 0u, recovery ? "NO PACKAGES" : "NO APPS", NULL, false);
     } else {
-        const unsigned page_start = (shell->selection / WATCHY_SHELL_VISIBLE_ROWS) *
-                                    WATCHY_SHELL_VISIBLE_ROWS;
+        const unsigned page_start = shell->view_start;
         for (unsigned slot = 0u; slot < WATCHY_SHELL_VISIBLE_ROWS; ++slot) {
             const unsigned position = page_start + slot;
             if (position < count && indices[position] < catalog->count) {
@@ -405,8 +427,7 @@ static void render_diagnostics(watchy_canvas_t *canvas,
         draw_compact_row(canvas, 0u, "UNAVAILABLE", "N/A", false);
         return;
     }
-    const unsigned page_start = (shell->selection / WATCHY_SHELL_VISIBLE_ROWS) *
-                                WATCHY_SHELL_VISIBLE_ROWS;
+    const unsigned page_start = shell->view_start;
     for (unsigned slot = 0u; slot < WATCHY_SHELL_VISIBLE_ROWS; ++slot) {
         const unsigned index = page_start + slot;
         if (index < count) {
@@ -499,6 +520,9 @@ void watchy_shell_render(watchy_canvas_t *canvas,
         break;
     case WATCHY_SHELL_SETTINGS:
         render_settings_screen(canvas, shell, settings, time);
+        break;
+    case WATCHY_SHELL_TIMEZONE:
+        render_timezone_screen(canvas, shell, time);
         break;
     case WATCHY_SHELL_PACKAGE_APPS:
     case WATCHY_SHELL_MANUAL_TIME:

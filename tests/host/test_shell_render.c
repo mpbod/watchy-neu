@@ -223,6 +223,7 @@ static int test_selector(void) {
     };
     for (unsigned selection = 0u; selection < 5u; ++selection) {
         s.selection = (uint8_t)selection;
+        s.view_start = selection < 3u ? 0u : (uint8_t)(selection - 2u);
         draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
         memcpy(status_frames[selection], fb, sizeof(fb));
         CHECK(region_ink(fb, 44, 25, 180, 189) > 25);
@@ -241,8 +242,9 @@ static int test_selector(void) {
     CHECK(memcmp(status_frames[3], status_frames[4], sizeof(status_frames[3])) != 0);
     for (unsigned position = 1u; position < 5u; ++position) {
         s.selection = position < 3u ? 0u : position == 3u ? 4u : 3u;
+        s.view_start = position < 3u ? 0u : 2u;
         draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
-        const unsigned page_start = (position / 3u) * 3u;
+        const unsigned page_start = s.view_start;
         const unsigned slot = position - page_start;
         uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
         watchy_canvas_t expected_canvas = canvas(expected);
@@ -255,9 +257,11 @@ static int test_selector(void) {
                           186, 25 + (int)slot * 55 + 52));
     }
     s.selection = 0u;
+    s.view_start = 0u;
     draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
     CHECK(read_pbm(WATCHY_GOLDEN_DIR "/selector-hairline.pbm", fb) == 0);
     s.selection = 1u;
+    s.view_start = 0u;
     draw(&c, &s, &settings, &t, NULL, &catalog, NULL, NULL);
     CHECK(read_pbm(WATCHY_GOLDEN_DIR "/selector-active-wpk.pbm", fb) == 0);
     return 0;
@@ -265,20 +269,22 @@ static int test_selector(void) {
 
 static int test_settings(void) {
     static const char *const expected_labels[] = {
-        "Clock", "Motion Wake", "Display Motion", "Set Time", "NTP Sync",
-        "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
+        "Clock", "Home Zone", "Motion Wake", "Display Motion", "Set Time",
+        "NTP Sync", "Wi-Fi", "Portal", "Refresh", "Diagnostics", "About",
     };
-    uint8_t frames[10][WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    uint8_t frames[11][WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
     watchy_settings_t settings = {.time_24h = true, .motion_wake = true,
                                   .transition_level = WATCHY_TRANSITION_LEVEL_REDUCED,
                                   .partial_refresh_limit = 20u};
     watchy_time_t t = now();
-    for (unsigned selection = 0u; selection < 10u; ++selection) {
+    for (unsigned selection = 0u; selection < 11u; ++selection) {
         watchy_canvas_t c = canvas(frames[selection]);
-        watchy_shell_t s = {.screen = WATCHY_SHELL_SETTINGS, .selection = (uint8_t)selection};
+        watchy_shell_t s = {.screen = WATCHY_SHELL_SETTINGS,
+                            .selection = (uint8_t)selection,
+                            .view_start = selection < 3u ? 0u : (uint8_t)(selection - 2u)};
         draw(&c, &s, &settings, &t, NULL, NULL, NULL, NULL);
         CHECK(region_ink(frames[selection], 44, 25, 180, 189) > 20);
-        const unsigned settings_thumb_top = 20u + (selection * 109u + 4u) / 9u;
+        const unsigned settings_thumb_top = 20u + (selection * 109u + 5u) / 10u;
         CHECK(black(frames[selection], 194, (int)settings_thumb_top));
         CHECK(black(frames[selection], 194, (int)(settings_thumb_top + 50u)));
         CHECK(black(frames[selection], 190, (int)settings_thumb_top) &&
@@ -288,7 +294,7 @@ static int test_settings(void) {
         CHECK(strcmp(watchy_shell_render_settings_label(selection), expected_labels[selection]) == 0);
         uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
         watchy_canvas_t expected_canvas = canvas(expected);
-        const unsigned slot = selection % WATCHY_SHELL_VISIBLE_ROWS;
+        const unsigned slot = selection - s.view_start;
         const int top = 25 + (int)slot * 55;
         watchy_ui_rect(&expected_canvas, 0, (int16_t)top, 187, 55, true);
         watchy_ui_draw_text_font(&expected_canvas, 44, (int16_t)(top + 32),
@@ -300,6 +306,53 @@ static int test_settings(void) {
     CHECK(memcmp(frames[0], frames[3], sizeof(frames[0])) != 0);
     CHECK(memcmp(frames[3], frames[6], sizeof(frames[3])) != 0);
     CHECK(memcmp(frames[6], frames[9], sizeof(frames[6])) != 0);
+    uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_canvas_t expected_canvas = canvas(expected);
+    watchy_ui_draw_text_font(&expected_canvas, 44, 57, "Home Zone",
+                             &(watchy_text_style_t){&watchy_font_heros_20_bold,
+                                                    0, true, false});
+    CHECK(same_region(frames[3], expected, 44, 25, 186, 58));
+    expected_canvas = canvas(expected);
+    watchy_ui_draw_text_font(&expected_canvas, 44, 57, "Motion Wake",
+                             &(watchy_text_style_t){&watchy_font_heros_20_bold,
+                                                    0, true, false});
+    CHECK(same_region(frames[4], expected, 44, 25, 186, 58));
+    return 0;
+}
+
+static int test_timezone_rows_use_continuous_viewport_and_proportional_rail(void) {
+    uint8_t first[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    uint8_t second[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_settings_t settings;
+    watchy_settings_defaults(&settings);
+    watchy_time_t t = now();
+    watchy_shell_t shell = {.screen = WATCHY_SHELL_TIMEZONE,
+                           .selection = 26u, .view_start = 24u};
+
+    watchy_canvas_t c = canvas(first);
+    draw(&c, &shell, &settings, &t, NULL, NULL, NULL, NULL);
+    watchy_canvas_t expected_canvas = canvas(expected);
+    watchy_ui_rect(&expected_canvas, 0, 135, 187, 55, true);
+    watchy_ui_draw_text_font(&expected_canvas, 44, 167, "UTC+07:00",
+                             &(watchy_text_style_t){&watchy_font_heros_20_bold,
+                                                    0, false, false});
+    CHECK(same_region(first, expected, 44, 135, 186, 168));
+    const unsigned first_thumb_top = 20u + (26u * 109u + 18u) / 37u;
+    CHECK(black(first, 194, (int)first_thumb_top));
+    CHECK(black(first, 194, (int)(first_thumb_top + 50u)));
+
+    shell.selection = 27u;
+    shell.view_start = 25u;
+    c = canvas(second);
+    draw(&c, &shell, &settings, &t, NULL, NULL, NULL, NULL);
+    expected_canvas = canvas(expected);
+    watchy_ui_rect(&expected_canvas, 0, 135, 187, 55, true);
+    watchy_ui_draw_text_font(&expected_canvas, 44, 167, "UTC+08:00",
+                             &(watchy_text_style_t){&watchy_font_heros_20_bold,
+                                                    0, false, false});
+    CHECK(same_region(second, expected, 44, 135, 186, 168));
+    CHECK(memcmp(first, second, sizeof(first)) != 0);
     return 0;
 }
 
@@ -418,6 +471,7 @@ static int test_apps_filter_and_page(void) {
     c = canvas(first);
     draw(&c, &shell, &settings, &t, NULL, &catalog, NULL, NULL);
     shell.selection = 3u;
+    shell.view_start = 1u;
     c = canvas(second);
     draw(&c, &shell, &settings, &t, NULL, &catalog, NULL, NULL);
     CHECK(memcmp(first, second, sizeof(first)) != 0);
@@ -486,6 +540,7 @@ int main(int argc, char **argv) {
     CHECK(test_menu_selections() == 0);
     CHECK(test_selector() == 0);
     CHECK(test_settings() == 0);
+    CHECK(test_timezone_rows_use_continuous_viewport_and_proportional_rail() == 0);
     CHECK(test_hairline() == 0);
     CHECK(test_hairline_date_uses_legible_strike_without_clipping() == 0);
     CHECK(test_larger_typography_fits_shell_regions() == 0);

@@ -154,6 +154,17 @@ watchy_status_t watchy_rtc_set_local(const watchy_time_t *time) {
     return WATCHY_STATUS_OK;
 }
 
+watchy_status_t watchy_rtc_set_utc_offset(int16_t minutes) {
+    if (minutes < -1439 || minutes > 1439) {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (persist_utc_offset(minutes) != WATCHY_STATUS_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    s_utc_offset_minutes = minutes;
+    return WATCHY_STATUS_OK;
+}
+
 watchy_status_t watchy_rtc_set_minute_alarm(uint8_t minute) {
     uint8_t alarm[4];
     uint8_t status;
