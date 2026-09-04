@@ -24,9 +24,11 @@ idf_component_register(
         watchy_packages
         esp_http_server
         esp_app_format
+        esp_hw_support
         esp_netif
         esp_wifi
         bootloader_support
+        heap
         json
         mbedtls
         nvs_flash
@@ -37,4 +39,8 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wall -Wextra -Werror
     -Wframe-larger-than=2048
     -fstack-usage
+)
+
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-T${CMAKE_CURRENT_LIST_DIR}/captive_portal_memory.ld"
 )

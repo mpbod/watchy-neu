@@ -2,15 +2,29 @@
 
 #include <string.h>
 
+#include "esp_memory_utils.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "heap_memory_layout.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 
 #define WATCHY_CAPTIVE_DNS_PACKET_SIZE 512u
 #define WATCHY_CAPTIVE_DNS_PORT 53u
 #define WATCHY_CAPTIVE_DNS_RECEIVE_TIMEOUT_US 200000L
-#define WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES 1280u
+#define WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES 4096u
+
+extern uint8_t _watchy_captive_task_region_start[];
+extern uint8_t _watchy_captive_task_region_end[];
+
+/*
+ * ESP32 D/IRAM at this address is internal and byte-accessible, so it meets
+ * portVALID_STACK_MEM without consuming the nearly-full low DRAM data segment.
+ * Keep the fixed window out of the heap because the linker owns it below.
+ */
+SOC_RESERVE_MEMORY_REGION((intptr_t)_watchy_captive_task_region_start,
+                          (intptr_t)_watchy_captive_task_region_end,
+                          watchy_captive_dns_task);
 
 typedef enum {
     CAPTIVE_DNS_STOPPED = 0,
@@ -27,9 +41,11 @@ typedef struct {
 } captive_dns_state_t;
 
 static portMUX_TYPE s_dns_lock = portMUX_INITIALIZER_UNLOCKED;
-static StaticTask_t s_dns_task_storage;
+static StaticTask_t s_dns_task_storage
+    __attribute__((section(".watchy_captive_task.tcb"), aligned(16)));
 static StackType_t s_dns_task_stack[
-    WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES / sizeof(StackType_t)];
+    WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES / sizeof(StackType_t)]
+    __attribute__((section(".watchy_captive_task.stack"), aligned(16)));
 static captive_dns_state_t s_dns = {
     .socket_fd = -1,
 };
@@ -38,6 +54,22 @@ _Static_assert(WATCHY_CAPTIVE_DNS_PACKET_SIZE <= 512u,
                "captive DNS packets must stay bounded");
 _Static_assert((WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES % sizeof(StackType_t)) == 0u,
                "captive DNS task stack must use complete stack words");
+_Static_assert(WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES >= 4096u,
+               "captive DNS task stack must preserve the linked call-chain reserve");
+
+static bool dns_task_storage_is_valid(void) {
+    const uint8_t *const stack_end =
+        (const uint8_t *)s_dns_task_stack + sizeof(s_dns_task_stack) - 1u;
+    const uint8_t *const task_end =
+        (const uint8_t *)&s_dns_task_storage + sizeof(s_dns_task_storage) - 1u;
+
+    return esp_ptr_internal(s_dns_task_stack) &&
+           esp_ptr_byte_accessible(s_dns_task_stack) &&
+           esp_ptr_internal(stack_end) && esp_ptr_byte_accessible(stack_end) &&
+           esp_ptr_internal(&s_dns_task_storage) &&
+           esp_ptr_byte_accessible(&s_dns_task_storage) &&
+           esp_ptr_internal(task_end) && esp_ptr_byte_accessible(task_end);
+}
 
 static bool dns_service_snapshot(int *out_socket, uint8_t out_address[4]) {
     bool running;
@@ -120,6 +152,12 @@ watchy_status_t watchy_captive_portal_start(const char *address) {
     if (!can_start) {
         return WATCHY_STATUS_INVALID_STATE;
     }
+    if (!dns_task_storage_is_valid()) {
+        portENTER_CRITICAL(&s_dns_lock);
+        s_dns.lifecycle = CAPTIVE_DNS_STOPPED;
+        portEXIT_CRITICAL(&s_dns_lock);
+        return WATCHY_STATUS_INVALID_STATE;
+    }
 
     socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (socket_fd < 0 ||
@@ -140,6 +178,8 @@ watchy_status_t watchy_captive_portal_start(const char *address) {
     s_dns.socket_fd = socket_fd;
     memcpy(s_dns.address, &parsed_address.s_addr, sizeof(s_dns.address));
     portEXIT_CRITICAL(&s_dns_lock);
+    memset(&s_dns_task_storage, 0, sizeof(s_dns_task_storage));
+    memset(s_dns_task_stack, 0, sizeof(s_dns_task_stack));
     task = xTaskCreateStatic(
         captive_dns_task, "captive-dns",
         sizeof(s_dns_task_stack) / sizeof(s_dns_task_stack[0]), NULL,
