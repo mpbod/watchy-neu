@@ -307,6 +307,68 @@ bool watchy_portal_apply_wifi_patch(
     return true;
 }
 
+watchy_portal_error_response_t watchy_portal_json_envelope_error(
+    const watchy_portal_json_envelope_t *envelope) {
+    if (envelope == NULL || envelope->content_type == NULL ||
+        strcmp(envelope->content_type, "application/json") != 0 ||
+        envelope->content_length == 0u ||
+        envelope->content_length > WATCHY_PORTAL_JSON_MAX ||
+        !envelope->read_complete || !envelope->parsed ||
+        !envelope->object_root || !envelope->unique_members) {
+        return (watchy_portal_error_response_t){400u, "invalid_request"};
+    }
+    return (watchy_portal_error_response_t){0u, NULL};
+}
+
+bool watchy_portal_json_has_escaped_nul(const char *json, size_t length) {
+    bool in_string = false;
+    if (json == NULL) return false;
+    for (size_t index = 0u; index < length; ++index) {
+        const char value = json[index];
+        if (value == '\0') return true;
+        if (!in_string) {
+            if (value == '"') in_string = true;
+            continue;
+        }
+        if (value == '"') {
+            in_string = false;
+            continue;
+        }
+        if (value != '\\') continue;
+        if (index + 5u < length && json[index + 1u] == 'u' &&
+            json[index + 2u] == '0' && json[index + 3u] == '0' &&
+            json[index + 4u] == '0' && json[index + 5u] == '0') {
+            return true;
+        }
+        if (index + 1u < length) ++index;
+    }
+    return false;
+}
+
+bool watchy_portal_prepare_settings_response(
+    const watchy_settings_t *settings,
+    const watchy_time_t *local_time,
+    watchy_portal_settings_response_t *out_response) {
+    int16_t settings_offset;
+    if (out_response == NULL) return false;
+    memset(out_response, 0, sizeof(*out_response));
+    if (settings == NULL || !watchy_settings_valid(settings) ||
+        (local_time != NULL && !watchy_calendar_valid(local_time))) {
+        return false;
+    }
+    if (local_time != NULL &&
+        watchy_settings_timezone_offset(settings, &settings_offset) &&
+        local_time->utc_offset_minutes != settings_offset) {
+        return false;
+    }
+    out_response->settings = settings;
+    if (local_time != NULL) {
+        out_response->has_local_time = true;
+        out_response->local_time = *local_time;
+    }
+    return true;
+}
+
 watchy_portal_policy_status_t watchy_portal_check_upload(
     const watchy_portal_upload_request_t *request) {
     if (request == NULL) {

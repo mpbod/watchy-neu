@@ -17,6 +17,7 @@ extern "C" {
 #define WATCHY_PORTAL_IDLE_TIMEOUT_MS (5u * 60u * 1000u)
 #define WATCHY_PORTAL_ABSOLUTE_TIMEOUT_MS (30u * 60u * 1000u)
 #define WATCHY_PORTAL_INSTALL_RESERVE_BYTES (64u * 1024u)
+#define WATCHY_PORTAL_JSON_MAX 1024u
 
 typedef enum {
     WATCHY_PORTAL_METHOD_GET = 0,
@@ -74,6 +75,21 @@ typedef struct {
     uint16_t http_status;
     const char *code;
 } watchy_portal_error_response_t;
+
+typedef struct {
+    const char *content_type;
+    size_t content_length;
+    bool read_complete;
+    bool parsed;
+    bool object_root;
+    bool unique_members;
+} watchy_portal_json_envelope_t;
+
+typedef struct {
+    const watchy_settings_t *settings;
+    bool has_local_time;
+    watchy_time_t local_time;
+} watchy_portal_settings_response_t;
 
 typedef struct {
     bool has_time_24h;
@@ -140,6 +156,13 @@ bool watchy_portal_apply_wifi_patch(
     const watchy_settings_t *current,
     const watchy_portal_wifi_patch_t *patch,
     watchy_settings_t *out_settings);
+watchy_portal_error_response_t watchy_portal_json_envelope_error(
+    const watchy_portal_json_envelope_t *envelope);
+bool watchy_portal_json_has_escaped_nul(const char *json, size_t length);
+bool watchy_portal_prepare_settings_response(
+    const watchy_settings_t *settings,
+    const watchy_time_t *local_time,
+    watchy_portal_settings_response_t *out_response);
 watchy_portal_policy_status_t watchy_portal_check_upload(
     const watchy_portal_upload_request_t *request);
 watchy_portal_error_response_t watchy_portal_error_from_policy(

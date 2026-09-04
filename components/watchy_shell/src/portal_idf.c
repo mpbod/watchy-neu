@@ -27,7 +27,6 @@
 #include "mbedtls/sha256.h"
 
 #define WATCHY_PORTAL_RECEIVE_CHUNK 1024u
-#define WATCHY_PORTAL_JSON_MAX 1024u
 #define WATCHY_PORTAL_CLIENT_TIMEOUT_MS 15000u
 
 typedef struct {
@@ -264,8 +263,8 @@ static cJSON *add_time_object(cJSON *root,
 }
 
 static esp_err_t send_settings_json(httpd_req_t *request,
-                                    const watchy_settings_t *settings,
-                                    const watchy_time_t *local_time) {
+                                    const watchy_portal_settings_response_t *response) {
+    const watchy_settings_t *settings = response->settings;
     cJSON *root = cJSON_CreateObject();
     cJSON *wifi;
     int16_t offset;
@@ -300,7 +299,8 @@ static esp_err_t send_settings_json(httpd_req_t *request,
         cJSON_Delete(root);
         return public_code(request, 500u, "internal_error");
     }
-    if (local_time != NULL && add_time_object(root, "time", local_time) == NULL) {
+    if (response->has_local_time &&
+        add_time_object(root, "time", &response->local_time) == NULL) {
         cJSON_Delete(root);
         return public_code(request, 500u, "internal_error");
     }
@@ -359,20 +359,23 @@ static watchy_portal_error_response_t read_json_object(
     char content_type[32];
     const char *parse_end = NULL;
     size_t received_total = 0u;
-    watchy_portal_error_response_t error = {0u, NULL};
+    watchy_portal_json_envelope_t envelope = {
+        .content_type = NULL,
+        .content_length = request->content_len,
+        .read_complete = true,
+        .parsed = true,
+        .object_root = true,
+        .unique_members = true,
+    };
+    watchy_portal_error_response_t error;
 
     memset(out_document, 0, sizeof(*out_document));
-    if (!read_header(request, "Content-Type", content_type,
-                     sizeof(content_type)) ||
-        strcmp(content_type, "application/json") != 0) {
-        return (watchy_portal_error_response_t){415u, "content_type"};
+    if (read_header(request, "Content-Type", content_type,
+                    sizeof(content_type))) {
+        envelope.content_type = content_type;
     }
-    if (request->content_len == 0u) {
-        return (watchy_portal_error_response_t){411u, "content_length"};
-    }
-    if (request->content_len > WATCHY_PORTAL_JSON_MAX) {
-        return (watchy_portal_error_response_t){413u, "request_too_large"};
-    }
+    error = watchy_portal_json_envelope_error(&envelope);
+    if (error.http_status != 0u) return error;
     out_document->body_size = request->content_len + 1u;
     out_document->body = calloc(out_document->body_size, 1u);
     if (out_document->body == NULL) {
@@ -383,27 +386,24 @@ static watchy_portal_error_response_t read_json_object(
             request, out_document->body + received_total,
             request->content_len - received_total);
         if (received <= 0) {
-            error = (watchy_portal_error_response_t){400u, "invalid_request"};
-            goto failure;
+            envelope.read_complete = false;
+            return watchy_portal_json_envelope_error(&envelope);
         }
         received_total += (size_t)received;
     }
+    if (watchy_portal_json_has_escaped_nul(out_document->body,
+                                           request->content_len)) {
+        envelope.parsed = false;
+        return watchy_portal_json_envelope_error(&envelope);
+    }
     out_document->root = cJSON_ParseWithLengthOpts(
         out_document->body, out_document->body_size, &parse_end, true);
-    if (out_document->root == NULL) {
-        error = (watchy_portal_error_response_t){400u, "invalid_request"};
-        goto failure;
-    }
-    if (parse_end != out_document->body + request->content_len ||
-        !cJSON_IsObject(out_document->root) ||
-        !json_member_names_unique(out_document->root)) {
-        return (watchy_portal_error_response_t){400u, "invalid_request"};
-    }
-    return error;
-
-failure:
-    clear_json_request(out_document);
-    return error;
+    envelope.parsed = out_document->root != NULL &&
+                      parse_end == out_document->body + request->content_len;
+    envelope.object_root = cJSON_IsObject(out_document->root);
+    envelope.unique_members = envelope.object_root &&
+                              json_member_names_unique(out_document->root);
+    return watchy_portal_json_envelope_error(&envelope);
 }
 
 static bool json_integer(const cJSON *item,
@@ -706,9 +706,11 @@ static esp_err_t get_settings(httpd_req_t *request) {
     watchy_settings_t settings;
     watchy_time_t local_time;
     const watchy_time_t *time_response = NULL;
+    watchy_portal_settings_response_t settings_response;
     esp_err_t response;
     memset(&settings, 0, sizeof(settings));
     memset(&local_time, 0, sizeof(local_time));
+    memset(&settings_response, 0, sizeof(settings_response));
     if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
         response = storage_error(request);
         goto cleanup;
@@ -716,11 +718,17 @@ static esp_err_t get_settings(httpd_req_t *request) {
     if (watchy_rtc_read_local(&local_time) == WATCHY_STATUS_OK) {
         time_response = &local_time;
     }
-    response = send_settings_json(request, &settings, time_response);
+    if (!watchy_portal_prepare_settings_response(&settings, time_response,
+                                                 &settings_response)) {
+        response = public_code(request, 500u, "internal_error");
+        goto cleanup;
+    }
+    response = send_settings_json(request, &settings_response);
 
 cleanup:
     memset(&settings, 0, sizeof(settings));
     memset(&local_time, 0, sizeof(local_time));
+    memset(&settings_response, 0, sizeof(settings_response));
     return response;
 }
 
@@ -755,12 +763,14 @@ static esp_err_t update_settings(httpd_req_t *request) {
     watchy_settings_t current;
     watchy_settings_t candidate;
     watchy_time_t local_time;
+    watchy_portal_settings_response_t settings_response;
     watchy_portal_error_response_t json_error;
     esp_err_t response;
     memset(&patch, 0, sizeof(patch));
     memset(&current, 0, sizeof(current));
     memset(&candidate, 0, sizeof(candidate));
     memset(&local_time, 0, sizeof(local_time));
+    memset(&settings_response, 0, sizeof(settings_response));
 
     json_error = read_json_object(request, &document);
     if (json_error.http_status != 0u) {
@@ -785,7 +795,12 @@ static esp_err_t update_settings(httpd_req_t *request) {
         response = storage_error(request);
         goto cleanup;
     }
-    response = send_settings_json(request, &current, &local_time);
+    if (!watchy_portal_prepare_settings_response(&current, &local_time,
+                                                 &settings_response)) {
+        response = public_code(request, 500u, "internal_error");
+        goto cleanup;
+    }
+    response = send_settings_json(request, &settings_response);
 
 cleanup:
     clear_json_request(&document);
@@ -793,6 +808,7 @@ cleanup:
     memset(&current, 0, sizeof(current));
     memset(&candidate, 0, sizeof(candidate));
     memset(&local_time, 0, sizeof(local_time));
+    memset(&settings_response, 0, sizeof(settings_response));
     return response;
 }
 
@@ -803,6 +819,7 @@ static void wipe_wifi_password_members(cJSON *root) {
             cJSON_IsString(member) && member->valuestring != NULL) {
             memset(member->valuestring, 0, strlen(member->valuestring));
         }
+        wipe_wifi_password_members(member);
     }
 }
 
@@ -914,9 +931,11 @@ cleanup:
 static esp_err_t sync_ntp(httpd_req_t *request) {
     watchy_settings_t settings;
     watchy_time_t local_time;
+    watchy_portal_settings_response_t settings_response;
     esp_err_t response;
     memset(&settings, 0, sizeof(settings));
     memset(&local_time, 0, sizeof(local_time));
+    memset(&settings_response, 0, sizeof(settings_response));
 
     if (!s_portal.info.client_mode) {
         response = public_code(request, 409u, "client_mode_required");
@@ -941,11 +960,17 @@ static esp_err_t sync_ntp(httpd_req_t *request) {
         response = public_code(request, 500u, "rtc_error");
         goto cleanup;
     }
-    response = send_settings_json(request, &settings, &local_time);
+    if (!watchy_portal_prepare_settings_response(&settings, &local_time,
+                                                 &settings_response)) {
+        response = public_code(request, 500u, "internal_error");
+        goto cleanup;
+    }
+    response = send_settings_json(request, &settings_response);
 
 cleanup:
     memset(&settings, 0, sizeof(settings));
     memset(&local_time, 0, sizeof(local_time));
+    memset(&settings_response, 0, sizeof(settings_response));
     return response;
 }
 

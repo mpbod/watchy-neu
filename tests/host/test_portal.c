@@ -131,6 +131,76 @@ static int test_route_parser_accepts_only_exact_valid_components(void) {
     return 0;
 }
 
+static int test_every_malformed_json_envelope_is_invalid_request(void) {
+    watchy_portal_json_envelope_t envelope = {
+        .content_type = "application/json",
+        .content_length = 1u,
+        .read_complete = true,
+        .parsed = true,
+        .object_root = true,
+        .unique_members = true,
+    };
+    watchy_portal_error_response_t response =
+        watchy_portal_json_envelope_error(&envelope);
+    CHECK(response.http_status == 0u && response.code == NULL);
+
+    envelope.content_type = NULL;
+    response = watchy_portal_json_envelope_error(&envelope);
+    CHECK(response.http_status == 400u);
+    CHECK(strcmp(response.code, "invalid_request") == 0);
+    envelope.content_type = "text/plain";
+    response = watchy_portal_json_envelope_error(&envelope);
+    CHECK(response.http_status == 400u);
+    CHECK(strcmp(response.code, "invalid_request") == 0);
+    envelope.content_type = "application/json";
+
+    envelope.content_length = 0u;
+    response = watchy_portal_json_envelope_error(&envelope);
+    CHECK(response.http_status == 400u);
+    CHECK(strcmp(response.code, "invalid_request") == 0);
+    envelope.content_length = WATCHY_PORTAL_JSON_MAX + 1u;
+    response = watchy_portal_json_envelope_error(&envelope);
+    CHECK(response.http_status == 400u);
+    CHECK(strcmp(response.code, "invalid_request") == 0);
+    envelope.content_length = 1u;
+
+    bool *const validity[] = {
+        &envelope.read_complete,
+        &envelope.parsed,
+        &envelope.object_root,
+        &envelope.unique_members,
+    };
+    for (size_t index = 0u; index < sizeof(validity) / sizeof(validity[0]); ++index) {
+        *validity[index] = false;
+        response = watchy_portal_json_envelope_error(&envelope);
+        CHECK(response.http_status == 400u);
+        CHECK(strcmp(response.code, "invalid_request") == 0);
+        *validity[index] = true;
+    }
+    return 0;
+}
+
+static int test_json_nul_escape_is_rejected_before_password_decode(void) {
+    static const char valid_password[] =
+        "{\"ssid\":\"Home\",\"password\":\"abcdefgh\"}";
+    static const char malformed_password[] =
+        "{\"ssid\":\"Home\",\"password\":\"abcdefgh\\u0000secret-tail\"}";
+    static const char literal_escape_text[] =
+        "{\"ssid\":\"Home\",\"password\":\"abcdefgh\\\\u0000\"}";
+    static const char nonzero_unicode[] =
+        "{\"ssid\":\"Home\",\"password\":\"abcdefgh\\u0021\"}";
+
+    CHECK(!watchy_portal_json_has_escaped_nul(valid_password,
+                                               sizeof(valid_password) - 1u));
+    CHECK(watchy_portal_json_has_escaped_nul(malformed_password,
+                                              sizeof(malformed_password) - 1u));
+    CHECK(!watchy_portal_json_has_escaped_nul(literal_escape_text,
+                                               sizeof(literal_escape_text) - 1u));
+    CHECK(!watchy_portal_json_has_escaped_nul(nonzero_unicode,
+                                               sizeof(nonzero_unicode) - 1u));
+    return 0;
+}
+
 static int test_settings_patch_builds_a_valid_candidate_or_restores_current(void) {
     watchy_settings_t current;
     watchy_settings_t result;
@@ -318,6 +388,15 @@ static int test_portal_timezone_candidate_uses_atomic_action_and_rereads_local_t
     CHECK(strcmp(settings.timezone, "UTC-7") == 0);
     CHECK(local.hour == 7u && local.minute == 15u &&
           local.utc_offset_minutes == 420);
+    watchy_portal_settings_response_t response_source;
+    CHECK(watchy_portal_prepare_settings_response(&settings, &local,
+                                                   &response_source));
+    local.hour = 1u;
+    CHECK(response_source.settings == &settings);
+    CHECK(response_source.has_local_time);
+    CHECK(response_source.local_time.hour == 7u &&
+          response_source.local_time.minute == 15u &&
+          response_source.local_time.utc_offset_minutes == 420);
     return 0;
 }
 
@@ -505,6 +584,8 @@ int main(void) {
     failures += test_mutating_routes_require_the_exact_session_token();
     failures += test_every_route_uses_an_out_of_band_basic_session_credential();
     failures += test_route_parser_accepts_only_exact_valid_components();
+    failures += test_every_malformed_json_envelope_is_invalid_request();
+    failures += test_json_nul_escape_is_rejected_before_password_decode();
     failures += test_settings_patch_builds_a_valid_candidate_or_restores_current();
     failures += test_manual_time_accepts_only_the_rtc_calendar_range();
     failures += test_wifi_patch_distinguishes_omitted_and_empty_passwords();

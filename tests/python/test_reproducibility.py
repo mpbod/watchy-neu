@@ -93,8 +93,24 @@ class ReproducibilityContracts(unittest.TestCase):
         update_start = portal.index("static esp_err_t update_settings")
         update_end = portal.index("static esp_err_t", update_start + 1)
         update = portal[update_start:update_end]
-        self.assertIn("watchy_timezone_action_apply", update)
+        transaction = update.index("watchy_timezone_action_apply")
+        response_source = update.index("watchy_portal_prepare_settings_response",
+                                       transaction)
+        response_send = update.index("send_settings_json", response_source)
+        self.assertLess(transaction, response_source)
+        self.assertLess(response_source, response_send)
         self.assertNotIn("watchy_settings_save(&candidate)", update)
+
+    def test_portal_json_reader_uses_one_invalid_request_taxonomy(self) -> None:
+        portal = self.read("components/watchy_shell/src/portal_idf.c")
+        reader_start = portal.index("static watchy_portal_error_response_t read_json_object")
+        reader_end = portal.index("static bool json_integer", reader_start)
+        reader = portal[reader_start:reader_end]
+        self.assertIn("watchy_portal_json_envelope_error", reader)
+        self.assertIn("watchy_portal_json_has_escaped_nul", reader)
+        self.assertNotIn('"content_type"', reader)
+        self.assertNotIn('"content_length"', reader)
+        self.assertNotIn('"request_too_large"', reader)
 
     def test_portal_mutations_dispatch_only_after_authentication(self) -> None:
         portal = self.read("components/watchy_shell/src/portal_idf.c")
