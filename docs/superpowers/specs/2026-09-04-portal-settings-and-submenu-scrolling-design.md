@@ -90,6 +90,14 @@ The 32-character portal authentication credential is unchanged and independent o
 
 Authenticated activity refreshes the inactivity clock. The portal stops after exactly five minutes without an authenticated request. The page performs one initial load and refreshes after user actions; it does not run background polling that would manufacture activity. Unauthenticated traffic never extends the session. The existing 30-minute absolute lifetime remains, so repeated user activity cannot keep a portal alive indefinitely. Back stops the server immediately and turns Wi-Fi off.
 
+## Captive Portal Discovery
+
+AP mode starts a bounded DNS responder on UDP port 53 after the SoftAP has acquired `192.168.4.1`. Valid single-question IPv4 hostname lookups receive `192.168.4.1`; malformed packets, unsupported opcodes, multi-question packets, and non-A queries receive no fabricated record. DNS parsing uses the received datagram length for every label and pointer check, and response construction never exceeds the request buffer. The responder has a fixed task stack and socket receive timeout so `watchy_portal_stop` can join it promptly. It never runs in saved-client mode.
+
+The HTTP server recognizes common captive-network probes, including Android/ChromeOS `generate_204` paths, Apple `hotspot-detect.html`, and Microsoft `connecttest.txt`, `ncsi.txt`, and redirect paths. Probe requests and unmatched GET paths receive a temporary redirect to `http://192.168.4.1/` without including the session credential. The portal root then issues the normal HTTP Basic challenge, allowing the user to enter username `watchy` and the credential displayed on the watch. API routes never fall through to the captive redirect and retain their authenticated JSON errors.
+
+The AP advertises the captive portal URL through the DHCP captive-portal option when supported by the ESP-IDF network interface. Wildcard DNS and probe redirects remain the compatibility path. HTTPS interception is intentionally unsupported because the watch has no trusted hostname certificate; `http://192.168.4.1/` remains the documented fallback when an operating system suppresses its captive-network window.
+
 ## On-Watch Home Timezone
 
 Settings gains a **Home Zone** row adjacent to Clock and Set Time. Selecting it opens `WATCHY_SHELL_TIMEZONE`, a submenu listing human-readable fixed UTC offsets. The submenu opens with the current fixed offset selected; an existing custom POSIX zone opens on UTC without changing the stored zone until the user confirms.
@@ -143,6 +151,7 @@ Host coverage includes:
 - Gregorian date validation including leap years and the 2000-2099 boundary;
 - continuous viewport movement, both wraps, short lists, parent cursor restoration, active timezone initialization, and every affected list type;
 - portal HTML structural/style contract, responsive breakpoints, no remote assets, no mock-only routes, no secret interpolation, and safe DOM text insertion;
+- captive DNS response bounds, A-record address, malformed and unsupported query rejection, AP-only lifecycle, probe redirects, and API non-redirection;
 - NTP ownership policy for on-watch, client-portal, AP-portal, and missing-credential paths.
 
 After focused tests pass, a read-only code review checks security, input bounds, radio ownership, NVS behavior, display responsiveness, and regression risk. The milestone gate then runs all 14 host suites, portal static checks, the ESP32 `watchy_v2` target build, `git diff --check`, and verifies the exact commit embedded in the ELF.
@@ -150,12 +159,13 @@ After focused tests pass, a read-only code review checks security, input bounds,
 Hardware UAT verifies:
 
 1. Settings starts the AP and shows an 8-character password plus the unchanged authentication credential.
-2. The page matches the monochrome responsive reference on phone and desktop.
-3. Saving SSID/password survives portal exit and reset; the password is never returned by the API.
-4. Reopening Portal through Saved Wi-Fi permits NTP Sync and updates the RTC using the selected home timezone.
-5. Portal and watch can set timezone plus local date/time, and Hairline/Grid faces display the resulting local time.
-6. Portal stops after five inactive minutes, after Back, and at the 30-minute absolute cap.
-7. Every long on-watch list moves one row at a time, wraps correctly, and restores its parent cursor on Back.
-8. Package upload, activation, rollback, removal, safe mode, and full-refresh face return continue to work.
+2. Connecting a phone, tablet, macOS, Windows, Android, or iOS device to the AP opens or flags the captive portal; `http://192.168.4.1/` works as the fallback.
+3. The page matches the monochrome responsive reference on phone and desktop.
+4. Saving SSID/password survives portal exit and reset; the password is never returned by the API.
+5. Reopening Portal through Saved Wi-Fi permits NTP Sync and updates the RTC using the selected home timezone.
+6. Portal and watch can set timezone plus local date/time, and Hairline/Grid faces display the resulting local time.
+7. Portal stops after five inactive minutes, after Back, and at the 30-minute absolute cap.
+8. Every long on-watch list moves one row at a time, wraps correctly, and restores its parent cursor on Back.
+9. Package upload, activation, rollback, removal, safe mode, and full-refresh face return continue to work.
 
 After the milestone gate passes, the reviewed firmware is flashed over serial without erasing NVS or LittleFS, preserving the user's packages and settings for UAT.
