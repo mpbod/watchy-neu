@@ -6,6 +6,8 @@ idf_component_register(
         "src/settings_policy.c"
         "src/shell_policy.c"
         "src/shell_render.c"
+        "src/time_sync_idf.c"
+        "src/time_sync_policy.c"
         "src/timezone_action_policy.c"
         "src/watchface_action_policy.c"
         "../../sdk/ui/src/ui_draw.c"

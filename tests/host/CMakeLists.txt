@@ -202,6 +202,24 @@ target_compile_features(watchy_portal_tests PRIVATE c_std_11)
 target_compile_options(watchy_portal_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_portal_tests COMMAND watchy_portal_tests)
 
+add_executable(watchy_time_sync_tests
+  test_time_sync.c
+  ../../components/watchy_shell/src/time_sync_policy.c
+  ../../components/watchy_shell/src/settings_policy.c
+  ../../components/watchy_hal/src/rtc_calendar.c
+  ../../components/watchy_packages/src/package_format.c
+)
+target_include_directories(watchy_time_sync_tests PRIVATE
+  ../../components/watchy_shell/include
+  ../../components/watchy_hal/include
+  ../../components/watchy_packages/include
+  ../../components/watchy_core/include
+  ../../sdk/include
+)
+target_compile_features(watchy_time_sync_tests PRIVATE c_std_11)
+target_compile_options(watchy_time_sync_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_time_sync_tests COMMAND watchy_time_sync_tests)
+
 add_executable(watchy_ui_draw_tests
   test_ui_draw.c
 )

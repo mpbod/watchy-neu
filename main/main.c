@@ -15,18 +15,16 @@
 #include "watchy/shell.h"
 #include "watchy/shell_render.h"
 #include "watchy/storage.h"
+#include "watchy/time_sync.h"
 #include "watchy/timezone_action.h"
 #include "watchy/watchface_action.h"
 
 #include <inttypes.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "esp_log.h"
 #include "esp_attr.h"
-#include "esp_netif_sntp.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -34,7 +32,6 @@
 
 #define WATCHY_SHELL_IDLE_MS 30000u
 #define WATCHY_BUTTON_POLL_MS 50u
-#define WATCHY_NTP_WIFI_TIMEOUT_MS 15000u
 
 static const char *TAG = "watchy";
 static RTC_DATA_ATTR bool s_safe_mode_latched;
@@ -480,59 +477,6 @@ static bool present_selected_watchface(
     return false;
 }
 
-static watchy_status_t sync_time_ntp(const watchy_settings_t *settings) {
-    watchy_wifi_sta_config_t wifi = {0};
-    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(settings->ntp_server);
-    bool sntp_started = false;
-    watchy_status_t result = WATCHY_STATUS_INVALID_STATE;
-    if (settings->wifi_ssid[0] == '\0') return WATCHY_STATUS_INVALID_ARGUMENT;
-    memcpy(wifi.ssid, settings->wifi_ssid, sizeof(wifi.ssid));
-    memcpy(wifi.password, settings->wifi_password, sizeof(wifi.password));
-    if (watchy_wifi_start_sta(&wifi, false) != WATCHY_STATUS_OK) {
-        return WATCHY_STATUS_INVALID_STATE;
-    }
-    const uint64_t deadline = milliseconds() + WATCHY_NTP_WIFI_TIMEOUT_MS;
-    while (watchy_wifi_state() != WATCHY_WIFI_STA_CONNECTED &&
-           (int64_t)(deadline - milliseconds()) > 0) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    if (watchy_wifi_state() != WATCHY_WIFI_STA_CONNECTED ||
-        esp_netif_sntp_init(&sntp) != ESP_OK) goto cleanup;
-    sntp_started = true;
-    if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) != ESP_OK ||
-        setenv("TZ", settings->timezone, 1) != 0) goto cleanup;
-    tzset();
-    time_t epoch = time(NULL);
-    struct tm local_tm;
-    struct tm utc_tm;
-    if (epoch < 0 || localtime_r(&epoch, &local_tm) == NULL ||
-        gmtime_r(&epoch, &utc_tm) == NULL) goto cleanup;
-    watchy_time_t local_zero = {
-        .year = (int16_t)(local_tm.tm_year + 1900), .month = (uint8_t)(local_tm.tm_mon + 1),
-        .day = (uint8_t)local_tm.tm_mday, .hour = (uint8_t)local_tm.tm_hour,
-        .minute = (uint8_t)local_tm.tm_min, .second = (uint8_t)local_tm.tm_sec,
-        .weekday = (uint8_t)local_tm.tm_wday, .utc_offset_minutes = 0,
-    };
-    watchy_time_t utc_zero = {
-        .year = (int16_t)(utc_tm.tm_year + 1900), .month = (uint8_t)(utc_tm.tm_mon + 1),
-        .day = (uint8_t)utc_tm.tm_mday, .hour = (uint8_t)utc_tm.tm_hour,
-        .minute = (uint8_t)utc_tm.tm_min, .second = (uint8_t)utc_tm.tm_sec,
-        .weekday = (uint8_t)utc_tm.tm_wday, .utc_offset_minutes = 0,
-    };
-    int64_t local_seconds;
-    int64_t utc_seconds;
-    if (watchy_calendar_to_unix(&local_zero, &local_seconds) != WATCHY_STATUS_OK ||
-        watchy_calendar_to_unix(&utc_zero, &utc_seconds) != WATCHY_STATUS_OK ||
-        (local_seconds - utc_seconds) / 60 < -1439 ||
-        (local_seconds - utc_seconds) / 60 > 1439) goto cleanup;
-    local_zero.utc_offset_minutes = (int16_t)((local_seconds - utc_seconds) / 60);
-    result = watchy_rtc_set_local(&local_zero);
-cleanup:
-    if (sntp_started) esp_netif_sntp_deinit();
-    (void)watchy_wifi_stop();
-    return result;
-}
-
 static uint8_t days_in_month(const watchy_time_t *time) {
     watchy_time_t candidate = *time;
     candidate.day = 31u;
@@ -808,10 +752,10 @@ static void run_shell(watchy_shell_t *shell,
                     sync_result.outcome);
                 post_action_presentation_needed = sync_visible;
                 if (sync_visible) {
-                    if (sync_time_ntp(settings) == WATCHY_STATUS_OK &&
+                    if (watchy_time_sync_saved_wifi(settings) == WATCHY_STATUS_OK &&
                         watchy_rtc_read_local(time) == WATCHY_STATUS_OK) {
                         snprintf(detail, sizeof(detail), "TIME UPDATED");
-                    } else if (shell->screen != WATCHY_SHELL_ERROR) {
+                    } else {
                         watchy_shell_fail(shell, WATCHY_SHELL_ERROR_NTP);
                     }
                 }
