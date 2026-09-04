@@ -3,13 +3,19 @@
 #include "watchy/battery.h"
 #include "watchy/package_runtime.h"
 #include "watchy/radios.h"
+#include "watchy/rtc.h"
 #include "watchy/storage.h"
+#include "watchy/time_sync.h"
+#include "watchy/timezone_action.h"
 
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "cJSON.h"
+#include "esp_app_desc.h"
 #include "esp_http_server.h"
 #include "bootloader_random.h"
 #include "esp_mac.h"
@@ -21,7 +27,14 @@
 #include "mbedtls/sha256.h"
 
 #define WATCHY_PORTAL_RECEIVE_CHUNK 1024u
+#define WATCHY_PORTAL_JSON_MAX 1024u
 #define WATCHY_PORTAL_CLIENT_TIMEOUT_MS 15000u
+
+typedef struct {
+    char *body;
+    size_t body_size;
+    cJSON *root;
+} portal_json_request_t;
 
 typedef struct {
     httpd_handle_t server;
@@ -132,6 +145,36 @@ static esp_err_t send_public_error(httpd_req_t *request,
     return send_json(request, error.http_status, body);
 }
 
+static esp_err_t public_code(httpd_req_t *request,
+                             uint16_t status,
+                             const char *code) {
+    return send_public_error(request,
+                             (watchy_portal_error_response_t){status, code});
+}
+
+static esp_err_t storage_error(httpd_req_t *request) {
+    return public_code(request, 507u, "storage_error");
+}
+
+static esp_err_t send_json_tree(httpd_req_t *request,
+                                uint16_t status,
+                                cJSON *root) {
+    char *serialized;
+    esp_err_t result;
+    if (root == NULL) {
+        return public_code(request, 500u, "internal_error");
+    }
+    serialized = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (serialized == NULL) {
+        return public_code(request, 500u, "internal_error");
+    }
+    result = send_json(request, status, serialized);
+    memset(serialized, 0, strlen(serialized));
+    cJSON_free(serialized);
+    return result;
+}
+
 static bool read_header(httpd_req_t *request,
                         const char *name,
                         char *value,
@@ -161,19 +204,338 @@ static esp_err_t send_status(httpd_req_t *request) {
     watchy_battery_state_t battery = {0};
     size_t total = 0u;
     size_t free_bytes = 0u;
-    char body[320];
     const bool battery_ok = watchy_battery_read(&battery) == WATCHY_STATUS_OK;
     const bool storage_ok = watchy_storage_space(&total, &free_bytes) == WATCHY_STATUS_OK;
     const char *network = s_portal.info.client_mode ? "client" : "access_point";
-    const int length = snprintf(body, sizeof(body),
-        "{\"battery\":{\"available\":%s,\"mv\":%u,\"percent\":%u},"
-        "\"storage\":{\"available\":%s,\"total\":%zu,\"free\":%zu},"
-        "\"network\":\"%s\",\"address\":\"%s\"}",
-        battery_ok ? "true" : "false", battery.millivolts, battery.percent,
-        storage_ok ? "true" : "false", total, free_bytes, network, s_portal.info.address);
-    return length < 0 || length >= (int)sizeof(body)
-               ? send_public_error(request, (watchy_portal_error_response_t){500u, "internal_error"})
-               : send_json(request, 200u, body);
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON *root = cJSON_CreateObject();
+    cJSON *battery_json;
+    cJSON *storage_json;
+    cJSON *firmware_json;
+    if (root == NULL ||
+        (battery_json = cJSON_AddObjectToObject(root, "battery")) == NULL ||
+        cJSON_AddBoolToObject(battery_json, "available", battery_ok) == NULL ||
+        cJSON_AddNumberToObject(battery_json, "mv", battery.millivolts) == NULL ||
+        cJSON_AddNumberToObject(battery_json, "percent", battery.percent) == NULL ||
+        (storage_json = cJSON_AddObjectToObject(root, "storage")) == NULL ||
+        cJSON_AddBoolToObject(storage_json, "available", storage_ok) == NULL ||
+        cJSON_AddNumberToObject(storage_json, "total", (double)total) == NULL ||
+        cJSON_AddNumberToObject(storage_json, "free", (double)free_bytes) == NULL ||
+        cJSON_AddStringToObject(root, "network", network) == NULL ||
+        cJSON_AddStringToObject(root, "address", s_portal.info.address) == NULL ||
+        (firmware_json = cJSON_AddObjectToObject(root, "firmware")) == NULL ||
+        cJSON_AddStringToObject(firmware_json, "project", app->project_name) == NULL ||
+        cJSON_AddStringToObject(firmware_json, "version", app->version) == NULL ||
+        cJSON_AddStringToObject(firmware_json, "buildDate", app->date) == NULL ||
+        cJSON_AddStringToObject(firmware_json, "buildTime", app->time) == NULL ||
+        cJSON_AddBoolToObject(root, "onWatchDiagnostics", true) == NULL) {
+        cJSON_Delete(root);
+        return public_code(request, 500u, "internal_error");
+    }
+    return send_json_tree(request, 200u, root);
+}
+
+static const char *transition_level_name(watchy_transition_level_t level) {
+    switch (level) {
+    case WATCHY_TRANSITION_LEVEL_FULL: return "full";
+    case WATCHY_TRANSITION_LEVEL_REDUCED: return "reduced";
+    case WATCHY_TRANSITION_LEVEL_OFF: return "off";
+    }
+    return NULL;
+}
+
+static cJSON *add_time_object(cJSON *root,
+                              const char *name,
+                              const watchy_time_t *time) {
+    cJSON *object = cJSON_AddObjectToObject(root, name);
+    if (object == NULL ||
+        cJSON_AddNumberToObject(object, "year", time->year) == NULL ||
+        cJSON_AddNumberToObject(object, "month", time->month) == NULL ||
+        cJSON_AddNumberToObject(object, "day", time->day) == NULL ||
+        cJSON_AddNumberToObject(object, "hour", time->hour) == NULL ||
+        cJSON_AddNumberToObject(object, "minute", time->minute) == NULL ||
+        cJSON_AddNumberToObject(object, "second", time->second) == NULL ||
+        cJSON_AddNumberToObject(object, "weekday", time->weekday) == NULL ||
+        cJSON_AddNumberToObject(object, "utcOffsetMinutes",
+                               time->utc_offset_minutes) == NULL) {
+        return NULL;
+    }
+    return object;
+}
+
+static esp_err_t send_settings_json(httpd_req_t *request,
+                                    const watchy_settings_t *settings,
+                                    const watchy_time_t *local_time) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *wifi;
+    int16_t offset;
+    char timezone_label[16];
+    const char *transition = transition_level_name(settings->transition_level);
+    if (root == NULL || transition == NULL ||
+        !watchy_settings_format_timezone(settings, timezone_label,
+                                         sizeof(timezone_label)) ||
+        cJSON_AddBoolToObject(root, "time24h", settings->time_24h) == NULL ||
+        cJSON_AddBoolToObject(root, "motionWake", settings->motion_wake) == NULL ||
+        cJSON_AddStringToObject(root, "transitionLevel", transition) == NULL ||
+        cJSON_AddNumberToObject(root, "partialRefreshLimit",
+                               settings->partial_refresh_limit) == NULL ||
+        cJSON_AddStringToObject(root, "timezone", settings->timezone) == NULL ||
+        cJSON_AddStringToObject(root, "timezoneLabel", timezone_label) == NULL ||
+        cJSON_AddStringToObject(root, "ntpServer", settings->ntp_server) == NULL ||
+        cJSON_AddStringToObject(root, "activeWatchface",
+                               settings->active_watchface) == NULL ||
+        (wifi = cJSON_AddObjectToObject(root, "wifi")) == NULL ||
+        cJSON_AddStringToObject(wifi, "ssid", settings->wifi_ssid) == NULL ||
+        cJSON_AddBoolToObject(wifi, "configured",
+                             settings->wifi_ssid[0] != '\0') == NULL) {
+        cJSON_Delete(root);
+        return public_code(request, 500u, "internal_error");
+    }
+    if (watchy_settings_timezone_offset(settings, &offset)) {
+        if (cJSON_AddNumberToObject(root, "timezoneOffsetMinutes", offset) == NULL) {
+            cJSON_Delete(root);
+            return public_code(request, 500u, "internal_error");
+        }
+    } else if (cJSON_AddNullToObject(root, "timezoneOffsetMinutes") == NULL) {
+        cJSON_Delete(root);
+        return public_code(request, 500u, "internal_error");
+    }
+    if (local_time != NULL && add_time_object(root, "time", local_time) == NULL) {
+        cJSON_Delete(root);
+        return public_code(request, 500u, "internal_error");
+    }
+    return send_json_tree(request, 200u, root);
+}
+
+static esp_err_t send_wifi_json(httpd_req_t *request,
+                                const watchy_settings_t *settings) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *wifi;
+    if (root == NULL || (wifi = cJSON_AddObjectToObject(root, "wifi")) == NULL ||
+        cJSON_AddStringToObject(wifi, "ssid", settings->wifi_ssid) == NULL ||
+        cJSON_AddBoolToObject(wifi, "configured",
+                             settings->wifi_ssid[0] != '\0') == NULL) {
+        cJSON_Delete(root);
+        return public_code(request, 500u, "internal_error");
+    }
+    return send_json_tree(request, 200u, root);
+}
+
+static esp_err_t send_time_json(httpd_req_t *request,
+                                const watchy_time_t *local_time) {
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL || add_time_object(root, "time", local_time) == NULL) {
+        cJSON_Delete(root);
+        return public_code(request, 500u, "internal_error");
+    }
+    return send_json_tree(request, 200u, root);
+}
+
+static void clear_json_request(portal_json_request_t *document) {
+    if (document == NULL) return;
+    cJSON_Delete(document->root);
+    document->root = NULL;
+    if (document->body != NULL) {
+        memset(document->body, 0, document->body_size);
+        free(document->body);
+        document->body = NULL;
+    }
+    document->body_size = 0u;
+}
+
+static bool json_member_names_unique(const cJSON *root) {
+    for (const cJSON *member = root->child; member != NULL; member = member->next) {
+        if (member->string == NULL) return false;
+        for (const cJSON *prior = root->child; prior != member; prior = prior->next) {
+            if (strcmp(prior->string, member->string) == 0) return false;
+        }
+    }
+    return true;
+}
+
+static watchy_portal_error_response_t read_json_object(
+    httpd_req_t *request,
+    portal_json_request_t *out_document) {
+    char content_type[32];
+    const char *parse_end = NULL;
+    size_t received_total = 0u;
+    watchy_portal_error_response_t error = {0u, NULL};
+
+    memset(out_document, 0, sizeof(*out_document));
+    if (!read_header(request, "Content-Type", content_type,
+                     sizeof(content_type)) ||
+        strcmp(content_type, "application/json") != 0) {
+        return (watchy_portal_error_response_t){415u, "content_type"};
+    }
+    if (request->content_len == 0u) {
+        return (watchy_portal_error_response_t){411u, "content_length"};
+    }
+    if (request->content_len > WATCHY_PORTAL_JSON_MAX) {
+        return (watchy_portal_error_response_t){413u, "request_too_large"};
+    }
+    out_document->body_size = request->content_len + 1u;
+    out_document->body = calloc(out_document->body_size, 1u);
+    if (out_document->body == NULL) {
+        return (watchy_portal_error_response_t){500u, "internal_error"};
+    }
+    while (received_total < request->content_len) {
+        const int received = httpd_req_recv(
+            request, out_document->body + received_total,
+            request->content_len - received_total);
+        if (received <= 0) {
+            error = (watchy_portal_error_response_t){400u, "invalid_request"};
+            goto failure;
+        }
+        received_total += (size_t)received;
+    }
+    out_document->root = cJSON_ParseWithLengthOpts(
+        out_document->body, out_document->body_size, &parse_end, true);
+    if (out_document->root == NULL) {
+        error = (watchy_portal_error_response_t){400u, "invalid_request"};
+        goto failure;
+    }
+    if (parse_end != out_document->body + request->content_len ||
+        !cJSON_IsObject(out_document->root) ||
+        !json_member_names_unique(out_document->root)) {
+        return (watchy_portal_error_response_t){400u, "invalid_request"};
+    }
+    return error;
+
+failure:
+    clear_json_request(out_document);
+    return error;
+}
+
+static bool json_integer(const cJSON *item,
+                         int minimum,
+                         int maximum,
+                         int *out_value) {
+    int value;
+    if (!cJSON_IsNumber(item) || item->valuedouble < (double)minimum ||
+        item->valuedouble > (double)maximum) {
+        return false;
+    }
+    value = (int)item->valuedouble;
+    if ((double)value != item->valuedouble) return false;
+    *out_value = value;
+    return true;
+}
+
+static bool parse_settings_patch(const cJSON *root,
+                                 watchy_portal_settings_patch_t *out_patch) {
+    memset(out_patch, 0, sizeof(*out_patch));
+    for (const cJSON *member = root->child; member != NULL; member = member->next) {
+        if (strcmp(member->string, "time24h") == 0) {
+            if (!cJSON_IsBool(member)) return false;
+            out_patch->has_time_24h = true;
+            out_patch->time_24h = cJSON_IsTrue(member);
+        } else if (strcmp(member->string, "motionWake") == 0) {
+            if (!cJSON_IsBool(member)) return false;
+            out_patch->has_motion_wake = true;
+            out_patch->motion_wake = cJSON_IsTrue(member);
+        } else if (strcmp(member->string, "transitionLevel") == 0) {
+            if (!cJSON_IsString(member)) return false;
+            out_patch->has_transition_level = true;
+            if (strcmp(member->valuestring, "full") == 0) {
+                out_patch->transition_level = WATCHY_TRANSITION_LEVEL_FULL;
+            } else if (strcmp(member->valuestring, "reduced") == 0) {
+                out_patch->transition_level = WATCHY_TRANSITION_LEVEL_REDUCED;
+            } else if (strcmp(member->valuestring, "off") == 0) {
+                out_patch->transition_level = WATCHY_TRANSITION_LEVEL_OFF;
+            } else {
+                return false;
+            }
+        } else if (strcmp(member->string, "partialRefreshLimit") == 0) {
+            int value;
+            if (!json_integer(member, 1, WATCHY_SETTINGS_PARTIAL_LIMIT_MAX,
+                              &value)) {
+                return false;
+            }
+            out_patch->has_partial_refresh_limit = true;
+            out_patch->partial_refresh_limit = (uint16_t)value;
+        } else if (strcmp(member->string, "timezoneOffsetMinutes") == 0) {
+            int value;
+            if (!json_integer(member, INT16_MIN, INT16_MAX, &value)) return false;
+            out_patch->has_timezone_offset = true;
+            out_patch->timezone_offset_minutes = (int16_t)value;
+        } else if (strcmp(member->string, "ntpServer") == 0) {
+            if (!cJSON_IsString(member) ||
+                strnlen(member->valuestring, WATCHY_SETTINGS_NTP_SERVER_MAX + 1u) >
+                    WATCHY_SETTINGS_NTP_SERVER_MAX) {
+                return false;
+            }
+            out_patch->has_ntp_server = true;
+            out_patch->ntp_server = member->valuestring;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool parse_wifi_patch(const cJSON *root,
+                             watchy_portal_wifi_patch_t *out_patch,
+                             char ssid[WATCHY_SETTINGS_WIFI_SSID_MAX + 1u],
+                             char password[WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u],
+                             cJSON **out_password_member) {
+    const cJSON *ssid_member = NULL;
+    const cJSON *password_member = NULL;
+    memset(out_patch, 0, sizeof(*out_patch));
+    memset(ssid, 0, WATCHY_SETTINGS_WIFI_SSID_MAX + 1u);
+    memset(password, 0, WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u);
+    *out_password_member = NULL;
+    for (const cJSON *member = root->child; member != NULL; member = member->next) {
+        if (strcmp(member->string, "ssid") == 0) ssid_member = member;
+        else if (strcmp(member->string, "password") == 0) password_member = member;
+        else return false;
+    }
+    if (!cJSON_IsString(ssid_member)) return false;
+    const size_t ssid_length = strnlen(
+        ssid_member->valuestring, WATCHY_SETTINGS_WIFI_SSID_MAX + 1u);
+    if (ssid_length > WATCHY_SETTINGS_WIFI_SSID_MAX) return false;
+    memcpy(ssid, ssid_member->valuestring, ssid_length);
+    if (password_member != NULL) {
+        if (!cJSON_IsString(password_member)) return false;
+        const size_t password_length = strnlen(
+            password_member->valuestring, WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u);
+        if (password_length > WATCHY_SETTINGS_WIFI_PASSWORD_MAX) return false;
+        memcpy(password, password_member->valuestring, password_length);
+        out_patch->password_present = true;
+        out_patch->password = password;
+        *out_password_member = (cJSON *)password_member;
+    }
+    out_patch->ssid = ssid;
+    return true;
+}
+
+static bool parse_time_fields(const cJSON *root,
+                              int *year,
+                              int *month,
+                              int *day,
+                              int *hour,
+                              int *minute) {
+    unsigned found = 0u;
+    for (const cJSON *member = root->child; member != NULL; member = member->next) {
+        if (strcmp(member->string, "year") == 0) {
+            if (!json_integer(member, 2000, 2099, year)) return false;
+            found |= 1u;
+        } else if (strcmp(member->string, "month") == 0) {
+            if (!json_integer(member, 1, 12, month)) return false;
+            found |= 2u;
+        } else if (strcmp(member->string, "day") == 0) {
+            if (!json_integer(member, 1, 31, day)) return false;
+            found |= 4u;
+        } else if (strcmp(member->string, "hour") == 0) {
+            if (!json_integer(member, 0, 23, hour)) return false;
+            found |= 8u;
+        } else if (strcmp(member->string, "minute") == 0) {
+            if (!json_integer(member, 0, 59, minute)) return false;
+            found |= 16u;
+        } else {
+            return false;
+        }
+    }
+    return found == 31u;
 }
 
 static esp_err_t send_json_escaped_chunk(httpd_req_t *request, const char *text) {
@@ -340,7 +702,254 @@ static esp_err_t mutate_package(httpd_req_t *request,
                : send_public_error(request, watchy_portal_map_package_error(status));
 }
 
-static esp_err_t provision_wifi(httpd_req_t *request) {
+static esp_err_t get_settings(httpd_req_t *request) {
+    watchy_settings_t settings;
+    watchy_time_t local_time;
+    const watchy_time_t *time_response = NULL;
+    esp_err_t response;
+    memset(&settings, 0, sizeof(settings));
+    memset(&local_time, 0, sizeof(local_time));
+    if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    if (watchy_rtc_read_local(&local_time) == WATCHY_STATUS_OK) {
+        time_response = &local_time;
+    }
+    response = send_settings_json(request, &settings, time_response);
+
+cleanup:
+    memset(&settings, 0, sizeof(settings));
+    memset(&local_time, 0, sizeof(local_time));
+    return response;
+}
+
+static watchy_status_t portal_set_rtc_offset(void *context, int16_t minutes) {
+    (void)context;
+    return watchy_rtc_set_utc_offset(minutes);
+}
+
+static watchy_status_t portal_save_settings(
+    void *context,
+    const watchy_settings_t *settings) {
+    (void)context;
+    return watchy_settings_save(settings);
+}
+
+static watchy_status_t portal_read_local(void *context,
+                                         watchy_time_t *out_time) {
+    (void)context;
+    return watchy_rtc_read_local(out_time);
+}
+
+static const watchy_timezone_action_ops_t portal_timezone_ops = {
+    .set_rtc_offset = portal_set_rtc_offset,
+    .save_settings = portal_save_settings,
+    .read_local = portal_read_local,
+    .context = NULL,
+};
+
+static esp_err_t update_settings(httpd_req_t *request) {
+    portal_json_request_t document = {0};
+    watchy_portal_settings_patch_t patch;
+    watchy_settings_t current;
+    watchy_settings_t candidate;
+    watchy_time_t local_time;
+    watchy_portal_error_response_t json_error;
+    esp_err_t response;
+    memset(&patch, 0, sizeof(patch));
+    memset(&current, 0, sizeof(current));
+    memset(&candidate, 0, sizeof(candidate));
+    memset(&local_time, 0, sizeof(local_time));
+
+    json_error = read_json_object(request, &document);
+    if (json_error.http_status != 0u) {
+        response = send_public_error(request, json_error);
+        goto cleanup;
+    }
+    if (watchy_settings_load(&current) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    if (!parse_settings_patch(document.root, &patch)) {
+        response = public_code(request, 400u, "invalid_request");
+        goto cleanup;
+    }
+    if (!watchy_portal_apply_settings_patch(&current, &patch, &candidate)) {
+        response = public_code(request, 422u, "invalid_settings");
+        goto cleanup;
+    }
+    if (watchy_rtc_read_local(&local_time) != WATCHY_STATUS_OK ||
+        watchy_timezone_action_apply(&current, &candidate, &local_time,
+                                     &portal_timezone_ops) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    response = send_settings_json(request, &current, &local_time);
+
+cleanup:
+    clear_json_request(&document);
+    memset(&patch, 0, sizeof(patch));
+    memset(&current, 0, sizeof(current));
+    memset(&candidate, 0, sizeof(candidate));
+    memset(&local_time, 0, sizeof(local_time));
+    return response;
+}
+
+static void wipe_wifi_password_members(cJSON *root) {
+    if (root == NULL) return;
+    for (cJSON *member = root->child; member != NULL; member = member->next) {
+        if (member->string != NULL && strcmp(member->string, "password") == 0 &&
+            cJSON_IsString(member) && member->valuestring != NULL) {
+            memset(member->valuestring, 0, strlen(member->valuestring));
+        }
+    }
+}
+
+static esp_err_t update_wifi(httpd_req_t *request) {
+    portal_json_request_t document = {0};
+    watchy_portal_wifi_patch_t patch;
+    watchy_settings_t current;
+    watchy_settings_t candidate;
+    cJSON *password_member = NULL;
+    char ssid[WATCHY_SETTINGS_WIFI_SSID_MAX + 1u] = {0};
+    char password[WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u] = {0};
+    watchy_portal_error_response_t json_error;
+    esp_err_t response;
+    memset(&patch, 0, sizeof(patch));
+    memset(&current, 0, sizeof(current));
+    memset(&candidate, 0, sizeof(candidate));
+
+    if (s_portal.info.client_mode) {
+        response = public_code(request, 409u, "conflict");
+        goto cleanup;
+    }
+    json_error = read_json_object(request, &document);
+    if (json_error.http_status != 0u) {
+        response = send_public_error(request, json_error);
+        goto cleanup;
+    }
+    if (!parse_wifi_patch(document.root, &patch, ssid, password,
+                          &password_member)) {
+        response = public_code(request, 400u, "invalid_request");
+        goto cleanup;
+    }
+    if (watchy_settings_load(&current) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    if (!watchy_portal_apply_wifi_patch(&current, &patch, &candidate)) {
+        response = public_code(request, 422u, "invalid_wifi");
+        goto cleanup;
+    }
+    if (watchy_settings_save(&candidate) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    response = send_wifi_json(request, &candidate);
+
+cleanup:
+    if (password_member != NULL && password_member->valuestring != NULL) {
+        memset(password_member->valuestring, 0,
+               strlen(password_member->valuestring));
+    }
+    wipe_wifi_password_members(document.root);
+    clear_json_request(&document);
+    memset(password, 0, sizeof(password));
+    memset(ssid, 0, sizeof(ssid));
+    memset(&patch, 0, sizeof(patch));
+    memset(&current, 0, sizeof(current));
+    memset(&candidate, 0, sizeof(candidate));
+    return response;
+}
+
+static esp_err_t set_time(httpd_req_t *request) {
+    portal_json_request_t document = {0};
+    watchy_settings_t settings;
+    watchy_time_t local_time;
+    watchy_portal_error_response_t json_error;
+    int16_t offset;
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    esp_err_t response;
+    memset(&settings, 0, sizeof(settings));
+    memset(&local_time, 0, sizeof(local_time));
+
+    json_error = read_json_object(request, &document);
+    if (json_error.http_status != 0u) {
+        response = send_public_error(request, json_error);
+        goto cleanup;
+    }
+    if (!parse_time_fields(document.root, &year, &month, &day, &hour,
+                           &minute)) {
+        response = public_code(request, 400u, "invalid_request");
+        goto cleanup;
+    }
+    if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    if (!watchy_settings_timezone_offset(&settings, &offset) ||
+        !watchy_portal_time_from_fields(year, month, day, hour, minute,
+                                       offset, &local_time)) {
+        response = public_code(request, 422u, "invalid_time");
+        goto cleanup;
+    }
+    if (watchy_rtc_set_local(&local_time) != WATCHY_STATUS_OK) {
+        response = public_code(request, 500u, "rtc_error");
+        goto cleanup;
+    }
+    response = send_time_json(request, &local_time);
+
+cleanup:
+    clear_json_request(&document);
+    memset(&settings, 0, sizeof(settings));
+    memset(&local_time, 0, sizeof(local_time));
+    return response;
+}
+
+static esp_err_t sync_ntp(httpd_req_t *request) {
+    watchy_settings_t settings;
+    watchy_time_t local_time;
+    esp_err_t response;
+    memset(&settings, 0, sizeof(settings));
+    memset(&local_time, 0, sizeof(local_time));
+
+    if (!s_portal.info.client_mode) {
+        response = public_code(request, 409u, "client_mode_required");
+        goto cleanup;
+    }
+    if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
+        response = storage_error(request);
+        goto cleanup;
+    }
+    if (settings.wifi_ssid[0] == '\0') {
+        response = public_code(request, 409u, "no_wifi");
+        goto cleanup;
+    }
+    mark_authenticated_activity();
+    const watchy_status_t sync_status = watchy_time_sync_connected(&settings);
+    mark_authenticated_activity();
+    if (sync_status != WATCHY_STATUS_OK) {
+        response = public_code(request, 500u, "ntp_error");
+        goto cleanup;
+    }
+    if (watchy_rtc_read_local(&local_time) != WATCHY_STATUS_OK) {
+        response = public_code(request, 500u, "rtc_error");
+        goto cleanup;
+    }
+    response = send_settings_json(request, &settings, &local_time);
+
+cleanup:
+    memset(&settings, 0, sizeof(settings));
+    memset(&local_time, 0, sizeof(local_time));
+    return response;
+}
+
+static esp_err_t provision_wifi_legacy(httpd_req_t *request) {
     watchy_settings_t settings;
     char ssid[WATCHY_SETTINGS_WIFI_SSID_MAX + 1u];
     char password[WATCHY_SETTINGS_WIFI_PASSWORD_MAX + 1u] = {0};
@@ -359,23 +968,27 @@ static esp_err_t provision_wifi(httpd_req_t *request) {
         return send_public_error(request,
             (watchy_portal_error_response_t){400u, "invalid_request"});
     }
+    memset(&settings, 0, sizeof(settings));
     if (watchy_settings_load(&settings) != WATCHY_STATUS_OK) {
         memset(password, 0, sizeof(password));
+        memset(&settings, 0, sizeof(settings));
         return send_public_error(request,
             (watchy_portal_error_response_t){507u, "storage_error"});
     }
     if (!watchy_settings_set_wifi(&settings, ssid, password)) {
         memset(password, 0, sizeof(password));
+        memset(&settings, 0, sizeof(settings));
         return send_public_error(request,
             (watchy_portal_error_response_t){400u, "invalid_request"});
     }
     const watchy_status_t status = watchy_settings_save(&settings);
-    memset(settings.wifi_password, 0, sizeof(settings.wifi_password));
+    const esp_err_t response = status == WATCHY_STATUS_OK
+                                   ? send_wifi_json(request, &settings)
+                                   : storage_error(request);
+    memset(&settings, 0, sizeof(settings));
     memset(password, 0, sizeof(password));
-    return status == WATCHY_STATUS_OK
-               ? send_json(request, 200u, "{\"ok\":true}")
-               : send_public_error(request,
-                    (watchy_portal_error_response_t){507u, "storage_error"});
+    memset(ssid, 0, sizeof(ssid));
+    return response;
 }
 
 static esp_err_t request_handler(httpd_req_t *request) {
@@ -399,6 +1012,7 @@ static esp_err_t request_handler(httpd_req_t *request) {
     portEXIT_CRITICAL(&s_portal_mux);
     if (request->method == HTTP_GET) method = WATCHY_PORTAL_METHOD_GET;
     else if (request->method == HTTP_POST) method = WATCHY_PORTAL_METHOD_POST;
+    else if (request->method == HTTP_PUT) method = WATCHY_PORTAL_METHOD_PUT;
     else if (request->method == HTTP_DELETE) method = WATCHY_PORTAL_METHOD_DELETE;
     else return send_public_error(request, watchy_portal_error_from_policy(
                                       WATCHY_PORTAL_ERR_INVALID_ROUTE));
@@ -409,9 +1023,15 @@ static esp_err_t request_handler(httpd_req_t *request) {
     switch (route.action) {
     case WATCHY_PORTAL_ROUTE_PAGE: return send_page(request);
     case WATCHY_PORTAL_ROUTE_STATUS: return send_status(request);
+    case WATCHY_PORTAL_ROUTE_GET_SETTINGS: return get_settings(request);
+    case WATCHY_PORTAL_ROUTE_UPDATE_SETTINGS: return update_settings(request);
     case WATCHY_PORTAL_ROUTE_PACKAGES: return send_packages(request);
     case WATCHY_PORTAL_ROUTE_UPLOAD: return receive_upload(request);
-    case WATCHY_PORTAL_ROUTE_PROVISION_WIFI: return provision_wifi(request);
+    case WATCHY_PORTAL_ROUTE_PROVISION_WIFI:
+        return request->method == HTTP_PUT ? update_wifi(request)
+                                           : provision_wifi_legacy(request);
+    case WATCHY_PORTAL_ROUTE_SET_TIME: return set_time(request);
+    case WATCHY_PORTAL_ROUTE_SYNC_NTP: return sync_ntp(request);
     case WATCHY_PORTAL_ROUTE_ACTIVATE:
     case WATCHY_PORTAL_ROUTE_REMOVE: return mutate_package(request, &route);
     default: return send_public_error(request, watchy_portal_error_from_policy(
@@ -548,6 +1168,8 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
                              .handler = request_handler, .user_ctx = NULL};
     const httpd_uri_t post = {.uri = "/*", .method = HTTP_POST,
                               .handler = request_handler, .user_ctx = NULL};
+    const httpd_uri_t put = {.uri = "/*", .method = HTTP_PUT,
+                             .handler = request_handler, .user_ctx = NULL};
     const httpd_uri_t remove = {.uri = "/*", .method = HTTP_DELETE,
                                 .handler = request_handler, .user_ctx = NULL};
     if (settings == NULL || out_info == NULL || watchy_portal_active()) {
@@ -570,6 +1192,7 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
     if (httpd_start(&s_portal.server, &config) != ESP_OK ||
         httpd_register_uri_handler(s_portal.server, &get) != ESP_OK ||
         httpd_register_uri_handler(s_portal.server, &post) != ESP_OK ||
+        httpd_register_uri_handler(s_portal.server, &put) != ESP_OK ||
         httpd_register_uri_handler(s_portal.server, &remove) != ESP_OK) {
         watchy_portal_stop();
         return WATCHY_STATUS_INVALID_STATE;

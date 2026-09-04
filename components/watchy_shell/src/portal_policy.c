@@ -1,5 +1,7 @@
 #include "watchy/portal.h"
 
+#include "watchy/rtc_calendar.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -109,6 +111,17 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
         out_route->action = WATCHY_PORTAL_ROUTE_STATUS;
         return true;
     }
+    if (strcmp(path, "/api/v1/settings") == 0) {
+        if (method == WATCHY_PORTAL_METHOD_GET) {
+            out_route->action = WATCHY_PORTAL_ROUTE_GET_SETTINGS;
+            return true;
+        }
+        if (method == WATCHY_PORTAL_METHOD_PUT) {
+            out_route->action = WATCHY_PORTAL_ROUTE_UPDATE_SETTINGS;
+            return true;
+        }
+        return false;
+    }
     if (strcmp(path, "/api/v1/packages") == 0) {
         if (method == WATCHY_PORTAL_METHOD_GET) {
             out_route->action = WATCHY_PORTAL_ROUTE_PACKAGES;
@@ -120,8 +133,17 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
         }
         return false;
     }
-    if (method == WATCHY_PORTAL_METHOD_POST && strcmp(path, "/api/v1/wifi") == 0) {
+    if ((method == WATCHY_PORTAL_METHOD_POST || method == WATCHY_PORTAL_METHOD_PUT) &&
+        strcmp(path, "/api/v1/wifi") == 0) {
         out_route->action = WATCHY_PORTAL_ROUTE_PROVISION_WIFI;
+        return true;
+    }
+    if (method == WATCHY_PORTAL_METHOD_PUT && strcmp(path, "/api/v1/time") == 0) {
+        out_route->action = WATCHY_PORTAL_ROUTE_SET_TIME;
+        return true;
+    }
+    if (method == WATCHY_PORTAL_METHOD_POST && strcmp(path, "/api/v1/time/ntp") == 0) {
+        out_route->action = WATCHY_PORTAL_ROUTE_SYNC_NTP;
         return true;
     }
     if (method == WATCHY_PORTAL_METHOD_POST &&
@@ -163,6 +185,126 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
         return true;
     }
     return false;
+}
+
+bool watchy_portal_apply_settings_patch(
+    const watchy_settings_t *current,
+    const watchy_portal_settings_patch_t *patch,
+    watchy_settings_t *out_settings) {
+    watchy_settings_t candidate;
+    size_t ntp_length;
+
+    if (current == NULL || patch == NULL || out_settings == NULL) {
+        return false;
+    }
+    *out_settings = *current;
+    if (!watchy_settings_valid(current)) {
+        return false;
+    }
+    candidate = *current;
+    if (patch->has_time_24h) candidate.time_24h = patch->time_24h;
+    if (patch->has_motion_wake) candidate.motion_wake = patch->motion_wake;
+    if (patch->has_transition_level) {
+        candidate.transition_level = patch->transition_level;
+    }
+    if (patch->has_partial_refresh_limit) {
+        candidate.partial_refresh_limit = patch->partial_refresh_limit;
+    }
+    if (patch->has_timezone_offset &&
+        !watchy_settings_set_timezone_offset(&candidate,
+                                             patch->timezone_offset_minutes)) {
+        return false;
+    }
+    if (patch->has_ntp_server) {
+        if (patch->ntp_server == NULL ||
+            (ntp_length = strnlen(patch->ntp_server,
+                                  WATCHY_SETTINGS_NTP_SERVER_MAX + 1u)) >
+                WATCHY_SETTINGS_NTP_SERVER_MAX) {
+            return false;
+        }
+        memset(candidate.ntp_server, 0, sizeof(candidate.ntp_server));
+        memcpy(candidate.ntp_server, patch->ntp_server, ntp_length);
+    }
+    if (!watchy_settings_valid(&candidate)) {
+        return false;
+    }
+    *out_settings = candidate;
+    return true;
+}
+
+bool watchy_portal_time_from_fields(int year, int month, int day,
+                                    int hour, int minute,
+                                    int16_t utc_offset_minutes,
+                                    watchy_time_t *out_time) {
+    watchy_settings_t offset_settings;
+    watchy_time_t candidate;
+    int64_t unix_seconds;
+
+    if (out_time == NULL || year < 2000 || year > 2099 ||
+        month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return false;
+    }
+    watchy_settings_defaults(&offset_settings);
+    if (!watchy_settings_set_timezone_offset(&offset_settings,
+                                             utc_offset_minutes)) {
+        return false;
+    }
+    candidate = (watchy_time_t){
+        .year = (int16_t)year,
+        .month = (uint8_t)month,
+        .day = (uint8_t)day,
+        .hour = (uint8_t)hour,
+        .minute = (uint8_t)minute,
+        .second = 0u,
+        .weekday = 0u,
+        .utc_offset_minutes = utc_offset_minutes,
+    };
+    if (!watchy_settings_local_time_valid(&candidate) ||
+        watchy_calendar_to_unix(&candidate, &unix_seconds) != WATCHY_STATUS_OK ||
+        watchy_calendar_from_unix(unix_seconds, utc_offset_minutes,
+                                 &candidate) != WATCHY_STATUS_OK) {
+        return false;
+    }
+    *out_time = candidate;
+    return true;
+}
+
+bool watchy_portal_apply_wifi_patch(
+    const watchy_settings_t *current,
+    const watchy_portal_wifi_patch_t *patch,
+    watchy_settings_t *out_settings) {
+    watchy_settings_t candidate;
+    size_t ssid_length;
+    const char *password;
+
+    if (current == NULL || patch == NULL || out_settings == NULL) {
+        return false;
+    }
+    *out_settings = *current;
+    if (!watchy_settings_valid(current) || patch->ssid == NULL ||
+        (ssid_length = strnlen(patch->ssid, WATCHY_SETTINGS_WIFI_SSID_MAX + 1u)) >
+            WATCHY_SETTINGS_WIFI_SSID_MAX) {
+        return false;
+    }
+    if (!patch->password_present) {
+        if (strlen(current->wifi_ssid) != ssid_length ||
+            memcmp(current->wifi_ssid, patch->ssid, ssid_length) != 0) {
+            return false;
+        }
+        password = current->wifi_password;
+    } else {
+        if (patch->password == NULL) {
+            return false;
+        }
+        password = patch->password;
+    }
+    candidate = *current;
+    if (!watchy_settings_set_wifi(&candidate, patch->ssid, password)) {
+        return false;
+    }
+    *out_settings = candidate;
+    return true;
 }
 
 watchy_portal_policy_status_t watchy_portal_check_upload(

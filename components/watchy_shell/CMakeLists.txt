@@ -21,9 +21,11 @@ idf_component_register(
         watchy_hal
         watchy_packages
         esp_http_server
+        esp_app_format
         esp_netif
         esp_wifi
         bootloader_support
+        json
         mbedtls
         nvs_flash
 )

@@ -189,6 +189,9 @@ add_test(NAME watchy_shell_render_golden_mutation
 add_executable(watchy_portal_tests
   test_portal.c
   ../../components/watchy_shell/src/portal_policy.c
+  ../../components/watchy_shell/src/settings_policy.c
+  ../../components/watchy_shell/src/timezone_action_policy.c
+  ../../components/watchy_hal/src/rtc_calendar.c
   ../../components/watchy_packages/src/package_format.c
 )
 target_include_directories(watchy_portal_tests PRIVATE

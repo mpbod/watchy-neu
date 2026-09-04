@@ -2,6 +2,8 @@
 #include <string.h>
 
 #include "watchy/portal.h"
+#include "watchy/rtc_calendar.h"
+#include "watchy/timezone_action.h"
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -82,6 +84,21 @@ static int test_route_parser_accepts_only_exact_valid_components(void) {
     CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
                                     "/api/v1/wifi", &route));
     CHECK(route.action == WATCHY_PORTAL_ROUTE_PROVISION_WIFI);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_GET,
+                                    "/api/v1/settings", &route));
+    CHECK(route.action == WATCHY_PORTAL_ROUTE_GET_SETTINGS);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_PUT,
+                                    "/api/v1/settings", &route));
+    CHECK(route.action == WATCHY_PORTAL_ROUTE_UPDATE_SETTINGS);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_PUT,
+                                    "/api/v1/wifi", &route));
+    CHECK(route.action == WATCHY_PORTAL_ROUTE_PROVISION_WIFI);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_PUT,
+                                    "/api/v1/time", &route));
+    CHECK(route.action == WATCHY_PORTAL_ROUTE_SET_TIME);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
+                                    "/api/v1/time/ntp", &route));
+    CHECK(route.action == WATCHY_PORTAL_ROUTE_SYNC_NTP);
     CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
                                     "/api/v1/watchface/clock.simple/1.2.3/activate", &route));
     CHECK(route.action == WATCHY_PORTAL_ROUTE_ACTIVATE);
@@ -109,6 +126,198 @@ static int test_route_parser_accepts_only_exact_valid_components(void) {
                                      "/api/v1/packages/a/1/extra", &route));
     CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_GET,
                                      "/api/v1/packages/a/1", &route));
+    CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
+                                     "/api/v1/settings", &route));
+    return 0;
+}
+
+static int test_settings_patch_builds_a_valid_candidate_or_restores_current(void) {
+    watchy_settings_t current;
+    watchy_settings_t result;
+    watchy_portal_settings_patch_t patch = {
+        .has_time_24h = true,
+        .time_24h = false,
+        .has_motion_wake = true,
+        .motion_wake = false,
+        .has_transition_level = true,
+        .transition_level = WATCHY_TRANSITION_LEVEL_REDUCED,
+        .has_partial_refresh_limit = true,
+        .partial_refresh_limit = 25u,
+        .has_timezone_offset = true,
+        .timezone_offset_minutes = 420,
+        .has_ntp_server = true,
+        .ntp_server = "time.cloudflare.com",
+    };
+    watchy_settings_defaults(&current);
+    CHECK(watchy_portal_apply_settings_patch(&current, &patch, &result));
+    CHECK(!result.time_24h && !result.motion_wake);
+    CHECK(result.transition_level == WATCHY_TRANSITION_LEVEL_REDUCED);
+    CHECK(result.partial_refresh_limit == 25u);
+    CHECK(strcmp(result.timezone, "UTC-7") == 0);
+    CHECK(strcmp(result.ntp_server, "time.cloudflare.com") == 0);
+
+    patch.ntp_server = "-invalid";
+    memset(&result, 0xa5, sizeof(result));
+    CHECK(!watchy_portal_apply_settings_patch(&current, &patch, &result));
+    CHECK(memcmp(&current, &result, sizeof(current)) == 0);
+    return 0;
+}
+
+static int test_manual_time_accepts_only_the_rtc_calendar_range(void) {
+    watchy_time_t result;
+
+    CHECK(watchy_portal_time_from_fields(2024, 2, 29, 23, 59, 345, &result));
+    CHECK(result.year == 2024 && result.month == 2u && result.day == 29u);
+    CHECK(result.hour == 23u && result.minute == 59u && result.second == 0u);
+    CHECK(result.weekday == 4u && result.utc_offset_minutes == 345);
+    CHECK(watchy_portal_time_from_fields(2000, 1, 1, 0, 0, -720, &result));
+    CHECK(watchy_portal_time_from_fields(2099, 12, 31, 23, 59, 840, &result));
+
+    CHECK(!watchy_portal_time_from_fields(1999, 12, 31, 23, 59, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2100, 1, 1, 0, 0, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2024, 0, 1, 0, 0, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2024, 13, 1, 0, 0, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2023, 2, 29, 0, 0, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2024, 4, 31, 0, 0, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2024, 1, 1, 24, 0, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2024, 1, 1, 0, 60, 0, &result));
+    CHECK(!watchy_portal_time_from_fields(2024, 1, 1, 0, 0, 75, &result));
+    return 0;
+}
+
+static int test_wifi_patch_distinguishes_omitted_and_empty_passwords(void) {
+    watchy_settings_t current;
+    watchy_settings_t result;
+    watchy_portal_wifi_patch_t keep = {
+        .ssid = "Home",
+        .password_present = false,
+        .password = NULL,
+    };
+    watchy_settings_defaults(&current);
+    CHECK(watchy_settings_set_wifi(&current, "Home", "password"));
+
+    CHECK(watchy_portal_apply_wifi_patch(&current, &keep, &result));
+    CHECK(strcmp(result.wifi_ssid, "Home") == 0);
+    CHECK(strcmp(result.wifi_password, current.wifi_password) == 0);
+    keep.ssid = "Different";
+    memset(&result, 0xa5, sizeof(result));
+    CHECK(!watchy_portal_apply_wifi_patch(&current, &keep, &result));
+    CHECK(memcmp(&current, &result, sizeof(current)) == 0);
+
+    watchy_portal_wifi_patch_t open = {
+        .ssid = "Cafe",
+        .password_present = true,
+        .password = "",
+    };
+    CHECK(watchy_portal_apply_wifi_patch(&current, &open, &result));
+    CHECK(strcmp(result.wifi_ssid, "Cafe") == 0);
+    CHECK(result.wifi_password[0] == '\0');
+    return 0;
+}
+
+typedef struct {
+    watchy_status_t rtc_status;
+    watchy_status_t save_status;
+    watchy_status_t read_status;
+    int16_t rtc_offsets[2];
+    size_t rtc_calls;
+    size_t save_calls;
+    size_t read_calls;
+    int16_t active_offset;
+    int64_t epoch;
+} timezone_action_fixture_t;
+
+static watchy_status_t timezone_test_set_rtc_offset(void *context, int16_t minutes) {
+    timezone_action_fixture_t *fixture = context;
+    if (fixture->rtc_calls < 2u) fixture->rtc_offsets[fixture->rtc_calls] = minutes;
+    ++fixture->rtc_calls;
+    if (fixture->rtc_status == WATCHY_STATUS_OK) fixture->active_offset = minutes;
+    return fixture->rtc_status;
+}
+
+static watchy_status_t timezone_test_save(void *context,
+                                         const watchy_settings_t *settings) {
+    timezone_action_fixture_t *fixture = context;
+    ++fixture->save_calls;
+    CHECK(settings != NULL);
+    return fixture->save_status;
+}
+
+static watchy_status_t timezone_test_read(void *context, watchy_time_t *out_time) {
+    timezone_action_fixture_t *fixture = context;
+    ++fixture->read_calls;
+    if (fixture->read_status != WATCHY_STATUS_OK) return fixture->read_status;
+    return watchy_calendar_from_unix(fixture->epoch, fixture->active_offset,
+                                     out_time);
+}
+
+static watchy_timezone_action_ops_t timezone_test_ops(
+    timezone_action_fixture_t *fixture) {
+    return (watchy_timezone_action_ops_t){
+        .set_rtc_offset = timezone_test_set_rtc_offset,
+        .save_settings = timezone_test_save,
+        .read_local = timezone_test_read,
+        .context = fixture,
+    };
+}
+
+static int test_portal_timezone_candidate_uses_atomic_action_and_rereads_local_time(void) {
+    watchy_settings_t settings;
+    watchy_settings_t candidate;
+    watchy_portal_settings_patch_t patch = {
+        .has_timezone_offset = true,
+        .timezone_offset_minutes = 420,
+    };
+    watchy_time_t local = {
+        .year = 2026, .month = 9u, .day = 5u,
+        .hour = 0u, .minute = 15u, .second = 0u,
+        .weekday = 6u, .utc_offset_minutes = 0,
+    };
+    int64_t epoch = 0;
+    CHECK(watchy_calendar_to_unix(&local, &epoch) == WATCHY_STATUS_OK);
+    watchy_settings_defaults(&settings);
+    CHECK(watchy_portal_apply_settings_patch(&settings, &patch, &candidate));
+
+    timezone_action_fixture_t rtc_failure = {
+        .rtc_status = WATCHY_STATUS_INVALID_STATE,
+        .save_status = WATCHY_STATUS_OK,
+        .read_status = WATCHY_STATUS_OK,
+        .epoch = epoch,
+    };
+    watchy_timezone_action_ops_t ops = timezone_test_ops(&rtc_failure);
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &local, &ops) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(rtc_failure.rtc_calls == 1u && rtc_failure.save_calls == 0u);
+    CHECK(strcmp(settings.timezone, "UTC0") == 0);
+
+    timezone_action_fixture_t save_failure = {
+        .rtc_status = WATCHY_STATUS_OK,
+        .save_status = WATCHY_STATUS_INVALID_STATE,
+        .read_status = WATCHY_STATUS_OK,
+        .epoch = epoch,
+    };
+    ops = timezone_test_ops(&save_failure);
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &local, &ops) ==
+          WATCHY_STATUS_INVALID_STATE);
+    CHECK(save_failure.rtc_calls == 2u && save_failure.rtc_offsets[0] == 420 &&
+          save_failure.rtc_offsets[1] == 0);
+    CHECK(save_failure.save_calls == 1u && save_failure.read_calls == 0u);
+    CHECK(strcmp(settings.timezone, "UTC0") == 0);
+
+    timezone_action_fixture_t success = {
+        .rtc_status = WATCHY_STATUS_OK,
+        .save_status = WATCHY_STATUS_OK,
+        .read_status = WATCHY_STATUS_OK,
+        .epoch = epoch,
+    };
+    ops = timezone_test_ops(&success);
+    CHECK(watchy_timezone_action_apply(&settings, &candidate, &local, &ops) ==
+          WATCHY_STATUS_OK);
+    CHECK(success.rtc_calls == 1u && success.save_calls == 1u &&
+          success.read_calls == 1u);
+    CHECK(strcmp(settings.timezone, "UTC-7") == 0);
+    CHECK(local.hour == 7u && local.minute == 15u &&
+          local.utc_offset_minutes == 420);
     return 0;
 }
 
@@ -296,6 +505,10 @@ int main(void) {
     failures += test_mutating_routes_require_the_exact_session_token();
     failures += test_every_route_uses_an_out_of_band_basic_session_credential();
     failures += test_route_parser_accepts_only_exact_valid_components();
+    failures += test_settings_patch_builds_a_valid_candidate_or_restores_current();
+    failures += test_manual_time_accepts_only_the_rtc_calendar_range();
+    failures += test_wifi_patch_distinguishes_omitted_and_empty_passwords();
+    failures += test_portal_timezone_candidate_uses_atomic_action_and_rereads_local_time();
     failures += test_upload_policy_enforces_content_size_battery_storage_and_exclusion();
     failures += test_package_failures_map_to_stable_public_errors();
     failures += test_ap_password_generation_brackets_a_guaranteed_entropy_source();

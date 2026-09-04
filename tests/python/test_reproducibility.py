@@ -72,6 +72,48 @@ class ReproducibilityContracts(unittest.TestCase):
         self.assertIn("derive_ap_password(config.password, sizeof(config.password))", network)
         self.assertIn("watchy_wifi_start_ap(&config)", network)
 
+    def test_portal_settings_and_wifi_responses_never_reference_password_storage(self) -> None:
+        portal = self.read("components/watchy_shell/src/portal_idf.c")
+        settings_start = portal.index("static esp_err_t send_settings_json")
+        wifi_start = portal.index("static esp_err_t send_wifi_json", settings_start)
+        next_handler = portal.index("static esp_err_t", wifi_start + 1)
+        self.assertNotIn("wifi_password", portal[settings_start:wifi_start])
+        self.assertNotIn("wifi_password", portal[wifi_start:next_handler])
+
+    def test_portal_html_symbols_never_reference_session_or_network_secrets(self) -> None:
+        portal = self.read("components/watchy_shell/src/portal_idf.c")
+        page_start = portal.index("static const char PAGE_HEAD")
+        page_end = portal.index("static uint64_t now_ms", page_start)
+        page_symbols = portal[page_start:page_end]
+        self.assertNotIn("network_secret", page_symbols)
+        self.assertNotIn("token", page_symbols)
+
+    def test_portal_settings_update_uses_shared_timezone_transaction(self) -> None:
+        portal = self.read("components/watchy_shell/src/portal_idf.c")
+        update_start = portal.index("static esp_err_t update_settings")
+        update_end = portal.index("static esp_err_t", update_start + 1)
+        update = portal[update_start:update_end]
+        self.assertIn("watchy_timezone_action_apply", update)
+        self.assertNotIn("watchy_settings_save(&candidate)", update)
+
+    def test_portal_mutations_dispatch_only_after_authentication(self) -> None:
+        portal = self.read("components/watchy_shell/src/portal_idf.c")
+        handler_start = portal.index("static esp_err_t request_handler")
+        handler_end = portal.index("static void random_hex", handler_start)
+        handler = portal[handler_start:handler_end]
+        auth = handler.index("request_authorized(request)")
+        accept = handler.index("watchy_portal_session_accept", auth)
+        route = handler.index("watchy_portal_parse_route", accept)
+        for mutation in (
+            "receive_upload(request)",
+            "update_settings(request)",
+            "update_wifi(request)",
+            "set_time(request)",
+            "sync_ntp(request)",
+            "mutate_package(request, &route)",
+        ):
+            self.assertGreater(handler.index(mutation), route, mutation)
+
     def test_settings_labels_distinguish_motion_wake_from_display_effects(self) -> None:
         rendering = self.read("components/watchy_shell/src/shell_render.c")
         # The approved gallery plan names the rows "Motion Wake" and
