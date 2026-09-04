@@ -54,7 +54,7 @@ The home timezone is a fixed UTC offset rather than an IANA region database. Tha
 
 This covers the fixed civil offsets in active use, including half-hour and quarter-hour offsets. Labels use `UTC`, `UTC+07:00`, and `UTC-03:30`; the shared setter converts them to the POSIX string stored in the existing `timezone` field. Existing valid custom POSIX strings remain loadable. If one cannot be mapped to a fixed offset, the portal reports it as `CUSTOM` until the user selects a fixed home offset.
 
-Changing the timezone changes future NTP-to-RTC conversion immediately after settings reload. It does not silently rewrite the current RTC value. The user may then set local date/time manually or run NTP Sync.
+Changing the timezone updates both the Settings POSIX zone and the RTC service's separately persisted UTC-offset value. The UTC registers remain unchanged, so the underlying instant is preserved while the displayed local hour changes to the new home zone. If either persistence write fails, the other value is rolled back and the prior zone remains effective. Manual date/time always carries the selected home offset into `watchy_rtc_set_local`; NTP converts its UTC epoch through the same selected offset before writing the RTC.
 
 ## Portal API
 
@@ -62,8 +62,8 @@ Existing package/status routes stay compatible. New or extended authenticated ro
 
 - `GET /api/v1/settings` returns all non-secret settings plus current RTC date/time. It returns the saved SSID and `configured`, never the saved password or any password-derived value.
 - `PUT /api/v1/settings` accepts the non-secret settings document. The handler loads the current settings, applies provided fields to a candidate, validates the complete candidate, and performs one NVS commit. A rejected request leaves NVS and the in-memory settings unchanged.
-- `PUT /api/v1/wifi` accepts a bounded JSON object containing `ssid` and `password`. Password omission is invalid when changing the SSID; an explicit empty string selects an open network. The legacy authenticated `POST /api/v1/wifi` header form remains accepted for compatibility during v1.
-- `PUT /api/v1/time` accepts local `year`, `month`, `day`, `hour`, and `minute`, validates the complete calendar value, sets seconds to zero, and writes the PCF8563 RTC. It does not mutate timezone.
+- `PUT /api/v1/wifi` accepts a bounded JSON object containing `ssid` and an optional `password`. An omitted password preserves the stored value only when the SSID is unchanged; omission is invalid when changing the SSID. An explicit empty string is sent only through an explicit Open network control and removes the stored password. The legacy authenticated `POST /api/v1/wifi` header form remains accepted for compatibility during v1.
+- `PUT /api/v1/time` accepts local `year`, `month`, `day`, `hour`, and `minute`, loads the selected home offset, validates the complete calendar value, sets seconds to zero, and writes the PCF8563 RTC. It does not mutate timezone.
 - `POST /api/v1/time/ntp` synchronizes through the already-connected saved client Wi-Fi session. In AP mode it returns `409 client_mode_required`; the UI explains that the user must save Wi-Fi, leave the AP session, and reopen Portal using Saved Wi-Fi.
 
 Request bodies are JSON, capped at 1 KiB, require `application/json`, and reject malformed JSON, duplicate logical values, wrong types, unknown enum strings, overlong strings, and out-of-range numbers. Errors use the existing public JSON error shape. State-changing responses return the newly effective non-secret values so the page can reconcile without guessing.
