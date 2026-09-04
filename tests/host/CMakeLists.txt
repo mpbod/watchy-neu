@@ -188,6 +188,7 @@ add_test(NAME watchy_shell_render_golden_mutation
 
 add_executable(watchy_portal_tests
   test_portal.c
+  ../../components/watchy_shell/src/captive_portal_policy.c
   ../../components/watchy_shell/src/portal_policy.c
   ../../components/watchy_shell/src/settings_policy.c
   ../../components/watchy_shell/src/timezone_action_policy.c
@@ -204,6 +205,18 @@ target_include_directories(watchy_portal_tests PRIVATE
 target_compile_features(watchy_portal_tests PRIVATE c_std_11)
 target_compile_options(watchy_portal_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME watchy_portal_tests COMMAND watchy_portal_tests)
+
+add_executable(watchy_captive_portal_tests
+  test_captive_portal.c
+  ../../components/watchy_shell/src/captive_portal_policy.c
+)
+target_include_directories(watchy_captive_portal_tests PRIVATE
+  ../../components/watchy_shell/include
+  ../../sdk/include
+)
+target_compile_features(watchy_captive_portal_tests PRIVATE c_std_11)
+target_compile_options(watchy_captive_portal_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME watchy_captive_portal_tests COMMAND watchy_captive_portal_tests)
 
 add_executable(watchy_time_sync_tests
   test_time_sync.c

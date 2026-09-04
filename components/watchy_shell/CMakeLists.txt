@@ -1,5 +1,7 @@
 idf_component_register(
     SRCS
+        "src/captive_portal_idf.c"
+        "src/captive_portal_policy.c"
         "src/portal_idf.c"
         "src/portal_policy.c"
         "src/settings_idf.c"

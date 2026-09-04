@@ -41,6 +41,7 @@ typedef enum {
 watchy_status_t watchy_wifi_start_sta(const watchy_wifi_sta_config_t *config, bool persist);
 watchy_status_t watchy_wifi_start_stored_sta(void);
 watchy_status_t watchy_wifi_start_ap(const watchy_wifi_ap_config_t *config);
+watchy_status_t watchy_wifi_set_captive_portal_uri(const char *uri);
 watchy_wifi_state_t watchy_wifi_state(void);
 watchy_status_t watchy_wifi_stop(void);
 

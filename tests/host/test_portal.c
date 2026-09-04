@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "watchy/captive_portal.h"
 #include "watchy/portal.h"
 #include "watchy/rtc_calendar.h"
 #include "watchy/timezone_action.h"
@@ -579,6 +580,22 @@ static int test_idle_lifetime_is_five_minutes_with_thirty_minute_cap(void) {
     return 0;
 }
 
+static int test_captive_redirects_cover_non_root_non_api_get_paths(void) {
+    CHECK(watchy_portal_captive_redirect_path("/generate_204"));
+    CHECK(watchy_portal_captive_redirect_path("/hotspot-detect.html"));
+    CHECK(watchy_portal_captive_redirect_path("/connecttest.txt"));
+    CHECK(watchy_portal_captive_redirect_path("/ncsi.txt"));
+    CHECK(watchy_portal_captive_redirect_path("/arbitrary-page"));
+    CHECK(watchy_portal_captive_redirect_path("/api/v10/status"));
+    CHECK(!watchy_portal_captive_redirect_path("/"));
+    CHECK(!watchy_portal_captive_redirect_path("/?from=captive-probe"));
+    CHECK(!watchy_portal_captive_redirect_path("/api/v1"));
+    CHECK(!watchy_portal_captive_redirect_path("/api/v1/status"));
+    CHECK(!watchy_portal_captive_redirect_path("/api/v1/settings"));
+    CHECK(!watchy_portal_captive_redirect_path("/api/v1/unknown"));
+    return 0;
+}
+
 int main(void) {
     int failures = 0;
     failures += test_mutating_routes_require_the_exact_session_token();
@@ -598,6 +615,7 @@ int main(void) {
     failures += test_idle_deadline_is_activity_relative_and_overflow_safe();
     failures += test_only_authenticated_activity_refreshes_idle_before_absolute_expiry();
     failures += test_idle_lifetime_is_five_minutes_with_thirty_minute_cap();
+    failures += test_captive_redirects_cover_non_root_non_api_get_paths();
     if (failures == 0) {
         puts("portal tests passed");
     }

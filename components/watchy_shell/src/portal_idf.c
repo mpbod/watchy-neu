@@ -1,6 +1,7 @@
 #include "watchy/portal.h"
 
 #include "watchy/battery.h"
+#include "watchy/captive_portal.h"
 #include "watchy/package_runtime.h"
 #include "watchy/radios.h"
 #include "watchy/rtc.h"
@@ -28,6 +29,8 @@
 
 #define WATCHY_PORTAL_RECEIVE_CHUNK 1024u
 #define WATCHY_PORTAL_CLIENT_TIMEOUT_MS 15000u
+
+static const char WATCHY_CAPTIVE_PORTAL_URI[] = "http://192.168.4.1/";
 
 typedef struct {
     char *body;
@@ -1023,6 +1026,13 @@ static esp_err_t request_handler(httpd_req_t *request) {
     uint64_t last;
     uint64_t accepted_last;
     const uint64_t now = now_ms();
+    if (request->method == HTTP_GET && !s_portal.info.client_mode &&
+        watchy_portal_captive_redirect_path(request->uri)) {
+        httpd_resp_set_status(request, "302 Found");
+        httpd_resp_set_hdr(request, "Location", WATCHY_CAPTIVE_PORTAL_URI);
+        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+        return httpd_resp_send(request, NULL, 0u);
+    }
     const bool authenticated = request_authorized(request);
     portENTER_CRITICAL(&s_portal_mux);
     started = s_portal.started_ms;
@@ -1208,6 +1218,16 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
     /* The Wi-Fi radio is now an initialized true-entropy source. Keep the
      * out-of-band session credential at 128 bits and generate it after startup. */
     random_hex(s_portal.info.token, WATCHY_PORTAL_TOKEN_HEX_SIZE / 2u);
+    if (mode == WATCHY_PORTAL_NETWORK_AP) {
+        /* DHCP option 114 is best-effort because some IDF/lwIP builds do not
+         * support it. Wildcard DNS and HTTP redirects remain required. */
+        (void)watchy_wifi_set_captive_portal_uri(WATCHY_CAPTIVE_PORTAL_URI);
+        if (watchy_captive_portal_start(s_portal.info.address) !=
+            WATCHY_STATUS_OK) {
+            (void)watchy_portal_stop();
+            return WATCHY_STATUS_INVALID_STATE;
+        }
+    }
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 4u;
     config.stack_size = 8192u;
@@ -1266,6 +1286,9 @@ watchy_status_t watchy_portal_stop(void) {
         status = WATCHY_STATUS_INVALID_STATE;
     }
     watchy_packages_upload_abort();
+    if (watchy_captive_portal_stop() != WATCHY_STATUS_OK) {
+        status = WATCHY_STATUS_INVALID_STATE;
+    }
     if (watchy_radios_stop_all() != WATCHY_STATUS_OK) {
         status = WATCHY_STATUS_INVALID_STATE;
     }

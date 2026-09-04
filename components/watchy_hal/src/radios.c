@@ -187,6 +187,28 @@ watchy_status_t watchy_wifi_start_ap(const watchy_wifi_ap_config_t *config) {
     return WATCHY_STATUS_OK;
 }
 
+watchy_status_t watchy_wifi_set_captive_portal_uri(const char *uri) {
+    esp_err_t option_error;
+    esp_err_t start_error;
+
+    if (uri == NULL || uri[0] == '\0') {
+        return WATCHY_STATUS_INVALID_ARGUMENT;
+    }
+    if (s_wifi_state != WATCHY_WIFI_AP_RUNNING || s_wifi_netif == NULL) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    if (esp_netif_dhcps_stop(s_wifi_netif) != ESP_OK) {
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    option_error = esp_netif_dhcps_option(
+        s_wifi_netif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
+        (void *)uri, (uint32_t)strlen(uri));
+    start_error = esp_netif_dhcps_start(s_wifi_netif);
+    return option_error == ESP_OK && start_error == ESP_OK
+               ? WATCHY_STATUS_OK
+               : WATCHY_STATUS_INVALID_STATE;
+}
+
 watchy_wifi_state_t watchy_wifi_state(void) {
     return s_wifi_state;
 }
