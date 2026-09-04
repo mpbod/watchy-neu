@@ -141,6 +141,13 @@ watchy_status_t watchy_package_transition_present_after_render(
     watchy_refresh_mode_t mode,
     watchy_package_present_fn_t present,
     void *present_context);
+watchy_status_t watchy_package_transition_present_override_after_render(
+    watchy_package_transition_latch_t *latch,
+    bool render_accepted,
+    watchy_refresh_mode_t mode,
+    const watchy_transition_request_v1_t *override_request,
+    watchy_package_present_fn_t present,
+    void *present_context);
 watchy_package_presentation_outcome_t watchy_package_classify_presentation(
     watchy_status_t status);
 watchy_package_post_action_t watchy_package_post_action(bool pump_ok,

@@ -83,6 +83,13 @@ static int test_shell_transition_mapping_returns_complete_safe_requests(void) {
             .direction = WATCHY_TRANSITION_DIRECTION_LEFT,
         },
         {
+            .change = {.from = WATCHY_SHELL_LAUNCHER, .to = WATCHY_SHELL_WATCHFACE,
+                       .input = WATCHY_SHELL_INPUT_BACK, .sleep_requested = true},
+            .effect = WATCHY_TRANSITION_PUSH,
+            .direction = WATCHY_TRANSITION_DIRECTION_LEFT,
+            .flags = WATCHY_TRANSITION_PREFER_FULL,
+        },
+        {
             .change = {.from = WATCHY_SHELL_SETTINGS, .to = WATCHY_SHELL_SETTINGS,
                        .input = WATCHY_SHELL_INPUT_MENU, .saved = true,
                        .has_rect = true, .rect = {4, 30, 192, 15}},

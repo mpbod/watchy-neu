@@ -944,6 +944,8 @@ typedef struct {
     watchy_status_t status[2];
     const watchy_transition_request_v1_t *request[2];
     watchy_transition_effect_t effect;
+    watchy_transition_direction_t direction;
+    uint32_t flags;
     watchy_refresh_mode_t mode[2];
     unsigned calls;
 } transition_present_probe_t;
@@ -958,6 +960,8 @@ static watchy_status_t transition_present(void *opaque,
     probe->mode[call] = mode;
     if (request != NULL) {
         probe->effect = request->effect;
+        probe->direction = request->direction;
+        probe->flags = request->flags;
     }
     return probe->status[call];
 }
@@ -1029,6 +1033,35 @@ static int test_transition_present_consumes_once_and_only_falls_back_on_rejectio
               &latch, true, WATCHY_REFRESH_PARTIAL, transition_present, &probe) ==
           WATCHY_STATUS_CANCELLED);
     CHECK(probe.calls == 1u);
+    return 0;
+}
+
+static int test_kernel_return_transition_overrides_package_request_once(void) {
+    watchy_package_transition_latch_t latch = {0};
+    const watchy_transition_request_v1_t package_request =
+        valid_package_transition_request();
+    const watchy_transition_request_v1_t return_request = {
+        .size = sizeof(watchy_transition_request_v1_t),
+        .effect = WATCHY_TRANSITION_PUSH,
+        .direction = WATCHY_TRANSITION_DIRECTION_LEFT,
+        .flags = WATCHY_TRANSITION_PREFER_FULL,
+    };
+    transition_present_probe_t probe = {
+        .status = {WATCHY_STATUS_OK, WATCHY_STATUS_OK},
+    };
+    watchy_transition_request_v1_t taken = {0};
+
+    CHECK(watchy_package_transition_latch(&latch, &package_request) ==
+          WATCHY_STATUS_OK);
+    CHECK(watchy_package_transition_present_override_after_render(
+              &latch, true, WATCHY_REFRESH_PARTIAL, &return_request,
+              transition_present, &probe) == WATCHY_STATUS_OK);
+    CHECK(probe.calls == 1u);
+    CHECK(probe.effect == WATCHY_TRANSITION_PUSH);
+    CHECK(probe.direction == WATCHY_TRANSITION_DIRECTION_LEFT);
+    CHECK(probe.flags == WATCHY_TRANSITION_PREFER_FULL);
+    CHECK(probe.mode[0] == WATCHY_REFRESH_PARTIAL);
+    CHECK(!watchy_package_transition_take(&latch, &taken));
     return 0;
 }
 
@@ -3111,6 +3144,7 @@ int main(void) {
     CHECK(test_transition_callback_admits_only_readable_active_requests() == 0);
     CHECK(test_transition_failed_runner_and_deinit_cleanup_is_idempotent() == 0);
     CHECK(test_transition_present_consumes_once_and_only_falls_back_on_rejection() == 0);
+    CHECK(test_kernel_return_transition_overrides_package_request_once() == 0);
     CHECK(test_package_presentation_classification_defers_promotion_on_cancellation() == 0);
     CHECK(test_watchdog_enrollment_adapter_fails_closed() == 0);
     CHECK(test_state_pointer_and_canvas_policies_fail_closed_at_boundaries() == 0);
@@ -3150,6 +3184,6 @@ int main(void) {
     CHECK(test_factory_seed_interruption_resumes_removed_installed_entries() == 0);
     CHECK(test_factory_seed_rejects_digest_missing_file_and_marker_io_failures() == 0);
     CHECK(test_dlclose_failure_poison_keeps_global_owner() == 0);
-    puts("PASS 56 package tests");
+    puts("PASS 57 package tests");
     return 0;
 }

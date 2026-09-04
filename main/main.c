@@ -254,20 +254,28 @@ static watchy_package_status_t action_select_watchface(void *context,
     return watchy_packages_select_watchface(package_ref);
 }
 
+typedef struct {
+    const watchy_transition_request_v1_t *transition;
+} watchface_run_context_t;
+
 static watchy_watchface_run_result_t action_run_watchface(void *context,
                                                            bool safe_mode,
                                                            bool force_full_refresh) {
-    (void)context;
+    const watchface_run_context_t *run_context = context;
     watchy_watchface_run_result_t result = {
-        .rendered = watchy_packages_run_watchface(safe_mode, force_full_refresh),
+        .rendered = watchy_packages_run_watchface_with_transition(
+            safe_mode, force_full_refresh,
+            run_context != NULL ? run_context->transition : NULL),
     };
     (void)watchy_display_take_cancelled_buttons(&result.cancelled_buttons);
     return result;
 }
 
 static void action_force_full_refresh(void *context) {
-    (void)context;
-    watchy_display_invalidate_previous();
+    const watchface_run_context_t *run_context = context;
+    if (run_context == NULL || run_context->transition == NULL) {
+        watchy_display_invalidate_previous();
+    }
 }
 
 static watchy_package_status_t action_snapshot(void *context,
@@ -411,11 +419,15 @@ static bool present_selected_watchface(
     watchy_package_catalog_t *catalog,
     bool package_execution_blocked,
     bool force_full_refresh,
+    const watchy_transition_request_v1_t *transition,
     bool *out_force_builtin_full) {
+    watchface_run_context_t run_context = {.transition = transition};
+    watchy_watchface_action_ops_t operations = watchface_action_ops;
     watchy_watchface_run_result_t result = {0};
+    operations.context = &run_context;
     const watchy_status_t status = watchy_watchface_return_selected(
         shell->safe_mode, package_execution_blocked, force_full_refresh,
-        settings, catalog, &watchface_action_ops, &result);
+        settings, catalog, &operations, &result);
     if (out_force_builtin_full != NULL) *out_force_builtin_full = false;
     if (status == WATCHY_STATUS_OK) {
         watchy_shell_set_package_catalog(shell, catalog, true);
@@ -609,15 +621,6 @@ static void run_shell(watchy_shell_t *shell,
                 if (portal_error != WATCHY_SHELL_ERROR_NONE) {
                     watchy_shell_fail(shell, portal_error);
                 }
-                bool force_builtin_full = false;
-                if (shell->screen == WATCHY_SHELL_WATCHFACE &&
-                    portal_error == WATCHY_SHELL_ERROR_NONE &&
-                    present_selected_watchface(
-                        shell, presentation, settings, catalog,
-                        package_boot->execution_blocked, true, &force_builtin_full)) {
-                    last_activity = milliseconds();
-                    continue;
-                }
                 watchy_transition_request_v1_t request;
                 const watchy_shell_transition_context_t change = {
                     .from = before_screen,
@@ -627,7 +630,18 @@ static void run_shell(watchy_shell_t *shell,
                     .sleep_requested = shell->sleep_requested,
                     .safe_mode = shell->safe_mode,
                 };
-                const bool has_request = watchy_shell_transition_for_change(&change, &request);
+                const bool has_request =
+                    watchy_shell_transition_for_change(&change, &request);
+                bool force_builtin_full = false;
+                if (shell->screen == WATCHY_SHELL_WATCHFACE &&
+                    portal_error == WATCHY_SHELL_ERROR_NONE &&
+                    present_selected_watchface(
+                        shell, presentation, settings, catalog,
+                        package_boot->execution_blocked, true,
+                        has_request ? &request : NULL, &force_builtin_full)) {
+                    last_activity = milliseconds();
+                    continue;
+                }
                 watchy_refresh_mode_t refresh_mode = force_builtin_full
                                                           ? WATCHY_REFRESH_FULL
                                                           : WATCHY_REFRESH_PARTIAL;
@@ -847,18 +861,6 @@ static void run_shell(watchy_shell_t *shell,
                 watchy_shell_set_diagnostic_count(shell, diagnostics->count);
             }
             if (post_action_presentation_needed) {
-                bool force_builtin_full = false;
-                if (shell->screen == WATCHY_SHELL_WATCHFACE && !shell->safe_mode) {
-                    post_action_presentation_needed = !present_selected_watchface(
-                        shell, presentation, settings, catalog,
-                        package_boot->execution_blocked,
-                        shell_input == WATCHY_SHELL_INPUT_BACK,
-                        &force_builtin_full);
-                }
-                if (!post_action_presentation_needed) {
-                    last_activity = milliseconds();
-                    continue;
-                }
                 watchy_transition_request_v1_t request;
                 const watchy_shell_transition_context_t change = {
                     .from = transition_from,
@@ -872,7 +874,21 @@ static void run_shell(watchy_shell_t *shell,
                                 ? watchy_shell_settings_confirmation_rect(shell->selection)
                                 : (watchy_transition_rect_t){0},
                 };
-                const bool has_request = watchy_shell_transition_for_change(&change, &request);
+                const bool has_request =
+                    watchy_shell_transition_for_change(&change, &request);
+                bool force_builtin_full = false;
+                if (shell->screen == WATCHY_SHELL_WATCHFACE && !shell->safe_mode) {
+                    post_action_presentation_needed = !present_selected_watchface(
+                        shell, presentation, settings, catalog,
+                        package_boot->execution_blocked,
+                        shell_input == WATCHY_SHELL_INPUT_BACK,
+                        has_request ? &request : NULL,
+                        &force_builtin_full);
+                }
+                if (!post_action_presentation_needed) {
+                    last_activity = milliseconds();
+                    continue;
+                }
                 watchy_refresh_mode_t refresh_mode = force_builtin_full
                                                           ? WATCHY_REFRESH_FULL
                                                           : WATCHY_REFRESH_PARTIAL;
@@ -904,7 +920,8 @@ static void run_shell(watchy_shell_t *shell,
             bool force_builtin_full = false;
             if (!shell->safe_mode && present_selected_watchface(
                     shell, presentation, settings, catalog,
-                    package_boot->execution_blocked, true, &force_builtin_full)) {
+                    package_boot->execution_blocked, true, NULL,
+                    &force_builtin_full)) {
                 last_activity = milliseconds();
                 continue;
             }

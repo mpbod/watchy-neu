@@ -1336,7 +1336,8 @@ static watchy_status_t runner_display_present(
     return watchy_display_present(mode, request);
 }
 
-watchy_package_status_t watchy_packages_runner_render(void) {
+watchy_package_status_t watchy_packages_runner_render_with_transition(
+    const watchy_transition_request_v1_t *transition) {
     watchy_canvas_t canvas;
     watchy_refresh_mode_t mode = WATCHY_REFRESH_PARTIAL;
     watchy_status_t display_status;
@@ -1362,9 +1363,9 @@ watchy_package_status_t watchy_packages_runner_render(void) {
     if (status == WATCHY_PACKAGE_OK && s_runner.host.canvas_acquired) {
         status = WATCHY_PACKAGE_ERR_CALLBACK;
     }
-    display_status = watchy_package_transition_present_after_render(
+    display_status = watchy_package_transition_present_override_after_render(
         &s_runner.host.transition, status == WATCHY_PACKAGE_OK, mode,
-        runner_display_present, NULL);
+        transition, runner_display_present, NULL);
     if (status == WATCHY_PACKAGE_OK) {
         switch (watchy_package_classify_presentation(display_status)) {
         case WATCHY_PACKAGE_PRESENT_TARGET:
@@ -1383,6 +1384,10 @@ watchy_package_status_t watchy_packages_runner_render(void) {
         status = runner_finish(status);
     }
     return runner_release_scope(&watchdog_scope, status);
+}
+
+watchy_package_status_t watchy_packages_runner_render(void) {
+    return watchy_packages_runner_render_with_transition(NULL);
 }
 
 watchy_package_status_t watchy_packages_runner_stop(void) {
@@ -1413,6 +1418,8 @@ bool watchy_packages_runner_active(void) {
 typedef struct {
     const char *reference;
     bool force_full_refresh;
+    bool has_transition;
+    watchy_transition_request_v1_t transition;
 } watchface_cycle_context_t;
 
 static watchy_package_status_t watchface_cycle_start(void *context) {
@@ -1427,13 +1434,14 @@ static bool watchface_cycle_active(void *context) {
 
 static watchy_package_status_t watchface_cycle_render(void *context) {
     const watchface_cycle_context_t *cycle = context;
-    if (cycle->force_full_refresh) {
+    if (cycle->force_full_refresh && !cycle->has_transition) {
         /* Package startup may request a refresh of its own. Invalidate again
          * immediately before on_render so the selected face target itself is
          * always committed with a full physical refresh. */
         watchy_display_invalidate_previous();
     }
-    return watchy_packages_runner_render();
+    return watchy_packages_runner_render_with_transition(
+        cycle->has_transition ? &cycle->transition : NULL);
 }
 
 static watchy_package_status_t watchface_cycle_stop(void *context) {
@@ -1442,9 +1450,19 @@ static watchy_package_status_t watchface_cycle_stop(void *context) {
 }
 
 bool watchy_packages_run_watchface(bool safe_mode, bool force_full_refresh) {
+    return watchy_packages_run_watchface_with_transition(
+        safe_mode, force_full_refresh, NULL);
+}
+
+bool watchy_packages_run_watchface_with_transition(
+    bool safe_mode,
+    bool force_full_refresh,
+    const watchy_transition_request_v1_t *transition) {
     const watchy_package_index_t *index;
     char reference[WATCHY_PACKAGE_REF_MAX + 1u];
-    if (safe_mode || watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
+    if (safe_mode ||
+        (transition != NULL && watchy_transition_validate(transition) != WATCHY_STATUS_OK) ||
+        watchy_packages_runtime_init() != WATCHY_PACKAGE_OK ||
         xSemaphoreTake(s_package_mutex, portMAX_DELAY) != pdTRUE) {
         return false;
     }
@@ -1460,7 +1478,14 @@ bool watchy_packages_run_watchface(bool safe_mode, bool force_full_refresh) {
     watchface_cycle_context_t cycle = {
         .reference = reference,
         .force_full_refresh = force_full_refresh,
+        .has_transition = transition != NULL,
     };
+    if (transition != NULL) {
+        cycle.transition = *transition;
+        if (force_full_refresh) {
+            cycle.transition.flags |= WATCHY_TRANSITION_PREFER_FULL;
+        }
+    }
     const watchy_package_watchface_runner_t runner = {
         .start = watchface_cycle_start,
         .active = watchface_cycle_active,

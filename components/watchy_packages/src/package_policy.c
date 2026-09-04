@@ -350,6 +350,17 @@ watchy_status_t watchy_package_transition_present_after_render(
     watchy_refresh_mode_t mode,
     watchy_package_present_fn_t present,
     void *present_context) {
+    return watchy_package_transition_present_override_after_render(
+        latch, render_accepted, mode, NULL, present, present_context);
+}
+
+watchy_status_t watchy_package_transition_present_override_after_render(
+    watchy_package_transition_latch_t *latch,
+    bool render_accepted,
+    watchy_refresh_mode_t mode,
+    const watchy_transition_request_v1_t *override_request,
+    watchy_package_present_fn_t present,
+    void *present_context) {
     watchy_transition_request_v1_t request;
     bool requested;
     watchy_status_t status;
@@ -366,8 +377,12 @@ watchy_status_t watchy_package_transition_present_after_render(
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     requested = watchy_package_transition_take(latch, &request);
-    status = present(present_context, mode, requested ? &request : NULL);
-    if (requested && status == WATCHY_STATUS_INVALID_ARGUMENT) {
+    status = present(present_context, mode,
+                     override_request != NULL
+                         ? override_request
+                         : (requested ? &request : NULL));
+    if (override_request == NULL && requested &&
+        status == WATCHY_STATUS_INVALID_ARGUMENT) {
         status = present(present_context, mode, NULL);
     }
     return status;

@@ -100,6 +100,9 @@ A Sweep-class, optional visual prelude consisting of four alternating horizontal
 - Watchface to Menu: Wipe.
 - Menu into a child screen: directional Push.
 - Back to a parent screen: reverse-direction Push.
+- Back from Menu to the watchface: reverse-direction Push whose final target
+  write is Full. The kernel mapping overrides a WPK-requested transition for
+  that one render so built-in and package faces behave identically.
 - Confirmation and saved state: localized Flash.
 - Explicit synchronization progress: Fill at bounded quarter and half steps.
 - User-initiated sleep or lock: Split.

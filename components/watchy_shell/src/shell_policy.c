@@ -423,6 +423,12 @@ bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t 
         out_request->effect = WATCHY_TRANSITION_FILL;
     } else if (change->saved) {
         out_request->effect = WATCHY_TRANSITION_FLASH;
+    } else if (change->from != WATCHY_SHELL_WATCHFACE &&
+               change->to == WATCHY_SHELL_WATCHFACE &&
+               change->input == WATCHY_SHELL_INPUT_BACK) {
+        out_request->effect = WATCHY_TRANSITION_PUSH;
+        out_request->direction = WATCHY_TRANSITION_DIRECTION_LEFT;
+        out_request->flags = WATCHY_TRANSITION_PREFER_FULL;
     } else if (change->sleep_requested && change->input == WATCHY_SHELL_INPUT_BACK) {
         out_request->effect = WATCHY_TRANSITION_SPLIT;
     } else if (change->from == WATCHY_SHELL_WATCHFACE &&
