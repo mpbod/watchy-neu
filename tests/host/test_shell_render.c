@@ -267,6 +267,32 @@ static int test_selector(void) {
     return 0;
 }
 
+static int test_active_watchface_entry_reveals_and_highlights_late_selection(void) {
+    uint8_t fb[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_canvas_t c = canvas(fb);
+    watchy_shell_t shell;
+    watchy_settings_t settings = {.time_24h = true};
+    watchy_time_t t = now();
+    watchy_package_catalog_t catalog;
+    catalog_faces(&catalog);
+    catalog.packages[0].active = false;
+    catalog.packages[2].active = true;
+    catalog.packages[2].quarantined = false;
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    watchy_shell_set_package_catalog(&shell, &catalog, true);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_WATCHFACE_SELECTOR);
+    CHECK(shell.selection == 3u && shell.view_start == 1u);
+
+    draw(&c, &shell, &settings, &t, NULL, &catalog, NULL, NULL);
+    CHECK(!black(fb, 2, 25));
+    CHECK(!black(fb, 2, 80));
+    CHECK(black(fb, 2, 135));
+    CHECK(region_ink(fb, 44, 135, 180, 189) > 20);
+    return 0;
+}
+
 static int test_settings(void) {
     static const char *const expected_labels[] = {
         "Clock", "Home Zone", "Motion Wake", "Display Motion", "Set Time",
@@ -539,6 +565,7 @@ int main(int argc, char **argv) {
     CHECK(test_menu() == 0);
     CHECK(test_menu_selections() == 0);
     CHECK(test_selector() == 0);
+    CHECK(test_active_watchface_entry_reveals_and_highlights_late_selection() == 0);
     CHECK(test_settings() == 0);
     CHECK(test_timezone_rows_use_continuous_viewport_and_proportional_rail() == 0);
     CHECK(test_hairline() == 0);

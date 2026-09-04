@@ -152,13 +152,74 @@ static int test_shell_transition_mapping_returns_complete_safe_requests(void) {
     watchy_transition_request_v1_t request;
     CHECK(!watchy_shell_transition_for_change(&missing_rect, &request));
 
-    const watchy_transition_rect_t confirmation =
-        watchy_shell_settings_confirmation_rect(7u);
     const watchy_transition_rect_t progress = watchy_shell_sync_progress_rect();
-    CHECK(confirmation.x == 4 && confirmation.y == 177 &&
-          confirmation.width == 192 && confirmation.height == 15);
     CHECK(progress.x == 4 && progress.y == 75 && progress.width == 192 &&
           progress.height == 19);
+    return 0;
+}
+
+static int test_settings_confirmation_rect_tracks_visible_action_and_return_slots(void) {
+    static const struct {
+        uint8_t selection;
+        uint8_t view_start;
+        int16_t expected_y;
+    } direct_cases[] = {
+        {0u, 0u, 25},
+        {2u, 0u, 135},
+        {3u, 1u, 135},
+        {8u, 6u, 135},
+    };
+    watchy_shell_t shell;
+    watchy_shell_action_request_t request;
+
+    for (size_t index = 0u;
+         index < sizeof(direct_cases) / sizeof(direct_cases[0]); ++index) {
+        shell = (watchy_shell_t){
+            .screen = WATCHY_SHELL_SETTINGS,
+            .selection = direct_cases[index].selection,
+            .view_start = direct_cases[index].view_start,
+        };
+        watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+        CHECK(watchy_shell_take_action_request(&shell, &request));
+        CHECK(request.action == WATCHY_SHELL_ACTION_SAVE_SETTINGS);
+        const watchy_transition_rect_t rect =
+            watchy_shell_settings_confirmation_rect(shell.selection,
+                                                     shell.view_start);
+        CHECK(rect.x == 0 && rect.y == direct_cases[index].expected_y &&
+              rect.width == 187 && rect.height == 55);
+    }
+
+    watchy_shell_begin(&shell, WATCHY_WAKE_BUTTON, true, false, false);
+    shell.selection = 2u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    shell.selection = 1u;
+    watchy_shell_set_home_timezone_index(&shell, 26u);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_SETTINGS && shell.selection == 1u &&
+          shell.view_start == 0u);
+    CHECK(watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_SAVE_TIMEZONE);
+    watchy_transition_rect_t rect =
+        watchy_shell_settings_confirmation_rect(shell.selection,
+                                                 shell.view_start);
+    CHECK(rect.x == 0 && rect.y == 80 && rect.width == 187 && rect.height == 55);
+
+    shell.selection = 4u;
+    shell.view_start = 2u;
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
+    CHECK(shell.screen == WATCHY_SHELL_MANUAL_TIME);
+    watchy_shell_input(&shell, WATCHY_SHELL_INPUT_BACK);
+    CHECK(shell.screen == WATCHY_SHELL_SETTINGS && shell.selection == 4u &&
+          shell.view_start == 2u);
+    CHECK(watchy_shell_take_action_request(&shell, &request));
+    CHECK(request.action == WATCHY_SHELL_ACTION_SAVE_MANUAL_TIME);
+    rect = watchy_shell_settings_confirmation_rect(shell.selection,
+                                                    shell.view_start);
+    CHECK(rect.x == 0 && rect.y == 135 && rect.width == 187 && rect.height == 55);
+
+    rect = watchy_shell_settings_confirmation_rect(8u, 0u);
+    CHECK(rect.width == 0 && rect.height == 0);
     return 0;
 }
 
@@ -993,6 +1054,7 @@ static int test_selector_handles_sizes_pages_wrap_and_healthy_active_cursor(void
     watchy_shell_set_package_catalog(&shell, &catalog, true);
     watchy_shell_input(&shell, WATCHY_SHELL_INPUT_MENU);
     CHECK(shell.selection == 3u);
+    CHECK(shell.view_start == 1u);
     size_t catalog_index = SIZE_MAX;
     CHECK(watchy_shell_selected_watchface(&shell, &catalog_index));
     CHECK(catalog_index == 2u);
@@ -1259,6 +1321,7 @@ int main(void) {
     failures += test_invalid_persisted_settings_fall_back_field_by_field();
     failures += test_display_motion_level_defaults_sanitizes_and_cycles();
     failures += test_shell_transition_mapping_returns_complete_safe_requests();
+    failures += test_settings_confirmation_rect_tracks_visible_action_and_return_slots();
     failures += test_presentation_outcomes_gate_sleep_and_post_action_refresh();
     failures += test_sleep_route_returns_pending_input_to_awake_shell();
     failures += test_wifi_settings_accept_only_open_or_valid_psk_credentials();

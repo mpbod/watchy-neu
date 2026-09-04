@@ -166,7 +166,8 @@ void watchy_shell_require_manual_time(watchy_shell_t *shell, bool interactive);
 void watchy_shell_input(watchy_shell_t *shell, watchy_shell_input_t input);
 bool watchy_shell_transition_for_change(const watchy_shell_transition_context_t *change,
                                         watchy_transition_request_v1_t *out_request);
-watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection);
+watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection,
+                                                                 uint8_t view_start);
 watchy_transition_rect_t watchy_shell_sync_progress_rect(void);
 void watchy_shell_presentation_observe(watchy_shell_presentation_state_t *state,
                                        watchy_shell_t *shell,

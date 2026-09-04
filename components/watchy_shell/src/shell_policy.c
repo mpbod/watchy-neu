@@ -446,6 +446,7 @@ static void select_launcher(watchy_shell_t *shell) {
     enter(shell, screens[shell->selection]);
     if (shell->screen == WATCHY_SHELL_WATCHFACE_SELECTOR) {
         shell->selection = shell->active_face_selection;
+        reveal_selection(shell, item_count(shell));
     }
 }
 
@@ -486,11 +487,14 @@ static void select_settings(watchy_shell_t *shell) {
     }
 }
 
-watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection) {
-    if (selection >= 8u) {
+watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection,
+                                                                 uint8_t view_start) {
+    if (selection < view_start ||
+        selection - view_start >= WATCHY_SHELL_VISIBLE_ROWS) {
         return (watchy_transition_rect_t){0};
     }
-    return (watchy_transition_rect_t){4, (int16_t)(30 + selection * 21), 192, 15};
+    const uint8_t slot = (uint8_t)(selection - view_start);
+    return (watchy_transition_rect_t){0, (int16_t)(25 + slot * 55u), 187, 55};
 }
 
 watchy_transition_rect_t watchy_shell_sync_progress_rect(void) {

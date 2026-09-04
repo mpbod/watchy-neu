@@ -936,7 +936,8 @@ static void run_shell(watchy_shell_t *shell,
                     .safe_mode = shell->safe_mode,
                     .has_rect = saved,
                     .rect = saved
-                                ? watchy_shell_settings_confirmation_rect(shell->selection)
+                                ? watchy_shell_settings_confirmation_rect(
+                                      shell->selection, shell->view_start)
                                 : (watchy_transition_rect_t){0},
                 };
                 const bool has_request =
