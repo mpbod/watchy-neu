@@ -62,6 +62,10 @@ class PortalWebTests(unittest.TestCase):
         self.assertNotIn("#17171a", page)
         self.assertIn("const TIMEZONE_OFFSETS = Object.freeze(", page)
 
+    def test_toggle_group_labels_have_an_explicit_in_cell_layout(self) -> None:
+        self.assertIn(".setting .setting-legend { display:block;", self.page)
+        self.assertIn('class="setting toggle-group" role="group"', self.page)
+
     def test_embedded_page_replaces_c_string_fragments(self) -> None:
         cmake = (ROOT / "components/watchy_shell/CMakeLists.txt").read_text(
             encoding="utf-8"

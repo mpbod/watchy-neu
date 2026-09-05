@@ -57,9 +57,8 @@
     .row-main p { margin:5px 0 0; color:var(--muted); font-size:10px; font-weight:600; overflow-wrap:anywhere; }
     .settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; border:1px solid var(--ink); background:var(--ink); }
     .setting { min-width:0; padding:17px; background:var(--paper); }
-    .setting label, .setting legend { display:block; margin:0 0 9px; font-size:10px; font-weight:600; }
+    .setting label, .setting .setting-legend { display:block; margin:0 0 9px; font-size:10px; font-weight:600; }
     .setting input, .setting select { width:100%; min-height:38px; padding:8px 9px; border:1px solid var(--ink); background:var(--paper); color:var(--ink); }
-    fieldset.setting { border:0; margin:0; }
     .switch-line { display:flex; align-items:center; gap:10px; min-height:38px; }
     .switch-line input { width:18px; height:18px; margin:0; accent-color:var(--ink); }
     .form-actions { display:flex; gap:10px; flex-wrap:wrap; }
@@ -111,15 +110,15 @@
         <form id="settingsForm" class="page"><div class="settings">
           <div class="setting"><label for="timezone">Home timezone</label><select id="timezone" name="timezone"></select><p id="timezoneHint" class="hint"></p></div>
           <div class="setting"><label for="ntpServer">NTP server</label><input id="ntpServer" name="ntpServer" maxlength="64" autocomplete="off"></div>
-          <fieldset class="setting"><legend>Motion wake</legend><label class="switch-line"><input id="motionWake" type="checkbox"><span>Wake on movement</span></label></fieldset>
+          <div class="setting toggle-group" role="group" aria-labelledby="motionWakeLabel"><span id="motionWakeLabel" class="setting-legend">Motion wake</span><label class="switch-line"><input id="motionWake" type="checkbox"><span>Wake on movement</span></label></div>
           <div class="setting"><label for="transitionLevel">Display motion</label><select id="transitionLevel"><option value="full">Full</option><option value="reduced">Reduced</option><option value="off">Off</option></select></div>
           <div class="setting"><label for="partialRefreshLimit">Partial refresh limit</label><input id="partialRefreshLimit" type="number" min="1" max="255"></div>
-          <fieldset class="setting"><legend>Clock format</legend><label class="switch-line"><input id="time24h" type="checkbox"><span>24-hour time</span></label></fieldset>
+          <div class="setting toggle-group" role="group" aria-labelledby="clockFormatLabel"><span id="clockFormatLabel" class="setting-legend">Clock format</span><label class="switch-line"><input id="time24h" type="checkbox"><span>24-hour time</span></label></div>
         </div><div class="form-actions"><button class="solid mono" type="submit">SAVE DEVICE</button></div></form>
         <form id="wifiForm" class="page"><header><h2>Wi-Fi network</h2><p class="lede">Saved Wi-Fi is used after you reopen the portal in Client mode.</p></header><div class="settings">
           <div class="setting"><label for="ssid">Network name</label><input id="ssid" maxlength="32" autocomplete="off"></div>
           <div class="setting"><label for="wifiPassword">Password</label><input id="wifiPassword" type="password" maxlength="64" autocomplete="new-password"><p class="hint">Leave untouched to preserve the saved password.</p></div>
-          <fieldset class="setting"><legend>Network security</legend><label class="switch-line"><input id="openNetwork" type="checkbox"><span>Open network / clear password</span></label></fieldset>
+          <div class="setting toggle-group" role="group" aria-labelledby="networkSecurityLabel"><span id="networkSecurityLabel" class="setting-legend">Network security</span><label class="switch-line"><input id="openNetwork" type="checkbox"><span>Open network / clear password</span></label></div>
         </div><div class="form-actions"><button id="wifiSave" class="solid mono" type="submit">SAVE WI-FI</button></div><p id="wifiHint" class="hint"></p></form>
         <form id="timeForm" class="page"><header><h2>Time</h2><p class="lede">Set the local calendar time, or sync when the portal is on Client Wi-Fi.</p></header><div class="settings">
           <div class="setting"><label for="date">Date</label><input id="date" type="date"></div><div class="setting"><label for="time">Time</label><input id="time" type="time"></div>
