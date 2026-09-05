@@ -72,21 +72,27 @@ write to full refresh for panel health.
 
 ## Package portal
 
-On the watch, open **Menu → Settings → Portal**, then choose saved client Wi-Fi
-or the temporary Watchy access point. The screen shows the URL, an out-of-band
-32-character session credential, and temporary AP credentials. AP mode uses
-`http://192.168.4.1/`; client mode shows its assigned address. Authenticate every
-route with HTTP Basic username `watchy` and the displayed session credential as
-the password. The credential is never embedded in the served page. The session
-ends on Back, after 10 minutes without authenticated activity, or at its absolute
+On the watch, open **Menu → Settings → Portal**, then choose saved Client Wi-Fi
+or the temporary Watchy access point. The watch shows the launch address, an
+out-of-band 32-character session credential, and, in AP mode, the eight-character
+AP password. AP mode opens the captive portal at `http://192.168.4.1/`; if the
+captive-launch prompt does not appear, enter that address directly. Client mode
+shows its assigned address, which is the same direct-IP fallback. Authenticate every
+route with HTTP Basic username `watchy` and the watch-displayed credential as the
+password. The credential is never embedded in the served page. The session ends on
+Back, after five minutes without authenticated activity, or at its absolute
 30-minute lifetime, and turns Wi-Fi off.
 
-The portal lists, uploads, activates, and removes packages. AP mode also accepts
-and persists initial station Wi-Fi credentials, so an erased watch can be
-provisioned without reflashing. Uploads are staged and atomically promoted after
-full validation. Installation is rejected for unsafe battery/storage/heap
-conditions. A new watchface does not replace the previous one until it completes
-a successful render.
+The portal has Faces, Apps, and Device routes. It lists, uploads, activates, and
+removes packages; updates occur only after a user action. Device settings include
+the home timezone (an explicit UTC offset used for the local clock and time entry),
+NTP server, motion preferences, and partial-refresh limit. AP mode also accepts and
+persists initial station Wi-Fi credentials, so an erased watch can be provisioned
+without reflashing. For network time: save Wi-Fi in AP mode, close the portal,
+reopen **Client Portal** from the watch, then use NTP Sync. NTP Sync is deliberately
+unavailable in AP mode. Uploads are staged and atomically promoted after full
+validation. Installation is rejected for unsafe battery/storage/heap conditions. A
+new watchface does not replace the previous one until it completes a successful render.
 
 Built-in diagnostic `READY` rows are passive initialization/read checks, not
 physical acceptance results. Only the still-open on-device checklist below can

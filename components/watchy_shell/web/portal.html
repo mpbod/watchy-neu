@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Watchy Portal</title>
+  <style>
+    :root { --rail-width:248px; --ink:#000; --paper:#fff; --wash:#f4f3f1; --line:#e7e5e1; --muted:#6f6b64; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; -webkit-font-smoothing:antialiased; }
+    button,input,select { font:inherit; border-radius:0; }
+    button { color:inherit; cursor:pointer; }
+    button:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid var(--ink); outline-offset:3px; }
+    .mono { font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.11em; }
+    .shell { display:flex; min-height:100vh; }
+    .rail { width:var(--rail-width); flex:0 0 var(--rail-width); display:flex; flex-direction:column; border-right:1px solid var(--ink); }
+    .brand { padding:22px 20px; border-bottom:1px solid var(--ink); }
+    .brand strong { display:block; font-size:15px; letter-spacing:.18em; }
+    .brand span { display:block; margin-top:3px; color:var(--muted); font-size:9px; font-weight:600; letter-spacing:.22em; }
+    .device { padding:20px; border-bottom:1px solid var(--ink); display:flex; gap:13px; align-items:flex-start; }
+    .watch { width:68px; height:68px; flex:0 0 68px; padding:5px; border-radius:6px; background:#17171a; }
+    .watch-face { height:100%; padding:8px 5px; background:var(--paper); display:flex; flex-direction:column; justify-content:space-between; font-size:9px; font-weight:700; line-height:1; }
+    .watch-face b { font-size:19px; letter-spacing:-.1em; }
+    .device-name { font-size:14px; font-weight:700; }
+    .device-meta { margin-top:5px; color:var(--muted); font-size:9px; font-weight:600; }
+    .battery { display:flex; align-items:center; gap:6px; margin-top:8px; font-size:9px; font-weight:600; }
+    .battery-box { width:34px; height:9px; padding:1px; border:1px solid var(--ink); }
+    .battery-box i { display:block; height:100%; width:68%; background:var(--ink); }
+    nav { display:flex; flex-direction:column; overflow-x:auto; }
+    .nav-button { min-height:50px; padding:15px 20px; border:0; border-bottom:1px solid var(--ink); background:var(--paper); display:flex; justify-content:space-between; align-items:center; gap:10px; white-space:nowrap; text-align:left; }
+    .nav-button span { font-size:15px; font-weight:700; letter-spacing:-.01em; }
+    .nav-button small { font-size:10px; font-weight:600; }
+    .nav-button[aria-current="page"] { color:var(--paper); background:var(--ink); }
+    .rail-foot { margin-top:auto; padding:18px 20px; border-top:1px solid var(--ink); }
+    .rail-foot p { margin:0 0 10px; color:var(--muted); font-size:9px; font-weight:600; }
+    .outline, .solid { min-height:36px; padding:9px 12px; border:1px solid var(--ink); background:var(--paper); font-size:10px; font-weight:600; }
+    .outline:hover, .solid, .active { color:var(--paper); background:var(--ink); }
+    main { min-width:0; flex:1; padding:38px 44px 64px; }
+    .page { max-width:1120px; display:flex; flex-direction:column; gap:26px; }
+    .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; padding-bottom:18px; border-bottom:2px solid var(--ink); }
+    h1 { margin:0; font-size:30px; letter-spacing:-.025em; }
+    .lede { margin:5px 0 0; color:var(--muted); font-size:13px; line-height:1.45; }
+    .stat { flex:0 0 auto; margin:0; font-size:11px; font-weight:600; white-space:nowrap; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(214px,1fr)); gap:22px; }
+    .card { display:flex; flex-direction:column; border:1px solid var(--ink); }
+    .card-preview { min-height:142px; padding:18px; border:0; border-bottom:1px solid var(--ink); background:var(--wash); text-align:left; }
+    .card-preview:hover { background:var(--line); }
+    .package-preview { height:104px; display:flex; flex-direction:column; justify-content:space-between; padding:12px; border:5px solid #17171a; background:var(--paper); }
+    .package-preview b { font-size:24px; letter-spacing:-.07em; }
+    .card-body { display:flex; flex-direction:column; gap:10px; padding:13px 14px 14px; }
+    .card-body h2 { margin:0; font-size:15px; overflow-wrap:anywhere; }
+    .metadata { margin:0; color:var(--muted); font-size:9px; font-weight:600; overflow-wrap:anywhere; }
+    .empty { padding:17px; border:1px solid var(--ink); background:var(--wash); font-size:14px; line-height:1.5; }
+    .rows { border-top:1px solid var(--ink); }
+    .row { display:flex; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--ink); }
+    .row-main { min-width:0; flex:1; }
+    .row-main h2 { margin:0; font-size:15px; overflow-wrap:anywhere; }
+    .row-main p { margin:5px 0 0; color:var(--muted); font-size:10px; font-weight:600; overflow-wrap:anywhere; }
+    .settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; border:1px solid var(--ink); background:var(--ink); }
+    .setting { min-width:0; padding:17px; background:var(--paper); }
+    .setting label, .setting legend { display:block; margin:0 0 9px; font-size:10px; font-weight:600; }
+    .setting input, .setting select { width:100%; min-height:38px; padding:8px 9px; border:1px solid var(--ink); background:var(--paper); color:var(--ink); }
+    fieldset.setting { border:0; margin:0; }
+    .switch-line { display:flex; align-items:center; gap:10px; min-height:38px; }
+    .switch-line input { width:18px; height:18px; margin:0; accent-color:var(--ink); }
+    .form-actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .hint { margin:9px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+    .notice { min-height:20px; margin:0; font-size:12px; line-height:1.45; }
+    .notice[data-kind="error"] { font-weight:700; }
+    .upload { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:16px; border:1px solid var(--ink); background:var(--wash); }
+    .upload label { font-size:12px; font-weight:700; }
+    .upload input { max-width:100%; }
+    .route { display:none; }
+    .route[data-open="true"] { display:flex; flex-direction:column; gap:26px; }
+    @media (max-width:899px) { .shell { flex-direction:column; } .rail { width:100%; flex-basis:auto; border-right:0; border-bottom:2px solid var(--ink); } nav { flex-direction:row; } .nav-button { min-width:112px; flex:1 0 auto; justify-content:center; border-right:1px solid var(--ink); border-bottom:0; } .rail-foot { display:none; } main { padding:30px 26px 60px; } }
+    @media (max-width:559px) { main { padding:26px 18px 56px; } .grid { grid-template-columns:1fr; } .settings { grid-template-columns:1fr; } .page-head { align-items:flex-start; flex-direction:column; gap:10px; } .row { align-items:flex-start; flex-wrap:wrap; } .nav-button { min-width:96px; padding:13px 14px; } .nav-button small { display:none; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Portal navigation">
+      <div class="brand"><strong class="mono">WATCHY</strong><span class="mono">MANAGEMENT PORTAL</span></div>
+      <section class="device" aria-label="Watch status">
+        <div class="watch" aria-hidden="true"><div class="watch-face mono"><span>WATCHY</span><b>09:41</b><span id="watchNetwork">OFFLINE</span></div></div>
+        <div><div class="device-name">Watchy 2.0</div><div id="linkState" class="device-meta mono">LOADING</div><div class="battery mono"><span class="battery-box"><i></i></span><span id="batteryValue">--%</span></div></div>
+      </section>
+      <nav>
+        <button class="nav-button" type="button" data-route="faces" aria-current="page"><span>Faces</span><small class="mono" id="facesCount">--</small></button>
+        <button class="nav-button" type="button" data-route="apps"><span>Apps</span><small class="mono" id="appsCount">--</small></button>
+        <button class="nav-button" type="button" data-route="device"><span>Device</span><small class="mono" id="deviceState">--</small></button>
+      </nav>
+      <div class="rail-foot"><p id="firmwareInfo" class="mono">WATCHY</p><button class="outline mono" type="button" data-route="device">DEVICE SETTINGS</button></div>
+    </aside>
+    <main>
+      <p id="notice" class="notice" aria-live="polite"></p>
+      <section id="facesRoute" class="route" data-open="true" aria-labelledby="facesTitle">
+        <header class="page-head"><div><h1 id="facesTitle">Faces</h1><p class="lede">Installed watchfaces. Select a package to make it active.</p></div><p id="facesStat" class="stat mono">0 INSTALLED</p></header>
+        <div id="facesGrid" class="grid"></div>
+        <section class="upload" aria-labelledby="uploadTitle"><label id="uploadTitle" for="packageFile">Install a package</label><input id="packageFile" type="file" accept=".wpk,application/octet-stream"><button id="uploadButton" class="outline mono" type="button">UPLOAD WPK</button></section>
+      </section>
+      <section id="appsRoute" class="route" aria-labelledby="appsTitle">
+        <header class="page-head"><div><h1 id="appsTitle">Apps</h1><p class="lede">Installed applications available to the watch.</p></div><p id="appsStat" class="stat mono">0 INSTALLED</p></header>
+        <div id="appsList" class="rows"></div>
+      </section>
+      <section id="deviceRoute" class="route" aria-labelledby="deviceTitle">
+        <header class="page-head"><div><h1 id="deviceTitle">Device</h1><p class="lede">Device preferences, local time, and Wi-Fi provisioning.</p></div><p id="networkStat" class="stat mono">--</p></header>
+        <form id="settingsForm" class="page"><div class="settings">
+          <div class="setting"><label for="timezone">Home timezone</label><select id="timezone" name="timezone"></select><p id="timezoneHint" class="hint"></p></div>
+          <div class="setting"><label for="ntpServer">NTP server</label><input id="ntpServer" name="ntpServer" maxlength="64" autocomplete="off"></div>
+          <fieldset class="setting"><legend>Motion wake</legend><label class="switch-line"><input id="motionWake" type="checkbox"><span>Wake on movement</span></label></fieldset>
+          <div class="setting"><label for="transitionLevel">Display motion</label><select id="transitionLevel"><option value="full">Full</option><option value="reduced">Reduced</option><option value="off">Off</option></select></div>
+          <div class="setting"><label for="partialRefreshLimit">Partial refresh limit</label><input id="partialRefreshLimit" type="number" min="1" max="255"></div>
+          <fieldset class="setting"><legend>Clock format</legend><label class="switch-line"><input id="time24h" type="checkbox"><span>24-hour time</span></label></fieldset>
+        </div><div class="form-actions"><button class="solid mono" type="submit">SAVE DEVICE</button></div></form>
+        <form id="wifiForm" class="page"><header><h2>Wi-Fi network</h2><p class="lede">Saved Wi-Fi is used after you reopen the portal in Client mode.</p></header><div class="settings">
+          <div class="setting"><label for="ssid">Network name</label><input id="ssid" maxlength="32" autocomplete="off"></div>
+          <div class="setting"><label for="wifiPassword">Password</label><input id="wifiPassword" type="password" maxlength="64" autocomplete="new-password"><p class="hint">Leave untouched to preserve the saved password.</p></div>
+          <fieldset class="setting"><legend>Network security</legend><label class="switch-line"><input id="openNetwork" type="checkbox"><span>Open network / clear password</span></label></fieldset>
+        </div><div class="form-actions"><button class="solid mono" type="submit">SAVE WI-FI</button></div></form>
+        <form id="timeForm" class="page"><header><h2>Time</h2><p class="lede">Set the local calendar time, or sync when the portal is on Client Wi-Fi.</p></header><div class="settings">
+          <div class="setting"><label for="date">Date</label><input id="date" type="date"></div><div class="setting"><label for="time">Time</label><input id="time" type="time"></div>
+        </div><div class="form-actions"><button class="solid mono" type="submit">SET TIME</button><button id="ntpButton" class="outline mono" type="button">NTP SYNC</button></div><p id="ntpHint" class="hint"></p></form>
+      </section>
+    </main>
+  </div>
+  <script>
+    'use strict';
+    /* WIFI_PAYLOAD_BEGIN */
+    function wifiRequestPayload(savedSsid, submittedSsid, password, passwordDirty, openNetwork) {
+      const payload = {ssid: submittedSsid};
+      if (passwordDirty || openNetwork) payload.password = openNetwork ? '' : password;
+      return payload;
+    }
+    /* WIFI_PAYLOAD_END */
+
+    const $ = (id) => document.getElementById(id);
+    const state = { status:null, settings:null, packages:[], savedSsid:'', passwordDirty:false, route:'faces' };
+    const notice = $('notice');
+    function say(message, kind) { notice.textContent = message || ''; notice.dataset.kind = kind || ''; }
+    function errorMessage(error) { return error && error.message ? error.message : 'request_failed'; }
+    async function request(path, options) {
+      const response = await fetch(path, options || {});
+      let payload = null;
+      try { payload = await response.json(); } catch (_) { throw Error('invalid_response'); }
+      if (!response.ok) throw Error((payload.error && payload.error.code) || 'request_failed');
+      return payload;
+    }
+    function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+    function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
+    function splitReference(reference) { const at = reference.lastIndexOf('@'); return at > 0 ? [reference.slice(0, at), reference.slice(at + 1)] : null; }
+    function routeTo(route) { state.route = route; for (const section of document.querySelectorAll('.route')) section.dataset.open = String(section.id === route + 'Route'); for (const button of document.querySelectorAll('[data-route]')) button.setAttribute('aria-current', String(button.dataset.route === route ? 'page' : 'false')); }
+    function packageButton(packageItem, verb, handler, active) { const button = text('button', verb, 'mono ' + (active ? 'solid active' : 'outline')); button.type = 'button'; button.disabled = Boolean(packageItem.quarantined); button.addEventListener('click', handler); return button; }
+    function packageCard(packageItem) {
+      const card = document.createElement('article'); card.className = 'card';
+      const preview = text('button', '', 'card-preview'); preview.type = 'button'; preview.setAttribute('aria-label', packageItem.reference + ' package');
+      const visual = document.createElement('div'); visual.className = 'package-preview mono'; visual.append(text('span', packageItem.active ? 'ACTIVE FACE' : 'WATCHFACE'), text('b', packageItem.reference.split('@')[0].slice(-7).toUpperCase()), text('span', packageItem.pending ? 'PENDING' : packageItem.quarantined ? 'QUARANTINED' : 'READY')); preview.append(visual);
+      const body = document.createElement('div'); body.className = 'card-body'; body.append(text('h2', packageItem.reference), text('p', packageItem.active ? 'ACTIVE · WATCHFACE' : packageItem.quarantined ? 'QUARANTINED · WATCHFACE' : 'WATCHFACE', 'metadata mono'));
+      if (packageItem.active) body.append(packageButton(packageItem, 'ACTIVE', () => {}, true)); else body.append(packageButton(packageItem, 'SET ACTIVE', () => activate(packageItem), false));
+      body.append(packageButton(packageItem, 'REMOVE', () => removePackage(packageItem), false)); card.append(preview, body); return card;
+    }
+    function renderPackages() {
+      const faces = state.packages.filter((item) => item.type === 'watchface'); const apps = state.packages.filter((item) => item.type === 'app');
+      $('facesCount').textContent = faces.length + ' ON'; $('appsCount').textContent = apps.length + ' ON'; $('facesStat').textContent = faces.length + ' INSTALLED'; $('appsStat').textContent = apps.length + ' INSTALLED';
+      const grid = $('facesGrid'); clear(grid); if (!faces.length) grid.append(text('p', 'No watchfaces are installed. Upload a .wpk package to begin.', 'empty')); else faces.forEach((item) => grid.append(packageCard(item)));
+      const list = $('appsList'); clear(list); if (!apps.length) list.append(text('p', 'No apps are installed.', 'empty')); else apps.forEach((item) => { const row = document.createElement('article'); row.className = 'row'; const copy = document.createElement('div'); copy.className = 'row-main'; copy.append(text('h2', item.reference), text('p', item.quarantined ? 'QUARANTINED' : item.pending ? 'PENDING' : 'INSTALLED', 'mono')); row.append(copy, packageButton(item, 'REMOVE', () => removePackage(item), false)); list.append(row); });
+    }
+    function timezoneOptions(current) { const select = $('timezone'); clear(select); for (let minutes = -720; minutes <= 840; minutes += 30) { const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const value = String(minutes); const option = text('option', 'UTC' + sign + String(Math.floor(absolute / 60)).padStart(2, '0') + ':' + String(absolute % 60).padStart(2, '0')); option.value = value; option.selected = minutes === current; select.append(option); } }
+    function renderSettings() {
+      const settings = state.settings; if (!settings) return;
+      state.savedSsid = settings.wifi && settings.wifi.ssid ? settings.wifi.ssid : '';
+      $('ssid').value = state.savedSsid; $('ntpServer').value = settings.ntpServer || ''; $('motionWake').checked = Boolean(settings.motionWake); $('transitionLevel').value = settings.transitionLevel || 'full'; $('partialRefreshLimit').value = settings.partialRefreshLimit || 1; $('time24h').checked = Boolean(settings.time24h);
+      timezoneOptions(settings.timezoneOffsetMinutes || 0); $('timezoneHint').textContent = settings.timezoneLabel || settings.timezone || 'UTC';
+      const time = settings.time; if (time) { $('date').value = String(time.year).padStart(4, '0') + '-' + String(time.month).padStart(2, '0') + '-' + String(time.day).padStart(2, '0'); $('time').value = String(time.hour).padStart(2, '0') + ':' + String(time.minute).padStart(2, '0'); }
+      const isClient = state.status && state.status.network === 'client'; $('ntpButton').disabled = !isClient; $('ntpHint').textContent = isClient ? 'NTP sync uses the saved Client Wi-Fi connection.' : 'NTP sync is available after Saved Wi-Fi → reopen Client Portal.';
+    }
+    function renderStatus() { const status = state.status; if (!status) return; const battery = status.battery || {}; $('batteryValue').textContent = battery.available ? battery.percent + '%' : '--%'; $('linkState').textContent = status.network === 'client' ? 'CLIENT · LINKED' : 'ACCESS POINT'; $('watchNetwork').textContent = status.network === 'client' ? 'CLIENT' : 'AP MODE'; $('deviceState').textContent = status.network === 'client' ? 'LINKED' : 'AP'; $('networkStat').textContent = status.network === 'client' ? 'CLIENT WI-FI' : 'ACCESS POINT'; const firmware = status.firmware || {}; $('firmwareInfo').textContent = (firmware.project || 'WATCHY') + ' ' + (firmware.version || ''); }
+    function renderAll() { renderStatus(); renderSettings(); renderPackages(); }
+    async function load() { const results = await Promise.all([request('/api/v1/status'), request('/api/v1/packages'), request('/api/v1/settings')]); state.status = results[0]; state.packages = results[1].packages || []; state.settings = results[2]; renderAll(); }
+    async function afterAction(message) { await load(); say(message); }
+    async function activate(packageItem) { const parts = splitReference(packageItem.reference); if (!parts) return say('invalid_package_reference', 'error'); try { await request('/api/v1/watchface/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '/activate', {method:'POST'}); await afterAction('Watchface activated.'); } catch (error) { say(errorMessage(error), 'error'); } }
+    async function removePackage(packageItem) { const parts = splitReference(packageItem.reference); if (!parts) return say('invalid_package_reference', 'error'); try { await request('/api/v1/packages/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), {method:'DELETE'}); await afterAction('Package removed.'); } catch (error) { say(errorMessage(error), 'error'); } }
+    $('uploadButton').addEventListener('click', async () => { const file = $('packageFile').files[0]; if (!file) return say('Choose a .wpk file first.', 'error'); say('Uploading package…'); try { const installed = await request('/api/v1/packages', {method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:file}); await afterAction('Installed ' + (installed.reference || 'package') + '.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('settingsForm').addEventListener('submit', async (event) => { event.preventDefault(); const payload = {time24h:$('time24h').checked, motionWake:$('motionWake').checked, transitionLevel:$('transitionLevel').value, partialRefreshLimit:Number($('partialRefreshLimit').value), timezoneOffsetMinutes:Number($('timezone').value), ntpServer:$('ntpServer').value}; try { const saved = await request('/api/v1/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); state.settings = saved; renderSettings(); say('Device settings saved.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('wifiPassword').addEventListener('input', () => { state.passwordDirty = true; });
+    $('wifiForm').addEventListener('submit', async (event) => { event.preventDefault(); const payload = wifiRequestPayload(state.savedSsid, $('ssid').value, $('wifiPassword').value, state.passwordDirty, $('openNetwork').checked); try { const saved = await request('/api/v1/wifi', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); state.savedSsid = saved.wifi && saved.wifi.ssid ? saved.wifi.ssid : $('ssid').value; $('ssid').value = state.savedSsid; $('wifiPassword').value = ''; $('openNetwork').checked = false; state.passwordDirty = false; say('Wi-Fi saved. Reopen the portal in Client mode to use NTP sync.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('timeForm').addEventListener('submit', async (event) => { event.preventDefault(); const date = $('date').value.split('-').map(Number); const clock = $('time').value.split(':').map(Number); if (date.length !== 3 || clock.length !== 2 || date.some(Number.isNaN) || clock.some(Number.isNaN)) return say('Enter a complete date and time.', 'error'); try { const saved = await request('/api/v1/time', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({year:date[0], month:date[1], day:date[2], hour:clock[0], minute:clock[1]})}); if (state.settings) { state.settings.time = saved.time; renderSettings(); } say('Time set.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('ntpButton').addEventListener('click', async () => { if ($('ntpButton').disabled) return; try { const saved = await request('/api/v1/time/ntp', {method:'POST'}); state.settings = saved; renderSettings(); say('Time synchronized.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    for (const button of document.querySelectorAll('[data-route]')) button.addEventListener('click', () => routeTo(button.dataset.route));
+    load().catch((error) => say(errorMessage(error), 'error'));
+  </script>
+</body>
+</html>

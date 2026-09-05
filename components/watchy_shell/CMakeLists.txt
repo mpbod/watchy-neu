@@ -1,3 +1,14 @@
+if(CMAKE_BINARY_DIR MATCHES "/\\.pio")
+    # PlatformIO emits embedded assets itself after consuming the component
+    # graph; letting both build systems emit portal.html.S duplicates it.
+    set(WATCHY_PORTAL_EMBED)
+    set(WATCHY_PORTAL_SOURCE "${CMAKE_BINARY_DIR}/portal.html.S")
+    set_source_files_properties(${WATCHY_PORTAL_SOURCE} PROPERTIES GENERATED TRUE)
+else()
+    set(WATCHY_PORTAL_EMBED EMBED_TXTFILES "web/portal.html")
+    set(WATCHY_PORTAL_SOURCE)
+endif()
+
 idf_component_register(
     SRCS
         "src/captive_portal_idf.c"
@@ -12,12 +23,14 @@ idf_component_register(
         "src/time_sync_policy.c"
         "src/timezone_action_policy.c"
         "src/watchface_action_policy.c"
+        ${WATCHY_PORTAL_SOURCE}
         "../../sdk/ui/src/ui_draw.c"
         "../../sdk/ui/generated/watchy_fonts.c"
     INCLUDE_DIRS
         "include"
         "../../sdk/ui/include"
         "../../sdk/ui/generated"
+    ${WATCHY_PORTAL_EMBED}
     REQUIRES
         watchy_core
         watchy_hal

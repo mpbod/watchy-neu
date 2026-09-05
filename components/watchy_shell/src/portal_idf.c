@@ -32,6 +32,14 @@
 
 static const char WATCHY_CAPTIVE_PORTAL_URI[] = "http://192.168.4.1/";
 
+#if defined(PLATFORMIO)
+extern const uint8_t portal_html_start[] asm("_binary_portal_html_start");
+extern const uint8_t portal_html_end[] asm("_binary_portal_html_end");
+#else
+extern const uint8_t portal_html_start[] asm("_binary_web_portal_html_start");
+extern const uint8_t portal_html_end[] asm("_binary_web_portal_html_end");
+#endif
+
 typedef struct {
     char *body;
     size_t body_size;
@@ -51,49 +59,6 @@ static uint8_t s_ap_entropy_seed[32];
 static uint32_t s_ap_session_counter;
 static bool s_ap_entropy_ready;
 static portMUX_TYPE s_portal_mux = portMUX_INITIALIZER_UNLOCKED;
-
-static const char PAGE_HEAD[] =
-    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport "
-    "content=\"width=device-width,initial-scale=1\"><title>Watchy packages</title><style>"
-    ":root{font:16px system-ui;color:#111;background:#eee}body{max-width:44rem;margin:auto;padding:1rem}"
-    "h1{margin:.2rem 0}section{background:#fff;border:2px solid #111;border-radius:.5rem;padding:1rem;"
-    "margin:1rem 0}button,input{font:inherit;padding:.65rem;margin:.25rem}.pkg{border-top:1px solid #999;"
-    "padding:.7rem 0}.bad{color:#900}code{overflow-wrap:anywhere}</style></head><body>"
-    "<h1>Watchy package portal</h1><section id=status>Loading status...</section>"
-    "<section><h2>Install WPK</h2><input id=file type=file accept=.wpk><button id=upload>Upload</button>"
-    "<div id=result></div></section><section><h2>Wi-Fi provisioning</h2>"
-    "<input id=ssid maxlength=32 placeholder=SSID><input id=wifiPassword maxlength=64 "
-    "type=password placeholder='Password (blank for open)'><button id=saveWifi>Save Wi-Fi</button>"
-    "</section><section><h2>Packages</h2><div id=packages>Loading...</div></section><script>";
-
-static const char PAGE_SCRIPT[] =
-    "const statusEl=document.getElementById('status'),packagesEl=document.getElementById('packages'),"
-    "resultEl=document.getElementById('result'),fileEl=document.getElementById('file'),"
-    "uploadEl=document.getElementById('upload'),ssidEl=document.getElementById('ssid'),"
-    "wifiPasswordEl=document.getElementById('wifiPassword'),saveWifiEl=document.getElementById('saveWifi');"
-    "async function call(path,options={}){options.headers=options.headers||{};"
-    "const r=await fetch(path,options),j=await r.json();if(!r.ok)throw Error(j.error?.code||'request_failed');"
-    "return j}async function refresh(){try{const [s,p]=await Promise.all([call('/api/v1/status'),"
-    "call('/api/v1/packages')]);statusEl.innerHTML='<h2>Status</h2><p>Battery '+s.battery.percent+'% ('+"
-    "s.battery.mv+' mV)</p><p>Storage '+s.storage.free+' bytes free</p><p>Network '+s.network+'</p>';"
-    "packagesEl.textContent='';if(!p.packages.length)packagesEl.textContent='No packages installed.';"
-    "for(const x of p.packages){const d=document.createElement('div');d.className='pkg';"
-    "const c=document.createElement('code');c.textContent=x.reference;d.append(c);"
-    "d.append(document.createTextNode(' '+(x.active?'active ':'')+(x.pending?'pending ':'')));"
-    "if(x.quarantined){const q=document.createElement('span');q.className='bad';q.textContent='quarantined';"
-    "d.append(q)}d.append(document.createElement('br'));if(x.type==='watchface'){"
-    "const a=document.createElement('button');a.textContent='Use watchface';"
-    "a.onclick=async()=>{const [id,v]=x.reference.split('@');await call('/api/v1/watchface/'+id+'/'+v+"
-    "'/activate',{method:'POST'});refresh()};d.append(a)}const b=document.createElement('button');"
-    "b.textContent='Remove';b.onclick=async()=>{const [id,v]=x.reference.split('@');await call("
-    "'/api/v1/packages/'+id+'/'+v,{method:'DELETE'});refresh()};d.append(b);packagesEl.append(d)}}"
-    "catch(e){resultEl.textContent=e.message}}uploadEl.onclick=async()=>{const f=fileEl.files[0];if(!f)return;"
-    "resultEl.textContent='Uploading...';try{const j=await call('/api/v1/packages',{method:'POST',"
-    "headers:{'Content-Type':'application/octet-stream'},body:f});resultEl.textContent='Installed '+j.reference;"
-    "refresh()}catch(e){resultEl.textContent=e.message}};saveWifiEl.onclick=async()=>{try{await call('/api/v1/wifi',"
-    "{method:'POST',headers:{'X-Watchy-SSID':ssidEl.value,'X-Watchy-WiFi-Password':wifiPasswordEl.value}});"
-    "wifiPasswordEl.value='';resultEl.textContent='Wi-Fi saved'}catch(e){resultEl.textContent=e.message}};"
-    "refresh()</script></body></html>";
 
 static uint64_t now_ms(void) {
     return (uint64_t)(esp_timer_get_time() / 1000);
@@ -195,11 +160,8 @@ static bool request_authorized(httpd_req_t *request) {
 static esp_err_t send_page(httpd_req_t *request) {
     httpd_resp_set_type(request, "text/html; charset=utf-8");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
-    if (httpd_resp_send_chunk(request, PAGE_HEAD, HTTPD_RESP_USE_STRLEN) != ESP_OK ||
-        httpd_resp_send_chunk(request, PAGE_SCRIPT, HTTPD_RESP_USE_STRLEN) != ESP_OK) {
-        return ESP_FAIL;
-    }
-    return httpd_resp_send_chunk(request, NULL, 0u);
+    return httpd_resp_send(request, (const char *)portal_html_start,
+                           (ssize_t)(portal_html_end - portal_html_start));
 }
 
 static esp_err_t send_status(httpd_req_t *request) {
