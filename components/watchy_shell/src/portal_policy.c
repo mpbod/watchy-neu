@@ -14,16 +14,43 @@ static bool copy_component(const char *start, size_t length, char *out, size_t c
     return true;
 }
 
-static bool url_component_safe(const char *component) {
-    for (size_t index = 0u; component[index] != '\0'; ++index) {
-        const unsigned char value = (unsigned char)component[index];
-        if (!((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
-              (value >= '0' && value <= '9') || value == '.' || value == '_' ||
-              value == '-')) {
+static bool encode_uri_component_unescaped(unsigned char value) {
+    return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+           (value >= '0' && value <= '9') || value == '-' || value == '_' ||
+           value == '.' || value == '!' || value == '~' || value == '*' ||
+           value == '\'' || value == '(' || value == ')';
+}
+
+static int hex_value(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+static bool decode_uri_component(const char *start, size_t length,
+                                 char *out, size_t capacity) {
+    size_t output = 0u;
+    if (start == NULL || out == NULL || length == 0u) return false;
+    for (size_t input = 0u; input < length; ++input) {
+        unsigned char value = (unsigned char)start[input];
+        if (value == '%') {
+            int high;
+            int low;
+            if (input + 2u >= length || (high = hex_value(start[input + 1u])) < 0 ||
+                (low = hex_value(start[input + 2u])) < 0) {
+                return false;
+            }
+            value = (unsigned char)((high << 4u) | low);
+            if (encode_uri_component_unescaped(value)) return false;
+            input += 2u;
+        } else if (!encode_uri_component_unescaped(value)) {
             return false;
         }
+        if (value == '\0' || output + 1u >= capacity) return false;
+        out[output++] = (char)value;
     }
-    return component[0] != '\0';
+    out[output] = '\0';
+    return output != 0u;
 }
 
 bool watchy_portal_token_authorized(const char *session_token,
@@ -99,7 +126,7 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
     const char *second;
     const char *suffix;
     if (path == NULL || out_route == NULL || strchr(path, '?') != NULL ||
-        strchr(path, '#') != NULL || strchr(path, '%') != NULL) {
+        strchr(path, '#') != NULL) {
         return false;
     }
     memset(out_route, 0, sizeof(*out_route));
@@ -157,11 +184,10 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
         if (suffix == NULL || strcmp(suffix, "/activate") != 0 ||
             !copy_component(first, (size_t)(second - first), out_route->identifier,
                             sizeof(out_route->identifier)) ||
-            !copy_component(second + 1u, (size_t)(suffix - second - 1u), out_route->version,
-                            sizeof(out_route->version)) ||
+            !decode_uri_component(second + 1u, (size_t)(suffix - second - 1u),
+                                  out_route->version, sizeof(out_route->version)) ||
             !watchy_package_id_valid(out_route->identifier) ||
-            !watchy_package_version_valid(out_route->version) ||
-            !url_component_safe(out_route->version)) {
+            !watchy_package_version_valid(out_route->version)) {
             return false;
         }
         out_route->action = WATCHY_PORTAL_ROUTE_ACTIVATE;
@@ -174,11 +200,10 @@ bool watchy_portal_parse_route(watchy_portal_method_t method,
         if (second == NULL || strchr(second + 1u, '/') != NULL ||
             !copy_component(first, (size_t)(second - first), out_route->identifier,
                             sizeof(out_route->identifier)) ||
-            !copy_component(second + 1u, strlen(second + 1u), out_route->version,
-                            sizeof(out_route->version)) ||
+            !decode_uri_component(second + 1u, strlen(second + 1u),
+                                  out_route->version, sizeof(out_route->version)) ||
             !watchy_package_id_valid(out_route->identifier) ||
-            !watchy_package_version_valid(out_route->version) ||
-            !url_component_safe(out_route->version)) {
+            !watchy_package_version_valid(out_route->version)) {
             return false;
         }
         out_route->action = WATCHY_PORTAL_ROUTE_REMOVE;

@@ -53,6 +53,15 @@ class PortalWebTests(unittest.TestCase):
         self.assertIn("application/octet-stream", self.page)
         self.assertNotIn("setInterval", self.page)
 
+    def test_review_regressions_keep_controls_safe_and_live(self) -> None:
+        page = self.page
+        self.assertIn('id="removeConfirm"', page)
+        self.assertIn('id="batteryFill"', page)
+        self.assertIn('id="wifiHint"', page)
+        self.assertIn('state.passwordForSsid', page)
+        self.assertNotIn("#17171a", page)
+        self.assertIn("const TIMEZONE_OFFSETS = Object.freeze(", page)
+
     def test_embedded_page_replaces_c_string_fragments(self) -> None:
         cmake = (ROOT / "components/watchy_shell/CMakeLists.txt").read_text(
             encoding="utf-8"

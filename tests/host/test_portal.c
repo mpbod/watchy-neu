@@ -105,6 +105,12 @@ static int test_route_parser_accepts_only_exact_valid_components(void) {
     CHECK(route.action == WATCHY_PORTAL_ROUTE_ACTIVATE);
     CHECK(strcmp(route.identifier, "clock.simple") == 0);
     CHECK(strcmp(route.version, "1.2.3") == 0);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
+                                    "/api/v1/watchface/clock.simple/1%2Bbuild/activate", &route));
+    CHECK(strcmp(route.version, "1+build") == 0);
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
+                                    "/api/v1/packages/app.timer/2%3Apreview%2B1", &route));
+    CHECK(strcmp(route.version, "2:preview+1") == 0);
     CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
                                     "/api/v1/packages/app.timer/2/remove", &route) == false);
     CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
@@ -118,9 +124,12 @@ static int test_route_parser_accepts_only_exact_valid_components(void) {
     CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
                                      "/api/v1/watchface/a/%2e%2e/activate", &route));
     CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
+                                     "/api/v1/watchface/a/1%2bbuild/activate", &route));
+    CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_POST,
                                      "/api/v1/watchface/a/version with space/activate", &route));
-    CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
-                                     "/api/v1/packages/a/1%22", &route));
+    CHECK(watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
+                                    "/api/v1/packages/a/1%22", &route));
+    CHECK(strcmp(route.version, "1\"") == 0);
     CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,
                                      "/api/v1/packages/a/1\"", &route));
     CHECK(!watchy_portal_parse_route(WATCHY_PORTAL_METHOD_DELETE,

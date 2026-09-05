@@ -18,14 +18,14 @@
     .brand strong { display:block; font-size:15px; letter-spacing:.18em; }
     .brand span { display:block; margin-top:3px; color:var(--muted); font-size:9px; font-weight:600; letter-spacing:.22em; }
     .device { padding:20px; border-bottom:1px solid var(--ink); display:flex; gap:13px; align-items:flex-start; }
-    .watch { width:68px; height:68px; flex:0 0 68px; padding:5px; border-radius:6px; background:#17171a; }
+    .watch { width:68px; height:68px; flex:0 0 68px; padding:5px; border-radius:6px; background:var(--ink); }
     .watch-face { height:100%; padding:8px 5px; background:var(--paper); display:flex; flex-direction:column; justify-content:space-between; font-size:9px; font-weight:700; line-height:1; }
     .watch-face b { font-size:19px; letter-spacing:-.1em; }
     .device-name { font-size:14px; font-weight:700; }
     .device-meta { margin-top:5px; color:var(--muted); font-size:9px; font-weight:600; }
     .battery { display:flex; align-items:center; gap:6px; margin-top:8px; font-size:9px; font-weight:600; }
     .battery-box { width:34px; height:9px; padding:1px; border:1px solid var(--ink); }
-    .battery-box i { display:block; height:100%; width:68%; background:var(--ink); }
+    .battery-box i { display:block; height:100%; width:0; background:var(--ink); transition:width .15s linear; }
     nav { display:flex; flex-direction:column; overflow-x:auto; }
     .nav-button { min-height:50px; padding:15px 20px; border:0; border-bottom:1px solid var(--ink); background:var(--paper); display:flex; justify-content:space-between; align-items:center; gap:10px; white-space:nowrap; text-align:left; }
     .nav-button span { font-size:15px; font-weight:700; letter-spacing:-.01em; }
@@ -43,9 +43,8 @@
     .stat { flex:0 0 auto; margin:0; font-size:11px; font-weight:600; white-space:nowrap; }
     .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(214px,1fr)); gap:22px; }
     .card { display:flex; flex-direction:column; border:1px solid var(--ink); }
-    .card-preview { min-height:142px; padding:18px; border:0; border-bottom:1px solid var(--ink); background:var(--wash); text-align:left; }
-    .card-preview:hover { background:var(--line); }
-    .package-preview { height:104px; display:flex; flex-direction:column; justify-content:space-between; padding:12px; border:5px solid #17171a; background:var(--paper); }
+    .card-preview { min-height:142px; padding:18px; border-bottom:1px solid var(--ink); background:var(--wash); }
+    .package-preview { height:104px; display:flex; flex-direction:column; justify-content:space-between; padding:12px; border:5px solid var(--ink); background:var(--paper); }
     .package-preview b { font-size:24px; letter-spacing:-.07em; }
     .card-body { display:flex; flex-direction:column; gap:10px; padding:13px 14px 14px; }
     .card-body h2 { margin:0; font-size:15px; overflow-wrap:anywhere; }
@@ -72,6 +71,11 @@
     .upload input { max-width:100%; }
     .route { display:none; }
     .route[data-open="true"] { display:flex; flex-direction:column; gap:26px; }
+    dialog { width:min(430px,calc(100% - 36px)); padding:0; border:2px solid var(--ink); color:var(--ink); background:var(--paper); }
+    dialog::backdrop { background:rgba(0,0,0,.42); }
+    .confirm { display:flex; flex-direction:column; gap:18px; padding:24px; }
+    .confirm h2,.confirm p { margin:0; }
+    .confirm p { line-height:1.5; }
     @media (max-width:899px) { .shell { flex-direction:column; } .rail { width:100%; flex-basis:auto; border-right:0; border-bottom:2px solid var(--ink); } nav { flex-direction:row; } .nav-button { min-width:112px; flex:1 0 auto; justify-content:center; border-right:1px solid var(--ink); border-bottom:0; } .rail-foot { display:none; } main { padding:30px 26px 60px; } }
     @media (max-width:559px) { main { padding:26px 18px 56px; } .grid { grid-template-columns:1fr; } .settings { grid-template-columns:1fr; } .page-head { align-items:flex-start; flex-direction:column; gap:10px; } .row { align-items:flex-start; flex-wrap:wrap; } .nav-button { min-width:96px; padding:13px 14px; } .nav-button small { display:none; } }
   </style>
@@ -82,7 +86,7 @@
       <div class="brand"><strong class="mono">WATCHY</strong><span class="mono">MANAGEMENT PORTAL</span></div>
       <section class="device" aria-label="Watch status">
         <div class="watch" aria-hidden="true"><div class="watch-face mono"><span>WATCHY</span><b>09:41</b><span id="watchNetwork">OFFLINE</span></div></div>
-        <div><div class="device-name">Watchy 2.0</div><div id="linkState" class="device-meta mono">LOADING</div><div class="battery mono"><span class="battery-box"><i></i></span><span id="batteryValue">--%</span></div></div>
+        <div><div class="device-name">Watchy 2.0</div><div id="linkState" class="device-meta mono">LOADING</div><div class="battery mono"><span class="battery-box" aria-hidden="true"><i id="batteryFill"></i></span><span id="batteryValue">--%</span></div></div>
       </section>
       <nav>
         <button class="nav-button" type="button" data-route="faces" aria-current="page"><span>Faces</span><small class="mono" id="facesCount">--</small></button>
@@ -116,25 +120,28 @@
           <div class="setting"><label for="ssid">Network name</label><input id="ssid" maxlength="32" autocomplete="off"></div>
           <div class="setting"><label for="wifiPassword">Password</label><input id="wifiPassword" type="password" maxlength="64" autocomplete="new-password"><p class="hint">Leave untouched to preserve the saved password.</p></div>
           <fieldset class="setting"><legend>Network security</legend><label class="switch-line"><input id="openNetwork" type="checkbox"><span>Open network / clear password</span></label></fieldset>
-        </div><div class="form-actions"><button class="solid mono" type="submit">SAVE WI-FI</button></div></form>
+        </div><div class="form-actions"><button id="wifiSave" class="solid mono" type="submit">SAVE WI-FI</button></div><p id="wifiHint" class="hint"></p></form>
         <form id="timeForm" class="page"><header><h2>Time</h2><p class="lede">Set the local calendar time, or sync when the portal is on Client Wi-Fi.</p></header><div class="settings">
           <div class="setting"><label for="date">Date</label><input id="date" type="date"></div><div class="setting"><label for="time">Time</label><input id="time" type="time"></div>
         </div><div class="form-actions"><button class="solid mono" type="submit">SET TIME</button><button id="ntpButton" class="outline mono" type="button">NTP SYNC</button></div><p id="ntpHint" class="hint"></p></form>
       </section>
     </main>
   </div>
+  <dialog id="removeConfirm" aria-labelledby="removeConfirmTitle" aria-describedby="removeConfirmText"><form method="dialog" class="confirm"><h2 id="removeConfirmTitle">Remove package</h2><p id="removeConfirmText"></p><div class="form-actions"><button class="outline mono" value="cancel">CANCEL</button><button id="confirmRemove" class="solid mono" type="button">REMOVE PACKAGE</button></div></form></dialog>
   <script>
     'use strict';
     /* WIFI_PAYLOAD_BEGIN */
     function wifiRequestPayload(savedSsid, submittedSsid, password, passwordDirty, openNetwork) {
       const payload = {ssid: submittedSsid};
-      if (passwordDirty || openNetwork) payload.password = openNetwork ? '' : password;
+      if (openNetwork) payload.password = '';
+      else if (passwordDirty && password) payload.password = password;
       return payload;
     }
     /* WIFI_PAYLOAD_END */
 
     const $ = (id) => document.getElementById(id);
-    const state = { status:null, settings:null, packages:[], savedSsid:'', passwordDirty:false, route:'faces' };
+    const TIMEZONE_OFFSETS = Object.freeze([-720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210, -180, -120, -60, 0, 60, 120, 180, 210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 840]);
+    const state = { status:null, settings:null, packages:[], savedSsid:'', passwordDirty:false, passwordForSsid:'', dirty:{device:false,wifi:false,time:false}, route:'faces' };
     const notice = $('notice');
     function say(message, kind) { notice.textContent = message || ''; notice.dataset.kind = kind || ''; }
     function errorMessage(error) { return error && error.message ? error.message : 'request_failed'; }
@@ -149,10 +156,10 @@
     function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
     function splitReference(reference) { const at = reference.lastIndexOf('@'); return at > 0 ? [reference.slice(0, at), reference.slice(at + 1)] : null; }
     function routeTo(route) { state.route = route; for (const section of document.querySelectorAll('.route')) section.dataset.open = String(section.id === route + 'Route'); for (const button of document.querySelectorAll('[data-route]')) button.setAttribute('aria-current', String(button.dataset.route === route ? 'page' : 'false')); }
-    function packageButton(packageItem, verb, handler, active) { const button = text('button', verb, 'mono ' + (active ? 'solid active' : 'outline')); button.type = 'button'; button.disabled = Boolean(packageItem.quarantined); button.addEventListener('click', handler); return button; }
+    function packageButton(packageItem, verb, handler, active) { const button = text('button', verb, 'mono ' + (active ? 'solid active' : 'outline')); button.type = 'button'; button.disabled = Boolean(active || (verb === 'SET ACTIVE' && packageItem.quarantined)); button.addEventListener('click', handler); return button; }
     function packageCard(packageItem) {
       const card = document.createElement('article'); card.className = 'card';
-      const preview = text('button', '', 'card-preview'); preview.type = 'button'; preview.setAttribute('aria-label', packageItem.reference + ' package');
+      const preview = document.createElement('div'); preview.className = 'card-preview'; preview.setAttribute('aria-hidden', 'true');
       const visual = document.createElement('div'); visual.className = 'package-preview mono'; visual.append(text('span', packageItem.active ? 'ACTIVE FACE' : 'WATCHFACE'), text('b', packageItem.reference.split('@')[0].slice(-7).toUpperCase()), text('span', packageItem.pending ? 'PENDING' : packageItem.quarantined ? 'QUARANTINED' : 'READY')); preview.append(visual);
       const body = document.createElement('div'); body.className = 'card-body'; body.append(text('h2', packageItem.reference), text('p', packageItem.active ? 'ACTIVE · WATCHFACE' : packageItem.quarantined ? 'QUARANTINED · WATCHFACE' : 'WATCHFACE', 'metadata mono'));
       if (packageItem.active) body.append(packageButton(packageItem, 'ACTIVE', () => {}, true)); else body.append(packageButton(packageItem, 'SET ACTIVE', () => activate(packageItem), false));
@@ -164,27 +171,31 @@
       const grid = $('facesGrid'); clear(grid); if (!faces.length) grid.append(text('p', 'No watchfaces are installed. Upload a .wpk package to begin.', 'empty')); else faces.forEach((item) => grid.append(packageCard(item)));
       const list = $('appsList'); clear(list); if (!apps.length) list.append(text('p', 'No apps are installed.', 'empty')); else apps.forEach((item) => { const row = document.createElement('article'); row.className = 'row'; const copy = document.createElement('div'); copy.className = 'row-main'; copy.append(text('h2', item.reference), text('p', item.quarantined ? 'QUARANTINED' : item.pending ? 'PENDING' : 'INSTALLED', 'mono')); row.append(copy, packageButton(item, 'REMOVE', () => removePackage(item), false)); list.append(row); });
     }
-    function timezoneOptions(current) { const select = $('timezone'); clear(select); for (let minutes = -720; minutes <= 840; minutes += 30) { const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const value = String(minutes); const option = text('option', 'UTC' + sign + String(Math.floor(absolute / 60)).padStart(2, '0') + ':' + String(absolute % 60).padStart(2, '0')); option.value = value; option.selected = minutes === current; select.append(option); } }
-    function renderSettings() {
-      const settings = state.settings; if (!settings) return;
-      state.savedSsid = settings.wifi && settings.wifi.ssid ? settings.wifi.ssid : '';
-      $('ssid').value = state.savedSsid; $('ntpServer').value = settings.ntpServer || ''; $('motionWake').checked = Boolean(settings.motionWake); $('transitionLevel').value = settings.transitionLevel || 'full'; $('partialRefreshLimit').value = settings.partialRefreshLimit || 1; $('time24h').checked = Boolean(settings.time24h);
-      timezoneOptions(settings.timezoneOffsetMinutes || 0); $('timezoneHint').textContent = settings.timezoneLabel || settings.timezone || 'UTC';
-      const time = settings.time; if (time) { $('date').value = String(time.year).padStart(4, '0') + '-' + String(time.month).padStart(2, '0') + '-' + String(time.day).padStart(2, '0'); $('time').value = String(time.hour).padStart(2, '0') + ':' + String(time.minute).padStart(2, '0'); }
-      const isClient = state.status && state.status.network === 'client'; $('ntpButton').disabled = !isClient; $('ntpHint').textContent = isClient ? 'NTP sync uses the saved Client Wi-Fi connection.' : 'NTP sync is available after Saved Wi-Fi → reopen Client Portal.';
-    }
-    function renderStatus() { const status = state.status; if (!status) return; const battery = status.battery || {}; $('batteryValue').textContent = battery.available ? battery.percent + '%' : '--%'; $('linkState').textContent = status.network === 'client' ? 'CLIENT · LINKED' : 'ACCESS POINT'; $('watchNetwork').textContent = status.network === 'client' ? 'CLIENT' : 'AP MODE'; $('deviceState').textContent = status.network === 'client' ? 'LINKED' : 'AP'; $('networkStat').textContent = status.network === 'client' ? 'CLIENT WI-FI' : 'ACCESS POINT'; const firmware = status.firmware || {}; $('firmwareInfo').textContent = (firmware.project || 'WATCHY') + ' ' + (firmware.version || ''); }
+    function timezoneOptions(current) { const select = $('timezone'); clear(select); const offsets = TIMEZONE_OFFSETS.includes(current) ? TIMEZONE_OFFSETS : [current].concat(TIMEZONE_OFFSETS); for (const minutes of offsets) { const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); const option = text('option', 'UTC' + sign + String(Math.floor(absolute / 60)).padStart(2, '0') + ':' + String(absolute % 60).padStart(2, '0')); option.value = String(minutes); option.selected = minutes === current; select.append(option); } }
+    function renderDeviceSettings() { const settings = state.settings; if (!settings || state.dirty.device) return; $('ntpServer').value = settings.ntpServer || ''; $('motionWake').checked = Boolean(settings.motionWake); $('transitionLevel').value = settings.transitionLevel || 'full'; $('partialRefreshLimit').value = settings.partialRefreshLimit || 1; $('time24h').checked = Boolean(settings.time24h); timezoneOptions(Number.isFinite(settings.timezoneOffsetMinutes) ? settings.timezoneOffsetMinutes : 0); $('timezoneHint').textContent = settings.timezoneLabel || settings.timezone || 'UTC'; }
+    function renderWifiSettings() { const settings = state.settings; if (!settings || state.dirty.wifi) return; state.savedSsid = settings.wifi && settings.wifi.ssid ? settings.wifi.ssid : ''; $('ssid').value = state.savedSsid; $('wifiPassword').value = ''; $('openNetwork').checked = false; state.passwordDirty = false; state.passwordForSsid = ''; }
+    function renderTimeSettings() { const time = state.settings && state.settings.time; if (!time || state.dirty.time) return; $('date').value = String(time.year).padStart(4, '0') + '-' + String(time.month).padStart(2, '0') + '-' + String(time.day).padStart(2, '0'); $('time').value = String(time.hour).padStart(2, '0') + ':' + String(time.minute).padStart(2, '0'); }
+    function renderNetworkControls() { const isClient = state.status && state.status.network === 'client'; for (const id of ['ssid', 'wifiPassword', 'openNetwork', 'wifiSave']) $(id).disabled = isClient; $('wifiHint').textContent = isClient ? 'Wi-Fi settings are unavailable in Client Portal. Reopen the Watchy access point to edit them.' : 'Leave the password untouched to preserve it. Choose Open network to clear it.'; $('ntpButton').disabled = !isClient; $('ntpHint').textContent = isClient ? 'NTP sync uses the saved Client Wi-Fi connection.' : 'NTP sync is available after Saved Wi-Fi → reopen Client Portal.'; }
+    function renderSettings() { renderDeviceSettings(); renderWifiSettings(); renderTimeSettings(); renderNetworkControls(); }
+    function renderStatus() { const status = state.status; if (!status) return; const battery = status.battery || {}; const percent = battery.available ? Math.max(0, Math.min(100, Number(battery.percent) || 0)) : 0; $('batteryValue').textContent = battery.available ? percent + '%' : '--%'; $('batteryFill').style.width = percent + '%'; $('linkState').textContent = status.network === 'client' ? 'CLIENT · LINKED' : 'ACCESS POINT'; $('watchNetwork').textContent = status.network === 'client' ? 'CLIENT' : 'AP MODE'; $('deviceState').textContent = status.network === 'client' ? 'LINKED' : 'AP'; $('networkStat').textContent = status.network === 'client' ? 'CLIENT WI-FI' : 'ACCESS POINT'; const firmware = status.firmware || {}; $('firmwareInfo').textContent = (firmware.project || 'WATCHY') + ' ' + (firmware.version || ''); }
     function renderAll() { renderStatus(); renderSettings(); renderPackages(); }
     async function load() { const results = await Promise.all([request('/api/v1/status'), request('/api/v1/packages'), request('/api/v1/settings')]); state.status = results[0]; state.packages = results[1].packages || []; state.settings = results[2]; renderAll(); }
     async function afterAction(message) { await load(); say(message); }
     async function activate(packageItem) { const parts = splitReference(packageItem.reference); if (!parts) return say('invalid_package_reference', 'error'); try { await request('/api/v1/watchface/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '/activate', {method:'POST'}); await afterAction('Watchface activated.'); } catch (error) { say(errorMessage(error), 'error'); } }
-    async function removePackage(packageItem) { const parts = splitReference(packageItem.reference); if (!parts) return say('invalid_package_reference', 'error'); try { await request('/api/v1/packages/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), {method:'DELETE'}); await afterAction('Package removed.'); } catch (error) { say(errorMessage(error), 'error'); } }
+    let pendingRemoval = null;
+    function removePackage(packageItem) { pendingRemoval = packageItem; $('removeConfirmTitle').textContent = 'Remove ' + packageItem.reference + '?'; $('removeConfirmText').textContent = 'This permanently removes ' + packageItem.reference + '. Its saved package state may also be deleted.'; $('confirmRemove').textContent = 'REMOVE ' + packageItem.reference; $('removeConfirm').showModal(); }
+    async function deletePackage(packageItem) { const parts = splitReference(packageItem.reference); if (!parts) return say('invalid_package_reference', 'error'); try { await request('/api/v1/packages/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]), {method:'DELETE'}); await afterAction('Package removed.'); } catch (error) { say(errorMessage(error), 'error'); } }
     $('uploadButton').addEventListener('click', async () => { const file = $('packageFile').files[0]; if (!file) return say('Choose a .wpk file first.', 'error'); say('Uploading package…'); try { const installed = await request('/api/v1/packages', {method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:file}); await afterAction('Installed ' + (installed.reference || 'package') + '.'); } catch (error) { say(errorMessage(error), 'error'); } });
-    $('settingsForm').addEventListener('submit', async (event) => { event.preventDefault(); const payload = {time24h:$('time24h').checked, motionWake:$('motionWake').checked, transitionLevel:$('transitionLevel').value, partialRefreshLimit:Number($('partialRefreshLimit').value), timezoneOffsetMinutes:Number($('timezone').value), ntpServer:$('ntpServer').value}; try { const saved = await request('/api/v1/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); state.settings = saved; renderSettings(); say('Device settings saved.'); } catch (error) { say(errorMessage(error), 'error'); } });
-    $('wifiPassword').addEventListener('input', () => { state.passwordDirty = true; });
-    $('wifiForm').addEventListener('submit', async (event) => { event.preventDefault(); const payload = wifiRequestPayload(state.savedSsid, $('ssid').value, $('wifiPassword').value, state.passwordDirty, $('openNetwork').checked); try { const saved = await request('/api/v1/wifi', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); state.savedSsid = saved.wifi && saved.wifi.ssid ? saved.wifi.ssid : $('ssid').value; $('ssid').value = state.savedSsid; $('wifiPassword').value = ''; $('openNetwork').checked = false; state.passwordDirty = false; say('Wi-Fi saved. Reopen the portal in Client mode to use NTP sync.'); } catch (error) { say(errorMessage(error), 'error'); } });
-    $('timeForm').addEventListener('submit', async (event) => { event.preventDefault(); const date = $('date').value.split('-').map(Number); const clock = $('time').value.split(':').map(Number); if (date.length !== 3 || clock.length !== 2 || date.some(Number.isNaN) || clock.some(Number.isNaN)) return say('Enter a complete date and time.', 'error'); try { const saved = await request('/api/v1/time', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({year:date[0], month:date[1], day:date[2], hour:clock[0], minute:clock[1]})}); if (state.settings) { state.settings.time = saved.time; renderSettings(); } say('Time set.'); } catch (error) { say(errorMessage(error), 'error'); } });
-    $('ntpButton').addEventListener('click', async () => { if ($('ntpButton').disabled) return; try { const saved = await request('/api/v1/time/ntp', {method:'POST'}); state.settings = saved; renderSettings(); say('Time synchronized.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    for (const control of document.querySelectorAll('#settingsForm input,#settingsForm select')) control.addEventListener('input', () => { state.dirty.device = true; });
+    $('settingsForm').addEventListener('submit', async (event) => { event.preventDefault(); const payload = {time24h:$('time24h').checked, motionWake:$('motionWake').checked, transitionLevel:$('transitionLevel').value, partialRefreshLimit:Number($('partialRefreshLimit').value), timezoneOffsetMinutes:Number($('timezone').value), ntpServer:$('ntpServer').value}; try { const saved = await request('/api/v1/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); state.settings = saved; state.dirty.device = false; renderDeviceSettings(); say('Device settings saved.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('ssid').addEventListener('input', () => { if (state.passwordDirty || $('wifiPassword').value) { $('wifiPassword').value = ''; state.passwordDirty = false; state.passwordForSsid = ''; say('Wi-Fi password cleared after the network name changed.'); } state.dirty.wifi = true; });
+    $('wifiPassword').addEventListener('input', () => { state.passwordDirty = true; state.passwordForSsid = $('ssid').value; state.dirty.wifi = true; });
+    $('openNetwork').addEventListener('change', () => { if ($('openNetwork').checked) { $('wifiPassword').value = ''; state.passwordDirty = false; state.passwordForSsid = ''; } state.dirty.wifi = true; });
+    $('wifiForm').addEventListener('submit', async (event) => { event.preventDefault(); if ($('wifiSave').disabled) return; const payload = wifiRequestPayload(state.savedSsid, $('ssid').value, $('wifiPassword').value, state.passwordDirty, $('openNetwork').checked); try { const saved = await request('/api/v1/wifi', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); if (state.settings) state.settings.wifi = saved.wifi || {ssid:$('ssid').value}; state.savedSsid = state.settings && state.settings.wifi && state.settings.wifi.ssid ? state.settings.wifi.ssid : $('ssid').value; state.dirty.wifi = false; renderWifiSettings(); say('Wi-Fi saved. Reopen the portal in Client mode to use NTP sync.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    for (const control of document.querySelectorAll('#timeForm input')) control.addEventListener('input', () => { state.dirty.time = true; });
+    $('timeForm').addEventListener('submit', async (event) => { event.preventDefault(); const date = $('date').value.split('-').map(Number); const clock = $('time').value.split(':').map(Number); if (date.length !== 3 || clock.length !== 2 || date.some(Number.isNaN) || clock.some(Number.isNaN)) return say('Enter a complete date and time.', 'error'); try { const saved = await request('/api/v1/time', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({year:date[0], month:date[1], day:date[2], hour:clock[0], minute:clock[1]})}); if (state.settings) { state.settings.time = saved.time; state.dirty.time = false; renderTimeSettings(); } say('Time set.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('ntpButton').addEventListener('click', async () => { if ($('ntpButton').disabled) return; try { const saved = await request('/api/v1/time/ntp', {method:'POST'}); state.settings = saved; state.dirty.time = false; renderSettings(); say('Time synchronized.'); } catch (error) { say(errorMessage(error), 'error'); } });
+    $('confirmRemove').addEventListener('click', () => { const packageItem = pendingRemoval; pendingRemoval = null; $('removeConfirm').close(); if (packageItem) deletePackage(packageItem); });
     for (const button of document.querySelectorAll('[data-route]')) button.addEventListener('click', () => routeTo(button.dataset.route));
     load().catch((error) => say(errorMessage(error), 'error'));
   </script>

@@ -27,4 +27,20 @@ test('Wi-Fi request payload preserves a saved password unless explicitly changed
     wifiRequestPayload('Home', 'Cafe', '', false, true),
     {ssid: 'Cafe', password: ''},
   );
+  assert.deepEqual(
+    wifiRequestPayload('Home', 'Home', '', true, false),
+    {ssid: 'Home'},
+  );
+});
+
+test('timezone control renders exactly the settings-policy offsets', () => {
+  const match = page.match(/const TIMEZONE_OFFSETS = Object\.freeze\(\[([^\]]+)\]\);/);
+  assert.ok(match, 'portal exposes its canonical timezone offsets');
+  const offsets = match[1].split(',').map((value) => Number(value.trim()));
+  assert.deepEqual(offsets, [
+    -720, -660, -600, -570, -540, -480, -420, -360, -300, -240,
+    -210, -180, -120, -60, 0, 60, 120, 180, 210, 240, 270, 300,
+    330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660,
+    720, 765, 780, 840,
+  ]);
 });
