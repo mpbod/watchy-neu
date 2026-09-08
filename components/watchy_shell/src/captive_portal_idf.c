@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_memory_utils.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "heap_memory_layout.h"
@@ -13,6 +14,8 @@
 #define WATCHY_CAPTIVE_DNS_PORT 53u
 #define WATCHY_CAPTIVE_DNS_RECEIVE_TIMEOUT_US 200000L
 #define WATCHY_CAPTIVE_DNS_TASK_STACK_BYTES 4096u
+
+static const char *TAG = "watchy_captive";
 
 extern uint8_t _watchy_captive_task_region_start[];
 extern uint8_t _watchy_captive_task_region_end[];
@@ -153,6 +156,7 @@ watchy_status_t watchy_captive_portal_start(const char *address) {
         return WATCHY_STATUS_INVALID_STATE;
     }
     if (!dns_task_storage_is_valid()) {
+        ESP_LOGE(TAG, "DNS task storage failed ESP32 memory validation");
         portENTER_CRITICAL(&s_dns_lock);
         s_dns.lifecycle = CAPTIVE_DNS_STOPPED;
         portEXIT_CRITICAL(&s_dns_lock);
@@ -160,11 +164,18 @@ watchy_status_t watchy_captive_portal_start(const char *address) {
     }
 
     socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (socket_fd < 0 ||
-        setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                   sizeof(timeout)) != 0 ||
-        bind(socket_fd, (const struct sockaddr *)&bind_address,
-             sizeof(bind_address)) != 0) {
+    if (socket_fd < 0) {
+        ESP_LOGE(TAG, "DNS socket creation failed errno=%d", errno);
+    } else if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                          sizeof(timeout)) != 0) {
+        ESP_LOGE(TAG, "DNS receive timeout setup failed errno=%d", errno);
+    } else if (bind(socket_fd, (const struct sockaddr *)&bind_address,
+                    sizeof(bind_address)) != 0) {
+        ESP_LOGE(TAG, "DNS bind port 53 failed errno=%d", errno);
+    } else {
+        goto socket_ready;
+    }
+    {
         if (socket_fd >= 0) {
             (void)closesocket(socket_fd);
         }
@@ -173,6 +184,8 @@ watchy_status_t watchy_captive_portal_start(const char *address) {
         portEXIT_CRITICAL(&s_dns_lock);
         return WATCHY_STATUS_INVALID_STATE;
     }
+
+socket_ready:
 
     portENTER_CRITICAL(&s_dns_lock);
     s_dns.socket_fd = socket_fd;
@@ -185,6 +198,7 @@ watchy_status_t watchy_captive_portal_start(const char *address) {
         sizeof(s_dns_task_stack) / sizeof(s_dns_task_stack[0]), NULL,
         tskIDLE_PRIORITY + 1u, s_dns_task_stack, &s_dns_task_storage);
     if (task == NULL) {
+        ESP_LOGE(TAG, "DNS static task creation failed");
         portENTER_CRITICAL(&s_dns_lock);
         s_dns.socket_fd = -1;
         s_dns.lifecycle = CAPTIVE_DNS_STOPPED;

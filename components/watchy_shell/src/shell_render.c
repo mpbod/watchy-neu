@@ -389,6 +389,36 @@ static void draw_detail_lines(watchy_canvas_t *canvas, int16_t y, const char *de
     }
 }
 
+static void draw_portal_detail_lines(watchy_canvas_t *canvas,
+                                     int16_t baseline,
+                                     const char *detail) {
+    const watchy_text_style_t credentials =
+        text_style(&watchy_font_plex_13_bold, 0, true, false);
+    char remaining[48];
+    while (detail != NULL && *detail != '\0' && baseline <= 177) {
+        const char *end = strchr(detail, '\n');
+        size_t length = end == NULL ? strlen(detail) : (size_t)(end - detail);
+        if (length >= sizeof(remaining)) length = sizeof(remaining) - 1u;
+        memcpy(remaining, detail, length);
+        remaining[length] = '\0';
+
+        while (remaining[0] != '\0' && baseline <= 177) {
+            char fitted[48];
+            size_t fitted_length = copy_utf8_prefix(fitted, sizeof(fitted), remaining);
+            while (fitted_length > 0u &&
+                   watchy_ui_measure_text(&credentials, fitted).width > 184) {
+                remove_last_utf8(fitted, &fitted_length);
+            }
+            if (fitted_length == 0u) break;
+            watchy_ui_draw_text_font(canvas, 8, baseline, fitted, &credentials);
+            memmove(remaining, remaining + fitted_length,
+                    strlen(remaining + fitted_length) + 1u);
+            baseline = (int16_t)(baseline + 24);
+        }
+        detail = end == NULL ? NULL : end + 1u;
+    }
+}
+
 static void render_apps(watchy_canvas_t *canvas,
                         const watchy_shell_t *shell,
                         const watchy_package_catalog_t *catalog,
@@ -465,9 +495,13 @@ static void render_legacy_screen(watchy_canvas_t *canvas,
         break;
     case WATCHY_SHELL_PACKAGE_PORTAL:
         draw_header(canvas, "PORTAL", NULL);
-        draw_compact_row(canvas, 1u, "CLIENT WIFI", "STA", shell->selection == 0u);
-        draw_compact_row(canvas, 2u, "WATCHY AP", "AP", shell->selection == 1u);
-        draw_detail_lines(canvas, 114, detail);
+        draw_compact_row(canvas, 0u, "CLIENT WIFI", "STA", shell->selection == 0u);
+        draw_compact_row(canvas, 1u, "WATCHY AP", "AP", shell->selection == 1u);
+        if (detail != NULL && strstr(detail, "\nUSER ") != NULL) {
+            draw_detail_lines(canvas, 98, detail);
+        } else {
+            draw_portal_detail_lines(canvas, 105, detail);
+        }
         break;
     case WATCHY_SHELL_DIAGNOSTICS:
         render_diagnostics(canvas, shell, report);

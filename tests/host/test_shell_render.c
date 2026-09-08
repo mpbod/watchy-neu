@@ -449,6 +449,42 @@ static int test_larger_typography_fits_shell_regions(void) {
     return 0;
 }
 
+static int test_portal_choices_stay_above_large_credentials(void) {
+    uint8_t actual[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    uint8_t expected[WATCHY_DISPLAY_FRAMEBUFFER_SIZE];
+    watchy_canvas_t actual_canvas = canvas(actual);
+    watchy_canvas_t expected_canvas = canvas(expected);
+    watchy_settings_t settings = {.time_24h = true};
+    watchy_time_t time = now();
+    watchy_shell_t shell = {
+        .screen = WATCHY_SHELL_PACKAGE_PORTAL,
+        .selection = 0u,
+    };
+    const watchy_text_style_t credentials = {
+        &watchy_font_plex_13_bold, 0, true, false,
+    };
+
+    draw(&actual_canvas, &shell, &settings, &time, NULL, NULL, NULL,
+         "SSID Watchy-A1B2C3\nPASS A1B2C3D4\nIP 192.168.4.1");
+    watchy_ui_draw_text_font(&expected_canvas, 8, 105,
+                             "SSID Watchy-A1B2C3", &credentials);
+    watchy_ui_draw_text_font(&expected_canvas, 8, 129,
+                             "PASS A1B2C3D4", &credentials);
+    watchy_ui_draw_text_font(&expected_canvas, 8, 153,
+                             "IP 192.168.4.1", &credentials);
+
+    CHECK(region_ink(actual, 4, 31, 182, 54) > 3500);
+    CHECK(region_ink(actual, 4, 58, 182, 81) > 20);
+    CHECK(same_region(actual, expected, 0, 88, 199, 176));
+    CHECK(text_ink_fits(credentials.font, credentials.tracking,
+                        "SSID Watchy-A1B2C3", 8, 105, 0, 88, 199, 176));
+    CHECK(text_ink_fits(credentials.font, credentials.tracking,
+                        "PASS A1B2C3D4", 8, 129, 0, 88, 199, 176));
+    CHECK(text_ink_fits(credentials.font, credentials.tracking,
+                        "IP 192.168.4.1", 8, 153, 0, 88, 199, 176));
+    return 0;
+}
+
 static int test_legacy_and_guards(void) {
     static const watchy_shell_screen_t screens[] = {
         WATCHY_SHELL_PACKAGE_APPS, WATCHY_SHELL_MANUAL_TIME, WATCHY_SHELL_NTP_SYNC,
@@ -571,6 +607,7 @@ int main(int argc, char **argv) {
     CHECK(test_hairline() == 0);
     CHECK(test_hairline_date_uses_legible_strike_without_clipping() == 0);
     CHECK(test_larger_typography_fits_shell_regions() == 0);
+    CHECK(test_portal_choices_stay_above_large_credentials() == 0);
     CHECK(test_legacy_and_guards() == 0);
     CHECK(test_apps_filter_and_page() == 0);
     CHECK(test_dynamic_text_is_fitted_before_visual_boundaries() == 0);

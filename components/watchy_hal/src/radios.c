@@ -7,6 +7,7 @@
 #include "esp_bt_main.h"
 #include "esp_event.h"
 #include "esp_gap_ble_api.h"
+#include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
@@ -16,6 +17,8 @@
 
 #define WATCHY_BLE_ADV_STOPPED_BIT BIT0
 #define WATCHY_BLE_STOP_TIMEOUT_MS 1000
+
+static const char *TAG = "watchy_radios";
 
 static watchy_wifi_state_t s_wifi_state;
 static esp_netif_t *s_wifi_netif;
@@ -60,29 +63,57 @@ static watchy_status_t wifi_initialize(wifi_mode_t mode) {
     esp_err_t error;
 
     if (s_wifi_state != WATCHY_WIFI_STOPPED) {
+        ESP_LOGE(TAG, "wifi init rejected: state=%d", (int)s_wifi_state);
         return WATCHY_STATUS_INVALID_STATE;
     }
     error = esp_netif_init();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(error));
         return WATCHY_STATUS_INVALID_STATE;
     }
     error = esp_event_loop_create_default();
     if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "event loop create failed: %s", esp_err_to_name(error));
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_wifi_netif = mode == WIFI_MODE_AP ? esp_netif_create_default_wifi_ap()
                                         : esp_netif_create_default_wifi_sta();
-    if (s_wifi_netif == NULL || esp_wifi_init(&init_config) != ESP_OK) {
+    if (s_wifi_netif == NULL) {
+        ESP_LOGE(TAG, "default netif create failed mode=%d", (int)mode);
+        watchy_wifi_stop();
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    error = esp_wifi_init(&init_config);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(error));
         watchy_wifi_stop();
         return WATCHY_STATUS_INVALID_STATE;
     }
     s_wifi_initialized = true;
     s_wifi_state = WATCHY_WIFI_INITIALIZED;
-    if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL,
-                                            &s_wifi_handler) != ESP_OK ||
-        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL,
-                                            &s_ip_handler) != ESP_OK ||
-        esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK || esp_wifi_set_mode(mode) != ESP_OK) {
+    error = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL,
+                                                &s_wifi_handler);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi event handler registration failed: %s", esp_err_to_name(error));
+        watchy_wifi_stop();
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    error = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL,
+                                                &s_ip_handler);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "IP event handler registration failed: %s", esp_err_to_name(error));
+        watchy_wifi_stop();
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    error = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_storage failed: %s", esp_err_to_name(error));
+        watchy_wifi_stop();
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    error = esp_wifi_set_mode(mode);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode failed mode=%d: %s", (int)mode, esp_err_to_name(error));
         watchy_wifi_stop();
         return WATCHY_STATUS_INVALID_STATE;
     }
@@ -167,6 +198,9 @@ watchy_status_t watchy_wifi_start_ap(const watchy_wifi_ap_config_t *config) {
     if (config == NULL || !valid_string(config->ssid, sizeof(config->ssid), 1) ||
         config->channel < 1 || config->channel > 13 ||
         (password_length != 0 && (password_length < 8 || password_length >= sizeof(config->password)))) {
+        ESP_LOGE(TAG, "AP config rejected ssid_len=%u password_len=%u channel=%u",
+                 config == NULL ? 0u : (unsigned)strnlen(config->ssid, sizeof(config->ssid)),
+                 (unsigned)password_length, config == NULL ? 0u : (unsigned)config->channel);
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     if (wifi_initialize(WIFI_MODE_AP) != WATCHY_STATUS_OK) {
@@ -178,7 +212,15 @@ watchy_status_t watchy_wifi_start_ap(const watchy_wifi_ap_config_t *config) {
     wifi_config.ap.channel = config->channel;
     wifi_config.ap.max_connection = 2;
     wifi_config.ap.authmode = password_length == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
-    if (esp_wifi_set_config(WIFI_IF_AP, &wifi_config) != ESP_OK || esp_wifi_start() != ESP_OK) {
+    esp_err_t error = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config(AP) failed: %s", esp_err_to_name(error));
+        watchy_wifi_stop();
+        return WATCHY_STATUS_INVALID_STATE;
+    }
+    error = esp_wifi_start();
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start(AP) failed: %s", esp_err_to_name(error));
         watchy_wifi_stop();
         return WATCHY_STATUS_INVALID_STATE;
     }

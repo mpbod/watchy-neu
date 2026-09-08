@@ -18,6 +18,7 @@
 #include "cJSON.h"
 #include "esp_app_desc.h"
 #include "esp_http_server.h"
+#include "esp_log.h"
 #include "bootloader_random.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -29,6 +30,8 @@
 
 #define WATCHY_PORTAL_RECEIVE_CHUNK 1024u
 #define WATCHY_PORTAL_CLIENT_TIMEOUT_MS 15000u
+
+static const char *TAG = "watchy_portal";
 
 static const char WATCHY_CAPTIVE_PORTAL_URI[] = "http://192.168.4.1/";
 
@@ -153,8 +156,12 @@ static bool read_header(httpd_req_t *request,
 
 static bool request_authorized(httpd_req_t *request) {
     char authorization[96];
-    return read_header(request, "Authorization", authorization, sizeof(authorization)) &&
-           watchy_portal_basic_authorized(s_portal.info.token, authorization);
+    const char *header = read_header(request, "Authorization", authorization,
+                                     sizeof(authorization))
+                             ? authorization
+                             : NULL;
+    return watchy_portal_request_authorized(s_portal.info.client_mode,
+                                            s_portal.info.token, header);
 }
 
 static esp_err_t send_page(httpd_req_t *request) {
@@ -1173,7 +1180,10 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
         return WATCHY_STATUS_INVALID_ARGUMENT;
     }
     memset(&s_portal, 0, sizeof(s_portal));
-    if (start_network(mode, settings) != WATCHY_STATUS_OK) {
+    const watchy_status_t network_status = start_network(mode, settings);
+    if (network_status != WATCHY_STATUS_OK) {
+        ESP_LOGE(TAG, "portal network start failed mode=%d status=%ld",
+                 (int)mode, (long)network_status);
         memset(&s_portal, 0, sizeof(s_portal));
         return WATCHY_STATUS_INVALID_STATE;
     }
@@ -1183,9 +1193,17 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
     if (mode == WATCHY_PORTAL_NETWORK_AP) {
         /* DHCP option 114 is best-effort because some IDF/lwIP builds do not
          * support it. Wildcard DNS and HTTP redirects remain required. */
-        (void)watchy_wifi_set_captive_portal_uri(WATCHY_CAPTIVE_PORTAL_URI);
-        if (watchy_captive_portal_start(s_portal.info.address) !=
-            WATCHY_STATUS_OK) {
+        const watchy_status_t dhcp_status =
+            watchy_wifi_set_captive_portal_uri(WATCHY_CAPTIVE_PORTAL_URI);
+        if (dhcp_status != WATCHY_STATUS_OK) {
+            ESP_LOGW(TAG, "DHCP captive URI unavailable status=%ld; continuing",
+                     (long)dhcp_status);
+        }
+        const watchy_status_t captive_status =
+            watchy_captive_portal_start(s_portal.info.address);
+        if (captive_status != WATCHY_STATUS_OK) {
+            ESP_LOGE(TAG, "captive DNS start failed status=%ld",
+                     (long)captive_status);
             (void)watchy_portal_stop();
             return WATCHY_STATUS_INVALID_STATE;
         }
@@ -1196,11 +1214,14 @@ watchy_status_t watchy_portal_start(watchy_portal_network_mode_t mode,
     config.recv_wait_timeout = 10u;
     config.send_wait_timeout = 10u;
     config.lru_purge_enable = true;
-    if (httpd_start(&s_portal.server, &config) != ESP_OK ||
-        httpd_register_uri_handler(s_portal.server, &get) != ESP_OK ||
-        httpd_register_uri_handler(s_portal.server, &post) != ESP_OK ||
-        httpd_register_uri_handler(s_portal.server, &put) != ESP_OK ||
-        httpd_register_uri_handler(s_portal.server, &remove) != ESP_OK) {
+    esp_err_t http_error = httpd_start(&s_portal.server, &config);
+    if (http_error == ESP_OK) http_error = httpd_register_uri_handler(s_portal.server, &get);
+    if (http_error == ESP_OK) http_error = httpd_register_uri_handler(s_portal.server, &post);
+    if (http_error == ESP_OK) http_error = httpd_register_uri_handler(s_portal.server, &put);
+    if (http_error == ESP_OK) http_error = httpd_register_uri_handler(s_portal.server, &remove);
+    if (http_error != ESP_OK) {
+        ESP_LOGE(TAG, "portal HTTP start/register failed error=%s",
+                 esp_err_to_name(http_error));
         watchy_portal_stop();
         return WATCHY_STATUS_INVALID_STATE;
     }

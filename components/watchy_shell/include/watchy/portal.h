@@ -141,6 +141,9 @@ bool watchy_portal_token_authorized(const char *session_token,
                                     const char *request_token);
 bool watchy_portal_basic_authorized(const char *session_token,
                                     const char *authorization_header);
+bool watchy_portal_request_authorized(bool client_mode,
+                                      const char *session_token,
+                                      const char *authorization_header);
 bool watchy_portal_parse_route(watchy_portal_method_t method,
                                const char *path,
                                watchy_portal_route_t *out_route);

@@ -45,9 +45,10 @@ hotfix.
 
 ## Connectivity and storage
 
-- [ ] AP portal shows unique AP and out-of-band HTTP Basic credentials, serves
-      at 192.168.4.1, provisions saved STA credentials, uploads/activates/removes,
-      enforces idle/absolute expiry, and leaves Wi-Fi off.
+- [ ] AP portal shows its unique SSID and eight-character network password in
+      enlarged type, opens without a separate HTTP login at 192.168.4.1,
+      provisions saved STA credentials, uploads/activates/removes, enforces
+      idle/absolute expiry, and leaves Wi-Fi off.
 - [ ] Saved STA connects, portal advertises the assigned address, NTP sets RTC,
       failure/timeout leaves Wi-Fi off, and credentials are not logged.
 - [ ] BLE start/status/stop works and radio is disabled after the operation.

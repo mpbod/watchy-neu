@@ -73,15 +73,13 @@ write to full refresh for panel health.
 ## Package portal
 
 On the watch, open **Menu → Settings → Portal**, then choose saved Client Wi-Fi
-or the temporary Watchy access point. The watch shows the launch address, an
-out-of-band 32-character session credential, and, in AP mode, the eight-character
-AP password. AP mode opens the captive portal at `http://192.168.4.1/`; if the
-captive-launch prompt does not appear, enter that address directly. Client mode
-shows its assigned address, which is the same direct-IP fallback. Authenticate every
-route with HTTP Basic username `watchy` and the watch-displayed credential as the
-password. The credential is never embedded in the served page. The session ends on
-Back, after five minutes without authenticated activity, or at its absolute
-30-minute lifetime, and turns Wi-Fi off.
+or the temporary Watchy access point. AP mode shows only its SSID, eight-character
+network password, and launch address in enlarged type; the Wi-Fi password is the
+only credential required. It opens the captive portal at `http://192.168.4.1/`; if
+the captive-launch prompt does not appear, enter that address directly. Client mode
+shows its assigned address and an out-of-band HTTP Basic credential for username
+`watchy`. The session ends on Back, after five minutes without activity, or at its
+absolute 30-minute lifetime, and turns Wi-Fi off.
 
 The portal has Faces, Apps, and Device routes. It lists, uploads, activates, and
 removes packages; updates occur only after a user action. Device settings include

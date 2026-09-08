@@ -24,7 +24,7 @@ static int test_mutating_routes_require_the_exact_session_token(void) {
     return 0;
 }
 
-static int test_every_route_uses_an_out_of_band_basic_session_credential(void) {
+static int test_ap_uses_network_credential_and_client_mode_requires_basic_auth(void) {
     static const char token[] = "00112233445566778899aabbccddeeff";
     static const char authorization[] =
         "Basic d2F0Y2h5OjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZm";
@@ -35,6 +35,11 @@ static int test_every_route_uses_an_out_of_band_basic_session_credential(void) {
     CHECK(!watchy_portal_basic_authorized(token,
         "Bearer 00112233445566778899aabbccddeeff"));
     CHECK(watchy_portal_basic_authorized(token, authorization));
+    CHECK(watchy_portal_request_authorized(false, token, NULL));
+    CHECK(watchy_portal_request_authorized(false, token, "invalid"));
+    CHECK(!watchy_portal_request_authorized(true, token, NULL));
+    CHECK(!watchy_portal_request_authorized(true, token, "invalid"));
+    CHECK(watchy_portal_request_authorized(true, token, authorization));
 
     watchy_portal_session_info_t info = {
         .network_name = "Watchy-A1B2C3",
@@ -45,9 +50,12 @@ static int test_every_route_uses_an_out_of_band_basic_session_credential(void) {
     char instructions[192];
     CHECK(watchy_portal_format_watch_instructions(&info, instructions,
                                                    sizeof(instructions)));
-    CHECK(strstr(instructions, "USER watchy\n") != NULL);
-    CHECK(strstr(instructions, "AUTH 0011223344556677\n") != NULL);
-    CHECK(strstr(instructions, "     8899aabbccddeeff\n") != NULL);
+    CHECK(strcmp(instructions,
+                 "SSID Watchy-A1B2C3\n"
+                 "PASS temporary-pass\n"
+                 "IP 192.168.4.1") == 0);
+    CHECK(strstr(instructions, "USER") == NULL);
+    CHECK(strstr(instructions, "AUTH") == NULL);
     for (const char *line = instructions; line != NULL && *line != '\0';) {
         const char *end = strchr(line, '\n');
         const size_t length = end == NULL ? strlen(line) : (size_t)(end - line);
@@ -60,13 +68,13 @@ static int test_every_route_uses_an_out_of_band_basic_session_credential(void) {
     info.client_mode = true;
     CHECK(watchy_portal_format_watch_instructions(&info, instructions,
                                                    sizeof(instructions)));
-    CHECK(strstr(instructions, "SSID sssssssssssssssssssssssssss\n     sssss") != NULL);
-    for (const char *line = instructions; line != NULL && *line != '\0';) {
-        const char *end = strchr(line, '\n');
-        const size_t length = end == NULL ? strlen(line) : (size_t)(end - line);
-        CHECK(length <= 32u);
-        line = end == NULL ? NULL : end + 1u;
-    }
+    CHECK(strcmp(instructions,
+                 "SSID sssssssssssssssssssssssssss\n"
+                 "     sssss\n"
+                 "USER watchy\n"
+                 "AUTH 0011223344556677\n"
+                 "     8899aabbccddeeff\n"
+                 "IP 192.168.4.1") == 0);
     return 0;
 }
 
@@ -608,7 +616,7 @@ static int test_captive_redirects_cover_non_root_non_api_get_paths(void) {
 int main(void) {
     int failures = 0;
     failures += test_mutating_routes_require_the_exact_session_token();
-    failures += test_every_route_uses_an_out_of_band_basic_session_credential();
+    failures += test_ap_uses_network_credential_and_client_mode_requires_basic_auth();
     failures += test_route_parser_accepts_only_exact_valid_components();
     failures += test_every_malformed_json_envelope_is_invalid_request();
     failures += test_json_nul_escape_is_rejected_before_password_decode();

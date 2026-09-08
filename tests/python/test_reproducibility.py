@@ -47,7 +47,10 @@ class ReproducibilityContracts(unittest.TestCase):
         self.assertNotRegex(portal, r"httpd_resp_send_chunk\([^\n]*info\.token")
         self.assertNotRegex(portal, r"const TOKEN")
         self.assertIn('read_header(request, "Authorization"', portal)
-        self.assertIn("watchy_portal_basic_authorized", portal)
+        self.assertIn("watchy_portal_request_authorized", portal)
+        policy = self.read("components/watchy_shell/src/portal_policy.c")
+        self.assertIn("watchy_portal_basic_authorized(session_token, authorization_header)",
+                      policy)
         upload = portal[portal.index("static esp_err_t receive_upload"):
                         portal.index("static esp_err_t mutate_package")]
         self.assertIn("watchy_portal_timed_out()", upload)

@@ -117,6 +117,13 @@ bool watchy_portal_basic_authorized(const char *session_token,
     return difference == 0u;
 }
 
+bool watchy_portal_request_authorized(bool client_mode,
+                                      const char *session_token,
+                                      const char *authorization_header) {
+    return !client_mode ||
+           watchy_portal_basic_authorized(session_token, authorization_header);
+}
+
 bool watchy_portal_parse_route(watchy_portal_method_t method,
                                const char *path,
                                watchy_portal_route_t *out_route) {
@@ -576,25 +583,28 @@ bool watchy_portal_format_watch_instructions(
         return false;
     }
     if (!info->client_mode) {
-        if (name_size > 27u || secret_size == 0u || secret_size > 27u) {
+        if (secret_size == 0u) {
             return false;
         }
         written = snprintf(out, out_size,
-                           "SSID %s\nPASS %s\nUSER watchy\nAUTH %.16s\n"
-                           "     %.16s\nIP %s",
-                           info->network_name, info->network_secret, info->token,
-                           info->token + 16u, info->address);
-    } else if (name_size <= 27u) {
-        written = snprintf(out, out_size,
-                           "SSID %s\nUSER watchy\nAUTH %.16s\n     %.16s\nIP %s",
-                           info->network_name, info->token, info->token + 16u,
+                           "SSID %s\nPASS %s\nIP %s",
+                           info->network_name, info->network_secret,
                            info->address);
     } else {
-        written = snprintf(out, out_size,
-                           "SSID %.27s\n     %s\nUSER watchy\nAUTH %.16s\n"
-                           "     %.16s\nIP %s",
-                           info->network_name, info->network_name + 27u, info->token,
-                           info->token + 16u, info->address);
+        if (name_size <= 27u) {
+            written = snprintf(out, out_size,
+                               "SSID %s\nUSER watchy\nAUTH %.16s\n"
+                               "     %.16s\nIP %s",
+                               info->network_name, info->token,
+                               info->token + 16u, info->address);
+        } else {
+            written = snprintf(out, out_size,
+                               "SSID %.27s\n     %s\nUSER watchy\n"
+                               "AUTH %.16s\n     %.16s\nIP %s",
+                               info->network_name, info->network_name + 27u,
+                               info->token, info->token + 16u,
+                               info->address);
+        }
     }
     return written >= 0 && (size_t)written < out_size;
 }
