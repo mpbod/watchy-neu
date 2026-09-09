@@ -86,7 +86,8 @@ class ReproducibilityContracts(unittest.TestCase):
     def test_portal_html_symbols_never_reference_session_or_network_secrets(self) -> None:
         portal = self.read("components/watchy_shell/src/portal_idf.c")
         page = self.read("components/watchy_shell/web/portal.html")
-        self.assertIn("_binary_web_portal_html_start", portal)
+        self.assertIn("_binary_portal_html_start", portal)
+        self.assertNotIn("_binary_web_portal_html_start", portal)
         self.assertNotIn("network_secret", page)
         self.assertNotIn("X-Watchy-Token", page)
         self.assertNotIn("const TOKEN", page)

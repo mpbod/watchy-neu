@@ -36,6 +36,21 @@ the firmware.
 Download the assets from the [latest GitHub release](https://github.com/mpbod/watchy-neu/releases/latest)
 and verify them against `SHA256SUMS`.
 
+On Linux:
+
+```sh
+sha256sum --check SHA256SUMS
+```
+
+On macOS:
+
+```sh
+shasum --algorithm 256 --check SHA256SUMS
+```
+
+On Windows, compare each value in `SHA256SUMS` with the `Hash` printed by
+`Get-FileHash .\watchy-neu-v0.1.0-factory.bin -Algorithm SHA256`.
+
 You need Python 3 and `esptool` 5.3.1:
 
 ```sh

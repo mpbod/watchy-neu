@@ -35,13 +35,8 @@ static const char *TAG = "watchy_portal";
 
 static const char WATCHY_CAPTIVE_PORTAL_URI[] = "http://192.168.4.1/";
 
-#if defined(PLATFORMIO)
 extern const uint8_t portal_html_start[] asm("_binary_portal_html_start");
 extern const uint8_t portal_html_end[] asm("_binary_portal_html_end");
-#else
-extern const uint8_t portal_html_start[] asm("_binary_web_portal_html_start");
-extern const uint8_t portal_html_end[] asm("_binary_web_portal_html_end");
-#endif
 
 typedef struct {
     char *body;

@@ -490,7 +490,7 @@ static void select_settings(watchy_shell_t *shell) {
 watchy_transition_rect_t watchy_shell_settings_confirmation_rect(uint8_t selection,
                                                                  uint8_t view_start) {
     if (selection < view_start ||
-        selection - view_start >= WATCHY_SHELL_VISIBLE_ROWS) {
+        (unsigned)(selection - view_start) >= WATCHY_SHELL_VISIBLE_ROWS) {
         return (watchy_transition_rect_t){0};
     }
     const uint8_t slot = (uint8_t)(selection - view_start);

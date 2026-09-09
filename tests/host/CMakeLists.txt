@@ -287,7 +287,15 @@ target_include_directories(watchy_first_party_face_tests PRIVATE
 )
 watchy_package_add_ui_sources(watchy_first_party_face_tests)
 target_compile_features(watchy_first_party_face_tests PRIVATE cxx_std_17)
-target_compile_options(watchy_first_party_face_tests PRIVATE -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fno-threadsafe-statics)
+target_compile_options(watchy_first_party_face_tests PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>
+  $<$<COMPILE_LANGUAGE:CXX>:-Wno-sign-compare>
+)
 target_compile_definitions(watchy_first_party_face_tests PRIVATE WATCHY_HOST_TEST=1)
 target_compile_definitions(watchy_first_party_face_tests PRIVATE
   WATCHY_FACE_GOLDEN_DIR="${CMAKE_CURRENT_LIST_DIR}/../golden/faces")

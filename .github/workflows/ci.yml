@@ -29,7 +29,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Watchy 2.0 firmware
         shell: bash
-        run: idf.py set-target esp32 && idf.py build
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py set-target esp32
+          idf.py build
       - name: Build and package SDK samples
         shell: bash
-        run: python3 tools/build_samples.py --output-dir build/sample-wpk
+        run: |
+          . /opt/esp/idf/export.sh
+          python3 tools/build_samples.py --output-dir build/sample-wpk

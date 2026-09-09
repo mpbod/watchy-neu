@@ -76,8 +76,10 @@ class PortalWebTests(unittest.TestCase):
         self.assertIn('EMBED_TXTFILES "web/portal.html"', cmake)
         self.assertNotIn("PAGE_HEAD", portal_c)
         self.assertNotIn("PAGE_SCRIPT", portal_c)
-        self.assertIn("_binary_web_portal_html_start", portal_c)
-        self.assertIn("_binary_web_portal_html_end", portal_c)
+        self.assertIn("_binary_portal_html_start", portal_c)
+        self.assertIn("_binary_portal_html_end", portal_c)
+        self.assertNotIn("_binary_web_portal_html_start", portal_c)
+        self.assertNotIn("_binary_web_portal_html_end", portal_c)
         self.assertRegex(portal_c, re.compile(r"httpd_resp_send\(request,.*portal_html_start", re.S))
 
 
