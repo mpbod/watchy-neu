@@ -1,0 +1,15 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deterministic portal authentication fixtures used by host tests"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/host/test_portal\.c$''']
+regexes = [
+  '''^00112233445566778899aabbccddee$''',
+  '''^00112233445566778899aabbccddeeff$''',
+  '''^00112233445566778899aabbccddeeff0$''',
+  '''^00112233445566778899aabbccddeefg$''',
+  '''^d2F0Y2h5OjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZm$''',
+]

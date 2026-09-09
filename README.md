@@ -1,112 +1,99 @@
-# Watchy extensible firmware
+# Watchy Neu
 
-Pure ESP-IDF firmware for the **SQFMI Watchy 2.0** (ESP32-PICO-D4, 200×200
-SSD1681 e-paper). The kernel owns hardware, power, storage, recovery, networking,
-and the built-in UI. One installable Xtensa ELF watchface or app may run at a
-time through the exactly pinned Espressif `elf_loader` 1.3.3 component.
+[![CI](https://github.com/mpbod/watchy-neu/actions/workflows/ci.yml/badge.svg)](https://github.com/mpbod/watchy-neu/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mpbod/watchy-neu?display_name=tag)](https://github.com/mpbod/watchy-neu/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Native-code trust boundary:** WPK packages contain trusted native Xtensa
-> code. Capabilities organize access to kernel APIs; they are not a security
-> sandbox. Install packages only from developers you trust.
+An extensible, power-aware firmware for the **SQFMI Watchy 2.0**. Watchy Neu
+keeps the essential watch experience in a trusted ESP-IDF kernel while loading
+watchfaces and apps as installable native `.wpk` packages.
 
-## Prerequisites
+The built-in Hairline face, launcher, settings, diagnostics, recovery UI,
+networking, storage, and deep-sleep lifecycle always remain available. Packages
+can be installed and switched from a temporary Wi-Fi portal without reflashing
+the firmware.
 
-- Watchy 2.0 (other Watchy revisions are not supported)
-- ESP-IDF 5.5 with the ESP32 toolchain, or PlatformIO Core with `espressif32`
-- Python 3.11+, CMake, Ninja, and a USB serial connection
+> **Project status:** `v0.1.0` is a developer preview. It targets the classic
+> ESP32-PICO-D4 Watchy 2.0 pinout and has also been tested on a reseller-labelled
+> “Watchy 2.0 Plus” using the same hardware. Watchy 3.0 is not supported.
 
-## Build, flash, and monitor
+## Highlights
 
-With PlatformIO:
+- Pure ESP-IDF 5.5 firmware for the ESP32-PICO-D4
+- 200×200 one-bit SSD1681 display with kernel-controlled refresh policy
+- Responsive FreeRTOS button input and full-refresh swipe transitions
+- Built-in Hairline fallback plus eight first-party packaged watchfaces
+- Runtime Xtensa ELF loading through Espressif `elf_loader` 1.3.3
+- Versioned C ABI with a header-only C++ package SDK
+- PCF8563 RTC, BMA423 motion, battery, haptics, Wi-Fi, BLE, NVS, and LittleFS
+- Home timezone, manual time entry, and NTP synchronization
+- Captive Wi-Fi setup and package-management portal
+- Safe mode and automatic package quarantine/rollback
+- Reproducible WPK and factory-image tooling
 
-```sh
-platformio run -e watchy_v2
-platformio run -e watchy_v2 -t upload
-platformio device monitor -b 115200
-```
+## Install a release
 
-With an exported ESP-IDF 5.5 environment:
+Download the assets from the [latest GitHub release](https://github.com/mpbod/watchy-neu/releases/latest)
+and verify them against `SHA256SUMS`.
 
-```sh
-idf.py set-target esp32
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
-```
-
-The partition table reserves 24 KiB NVS, 4 KiB PHY data, 1.75 MiB factory
-firmware, and 2.1875 MiB LittleFS. Firmware OTA is intentionally absent in v1;
-flash firmware over serial. Packages update independently through the portal.
-
-## Controls and recovery
-
-- The top-level Menu has exactly three rows: **Watchface**, **Apps**, and
-  **Settings**. Menu opens/selects, Back cancels or returns, and Up/Down wrap
-  through the current list.
-- **Menu → Watchface** opens the selector. Hairline is always position zero and
-  is labeled `BUILT-IN`. Installed watchfaces show `ACTIVE`, `PENDING`,
-  `QUARANTINED`, or their semantic version; quarantined rows are visible but
-  cannot be activated. Selecting Hairline clears the package selection and
-  returns to the trusted built-in face. Selecting a WPK renders it immediately,
-  promotes it only after success, and performs a full refresh. Back leaves the
-  current selection unchanged and also forces a complete refresh when returning
-  to a package face.
-- **Settings → Motion Full/Reduced/Off** controls display transition effects.
-  This `motion_fx` preference is independent of **Motion On/Off**, which controls
-  accelerometer wake. Full allows eligible requested effects, Reduced replaces
-  optional multi-write effects with a two-write Flash, and Off uses a one-write
-  Cut. Panel-health Clear remains a mandatory two-write full refresh in every
-  mode.
-- Hold **Back + Down during reset** to enter safe mode. Safe mode never loads a
-  third-party ELF and offers diagnostics, individual package removal (or a full
-  purge if the index is unreadable), and a normal reboot.
-- A failing selected watchface is quarantined/rolled back; the built-in
-  watchface and shell remain available. A failed pending activation preserves
-  the previously active WPK; if it cannot render, Hairline is the fallback.
-
-Wi-Fi and BLE stay off unless an explicit operation needs them. The normal
-minute wake path reloads the selected package, renders, unloads it, shuts down
-peripherals, and returns to deep sleep. Minute and other unattended wakes use
-Cut. Safe mode, battery voltage below 3550 mV, or an unknown retained display
-source also downgrades optional effects to Cut; the kernel can always promote a
-write to full refresh for panel health.
-
-## Package portal
-
-On the watch, open **Menu → Settings → Portal**, then choose saved Client Wi-Fi
-or the temporary Watchy access point. AP mode shows only its SSID, eight-character
-network password, and launch address in enlarged type; the Wi-Fi password is the
-only credential required. It opens the captive portal at `http://192.168.4.1/`; if
-the captive-launch prompt does not appear, enter that address directly. Client mode
-shows its assigned address and an out-of-band HTTP Basic credential for username
-`watchy`. The session ends on Back, after five minutes without activity, or at its
-absolute 30-minute lifetime, and turns Wi-Fi off.
-
-The portal has Faces, Apps, and Device routes. It lists, uploads, activates, and
-removes packages; updates occur only after a user action. Device settings include
-the home timezone (an explicit UTC offset used for the local clock and time entry),
-NTP server, motion preferences, and partial-refresh limit. AP mode also accepts and
-persists initial station Wi-Fi credentials, so an erased watch can be provisioned
-without reflashing. For network time: save Wi-Fi in AP mode, close the portal,
-reopen **Client Portal** from the watch, then use NTP Sync. NTP Sync is deliberately
-unavailable in AP mode. Uploads are staged and atomically promoted after full
-validation. Installation is rejected for unsafe battery/storage/heap conditions. A
-new watchface does not replace the previous one until it completes a successful render.
-
-Built-in diagnostic `READY` rows are passive initialization/read checks, not
-physical acceptance results. Only the still-open on-device checklist below can
-establish display, input, radio, storage, motor, wake, and current behavior.
-
-## Develop packages
-
-Start from [`sdk/package-template`](sdk/package-template), or inspect the
-[`digital-watchface`](samples/digital-watchface) and
-[`hardware-demo`](samples/hardware-demo) samples. Build and verify both samples:
+You need Python 3 and `esptool` 5.3.1:
 
 ```sh
-python3 tools/build_samples.py
+python3 -m pip install "esptool==5.3.1"
 ```
 
-The bundled gallery contains eight independent ABI 1.2 WPKs:
+### New installation or complete reset
+
+The factory image includes the firmware and all eight first-party watchfaces.
+It resets saved settings, Wi-Fi credentials, installed packages, and package
+health data.
+
+```sh
+python3 -m esptool --chip esp32 --port /dev/ttyUSB0 \
+  write-flash 0x0 watchy-neu-v0.1.0-factory.bin
+```
+
+On macOS, the port is commonly `/dev/cu.usbserial-*`. On Windows it is commonly
+`COM3` or another numbered COM port.
+
+### Update an existing Watchy Neu installation
+
+The application-only image preserves NVS, Wi-Fi settings, LittleFS, and installed
+packages. Use it only when the existing device already has the Watchy Neu v1
+partition layout.
+
+```sh
+python3 -m esptool --chip esp32 --port /dev/ttyUSB0 \
+  write-flash 0x10000 watchy-neu-v0.1.0-firmware.bin
+```
+
+Firmware OTA is intentionally not included in v1. Firmware updates use USB;
+watchface and app updates use the portal.
+
+## First boot
+
+The four physical buttons map to **Up**, **Down**, **Menu/Confirm**, and **Back**.
+
+1. Press **Menu** to open the launcher.
+2. Open **Settings → Time Zone** and choose your home UTC offset.
+3. Open **Settings → Portal → Watchy AP**.
+4. Join the SSID shown on the watch with its eight-character password. No
+   additional web username or password is required in AP mode.
+5. The captive portal should open automatically. Otherwise visit
+   `http://192.168.4.1/`.
+6. Save home Wi-Fi credentials, leave the portal with **Back**, and run
+   **Settings → NTP Sync**.
+
+Wi-Fi and BLE remain off outside explicit operations. The portal shuts down on
+Back, after five minutes of inactivity, or at its absolute 30-minute limit.
+
+Hold **Back + Down during reset** to enter safe mode. Safe mode disables all
+package execution and provides diagnostics and recovery controls.
+
+## Watchfaces
+
+Hairline is compiled into the kernel and cannot be removed. The factory image
+also includes these ABI 1.2 WPKs:
 
 | Face | Package ID |
 | --- | --- |
@@ -119,116 +106,184 @@ The bundled gallery contains eight independent ABI 1.2 WPKs:
 | Slab | `watchy.firstparty.slab` |
 | Orbit | `watchy.firstparty.orbit` |
 
-Weather, calendar, and unavailable Bluetooth data are deliberately honest
-placeholders (`--°`, `NO DATA`, `NO EVENT`, `--:--`, and `BT·--`). World and
-second-city clocks use declared fixed UTC offsets; v1 does not apply daylight
-saving time. Orbit computes moon phase locally and performs no network request.
-The faces use ABI 1.2 descriptors but do not request the System capability.
-Routine renders return Partial; the kernel retains activation, transition,
-ghosting, and full-refresh authority.
+A newly selected package must complete one successful render before replacing
+the previous active face. Selection returns directly to the face with a full
+refresh. A package that fails validation, crashes, trips the watchdog, or fails
+repeatedly is quarantined and cannot create a persistent boot loop.
 
-The committed one-bit typography is generated from vendored IBM Plex Mono
-(SIL Open Font License 1.1) and TeX Gyre Heros (GUST Font License) sources in
-[`assets/fonts`](assets/fonts); builds do not consult host-installed fonts.
+## Build from source
 
-## Gallery and factory provisioning
-
-Build the audited reproducible first-party set and the reproducible LittleFS
-factory image:
+Clone the repository and enter it:
 
 ```sh
-make first-party
-make factory-seed
+git clone https://github.com/mpbod/watchy-neu.git
+cd watchy-neu
 ```
 
-On the first normal boot after a factory flash, firmware validates and imports
-the eight seed WPKs through the normal atomic installer, records the WFS1 v1
-marker, and leaves Hairline active. Import is resumable, but once the marker is
-committed it never runs again: removing a bundled face does not resurrect it on
-reboot. Safe mode skips seed import and all WPK execution.
+### PlatformIO
 
-Normal developer upload is firmware-only and preserves LittleFS:
+Install [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html),
+then build or flash:
 
 ```sh
-platformio run -e watchy_v2 -t upload
+platformio run -e watchy_v2
+platformio run -e watchy_v2 -t upload --upload-port /dev/ttyUSB0
 ```
 
-Factory flashing first validates the explicit port syntax, confirms the port
-appears exactly once in read-only USB serial discovery, and validates the
-pinned esptool parser before it builds any package, seed, or firmware artifact. It then builds
-and hashes the firmware images, validates the exact
-Watchy partition table and target identity, erases only the exact 24 KiB NVS
-partition without releasing the ESP32 from its bootloader, then writes firmware
-plus the audited LittleFS image without resetting. Only after that write reports
-success does a separate no-stub `chip-id` identity read finish with an RTS hard
-reset into the application. The handoff does not mutate flash or NVS. The
-factory reinstall resets all settings, Wi-Fi credentials, the package
-index/health state, and the factory seed marker before first-boot import. It is destructive to package storage and
-requires an explicit discovered classic ESP32 serial device—there is no
-automatic port selection:
+For CH343-based Watchy 2.0 Plus variants, explicitly leave DTR and RTS inactive
+while monitoring; their default state can otherwise hold the board in reset:
 
 ```sh
-python3 -m venv build/gallery-python
-build/gallery-python/bin/python -m pip install \
-  -r tools/font-requirements.txt \
-  -r tools/factory-flash-requirements.txt
-make factory-flash PORT=/dev/ttyUSB0 \
-  PYTHON=build/gallery-python/bin/python \
-  IDF_PYTHON=python3
+platformio device monitor --port /dev/ttyUSB0 --baud 115200 --dtr 0 --rts 0
 ```
 
-The tool requires exactly esptool 5.3.1, validates the imported module and all
-used parser forms with complete required arguments before running even the
-factory seed or firmware build, and invokes it only as a module of the selected
-`PYTHON` (`FACTORY_FLASH_PYTHON` may override it); no ambient `esptool`
-executable is used. The parser preflight constructs command contexts only: it
-does not invoke an esptool command or open the port. The only external
-pre-build command is read-only `platformio device list --json-output`; chip
-identity and every mutation remain in the post-build, fail-closed flash stage.
-The success-only handoff is exactly `--before no-reset --after hard-reset
---no-stub chip-id`; unlike esptool's `run` command, it does not issue a ROM
-SPI-flash attach operation before resetting the Watchy.
+### ESP-IDF
 
-`PYTHON` is the provisioned test/factory-tool interpreter. `IDF_PYTHON` is the
-ESP-IDF-ready interpreter used for sample, first-party, and factory-seed
-builds; it defaults to `python3` and must provide the Python modules required by
-the installed ESP-IDF. Keeping these roles separate avoids installing the full
-ESP-IDF Python environment into the small tooling virtual environment.
+With an exported ESP-IDF 5.5 environment:
 
-Do not use `factory-flash` for routine firmware development. See the pending
-[hardware acceptance checklist](docs/hardware-acceptance.md) before treating a
-factory image as device-approved.
+```sh
+idf.py set-target esp32
+idf.py build
+idf.py -p /dev/ttyUSB0 flash
+```
 
-Build a WPK directly:
+The flash layout is fixed:
+
+| Offset | Size | Partition |
+| --- | ---: | --- |
+| `0x9000` | 24 KiB | NVS |
+| `0xF000` | 4 KiB | PHY initialization |
+| `0x10000` | 1.75 MiB | Factory application |
+| `0x1D0000` | 2.1875 MiB | LittleFS packages, assets, and state |
+
+## Develop a package
+
+Start from [`sdk/package-template`](sdk/package-template), or inspect the
+[`digital-watchface`](samples/digital-watchface) and
+[`hardware-demo`](samples/hardware-demo) samples.
+
+Every ELF exports exactly one C entry point:
+
+```cpp
+extern "C" const watchy_package_descriptor_t *watchy_package_entry(void);
+```
+
+The descriptor declares package identity, semantic version, ABI requirement,
+type, capabilities, memory ceiling, and lifecycle callbacks. Packages draw into
+a kernel-owned one-bit canvas and receive typed input, RTC, motion, connectivity,
+and system events.
+
+Build and verify the samples:
+
+```sh
+python3 tools/build_samples.py
+```
+
+Build an individual deterministic WPK:
 
 ```sh
 python3 tools/watchy_pkg.py build \
-  --manifest manifest.json --elf build/package.so --assets assets --output package.wpk
-python3 tools/watchy_pkg.py inspect package.wpk --json
+  --manifest manifest.json \
+  --elf build/package.so \
+  --assets assets \
+  --output package.wpk
+
 python3 tools/watchy_pkg.py verify package.wpk
+python3 tools/watchy_pkg.py inspect package.wpk --json
 ```
 
-See [Package SDK](docs/sdk.md), [WPK format](docs/package-format.md), and the
-[hardware acceptance checklist](docs/hardware-acceptance.md).
+Read the [SDK guide](docs/sdk.md) and [WPK format](docs/package-format.md) for
+the ABI, lifecycle, capabilities, memory limits, persistence rules, and package
+layout.
+
+> `.wpk` packages contain trusted native Xtensa code. Capabilities organize the
+> SDK surface; they are not a security sandbox. Install packages only from
+> developers you trust. Exceptions, RTTI contracts, STL objects, cross-boundary
+> heap ownership, and direct ESP-IDF linking are unsupported across the ABI.
+
+## Portal and package management
+
+The responsive local portal lists, uploads, activates, and removes watchfaces
+and apps. Uploads are staged and atomically promoted only after bundle, digest,
+ABI, architecture, entry point, capability, storage, battery, and memory checks.
+
+AP mode is used for first-time Wi-Fi provisioning and needs only the WPA network
+password displayed on the watch. Client mode uses saved home Wi-Fi and displays
+an out-of-band HTTP Basic credential on the watch for the current session. NTP
+sync is available only in client mode or directly from the watch settings.
+
+## Architecture
+
+```text
+main/                  boot/wake routing and system orchestration
+components/watchy_hal hardware, radios, storage, diagnostics, and power
+components/watchy_core lifecycle, transitions, watchdog, and WPK primitives
+components/watchy_shell launcher, settings, recovery, portal, and time sync
+components/watchy_packages validation, installation, ELF runtime, and host APIs
+sdk/                   versioned C ABI and header-only C++ wrappers
+first_party/           bundled watchface source projects
+samples/               watchface and hardware SDK examples
+tools/                 deterministic package and factory-image builders
+tests/                 host, Python, web-contract, and golden-image tests
+```
+
+Only one native package is loaded at a time. The normal wake lifecycle is:
+
+```text
+wake → validate/load → start → event/render → save → stop/unload → deep sleep
+```
+
+Only explicitly persisted, namespaced package state survives deep sleep.
 
 ## Tests
+
+Run the portable C/C++ suite:
+
+```sh
+cmake -S . -B build/host -G Ninja
+cmake --build build/host
+ctest --test-dir build/host --output-on-failure
+```
+
+Run Python tooling and portal contract tests:
+
+```sh
+python3 -m unittest discover -s tests/python -v
+node --test tests/js/test_portal_contract.mjs
+```
+
+The complete reproducible gallery gate additionally needs the pinned Python
+requirements and an ESP-IDF-ready Python environment:
 
 ```sh
 python3 -m venv build/gallery-python
 build/gallery-python/bin/python -m pip install \
   -r tools/font-requirements.txt \
   -r tools/factory-flash-requirements.txt
-cmake -S . -B build/host -G Ninja
-cmake --build build/host
-ctest --test-dir build/host --output-on-failure
-make python-test PYTHON=build/gallery-python/bin/python
+
 make gallery-test PYTHON=build/gallery-python/bin/python IDF_PYTHON=python3
 ```
 
-The complete software gallery gate is `make gallery-test` with the provisioned
-`PYTHON` and `IDF_PYTHON` shown above;
-it builds and verifies the two samples, all eight reproducible first-party WPKs,
-the reproducible factory seed, and the `watchy_v2` firmware. It never flashes.
+See the [hardware acceptance checklist](docs/hardware-acceptance.md) for physical
+display, wake-source, radio, motor, storage, and current tests.
 
-Hardware acceptance remains a separate on-device activity; host and target
-build success is not evidence of display, wake, radio, or current performance.
+## Contributing
+
+Bug reports, hardware results, documentation improvements, and new package
+examples are welcome. Please keep changes focused, include regression tests for
+behavior changes, and run the relevant host and target gates before opening a
+pull request. Never commit device credentials, portal session secrets, private
+keys, or NVS/LittleFS dumps from a provisioned watch.
+
+## Credits and license
+
+Watchy Neu uses the upstream [SQFMI Watchy](https://github.com/sqfmi/Watchy)
+project and [Watchy hardware documentation](https://github.com/sqfmi/watchy-docs)
+as hardware references, and uses Espressif's
+[`elf_loader`](https://components.espressif.com/components/espressif/elf_loader)
+for native package loading. It is an independent community project and is not
+affiliated with or endorsed by SQFMI.
+
+Firmware and tooling are available under the [MIT License](LICENSE). Vendored
+fonts remain under the licenses included beside their source files in
+[`assets/fonts`](assets/fonts).
